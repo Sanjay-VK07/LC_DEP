@@ -57,25 +57,52 @@ class LiveContestScheduler {
     try {
       const now = new Date();
 
+      const isMockContestSlug = (slug) => {
+        const isTestEnv = process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT || process.argv.some(arg => arg.includes('test'));
+        if (isTestEnv) return false;
+        if (!slug) return true;
+        const lower = slug.toLowerCase();
+        return lower.startsWith('upcoming-live-') || 
+               lower.startsWith('test-') || 
+               lower.startsWith('mock-') || 
+               lower.startsWith('dummy-');
+      };
+
       // 1. Process active/live contests
       const liveContests = await db.query(
         "SELECT * FROM LiveContests WHERE status IN ('Live', 'Synchronizing')"
       );
 
       for (const contest of liveContests) {
+        if (isMockContestSlug(contest.contestSlug)) {
+          continue;
+        }
+
         const endTime = new Date(contest.endTime);
+        const lastSync = contest.lastSyncAt ? new Date(contest.lastSyncAt) : null;
+        const timeSinceLastSync = lastSync ? (now - lastSync) : Infinity;
+        const pass = contest.currentSyncPass || 0;
 
         if (now > endTime) {
-          console.log(`[LiveContestScheduler] Contest "${contest.contestName}" has passed its scheduled end time. Finalizing...`);
-          await this._finalizeContest(contest.id);
+          // Contest ended: coordinate multi-pass synchronization stages
+          if (pass === 0) {
+            console.log(`[LiveContestScheduler] Contest "${contest.contestName}" ended. Initiating Sync Pass #1...`);
+            await this._triggerSyncPass(contest.id, 1);
+          } else if (pass === 1 && timeSinceLastSync >= 10 * 60 * 1000) {
+            console.log(`[LiveContestScheduler] 10 minutes elapsed since Pass 1. Initiating Sync Pass #2...`);
+            await this._triggerSyncPass(contest.id, 2);
+          } else if (pass === 2 && timeSinceLastSync >= 30 * 60 * 1000) {
+            console.log(`[LiveContestScheduler] 30 minutes elapsed since Pass 2. Initiating Sync Pass #3...`);
+            await this._triggerSyncPass(contest.id, 3);
+          } else if (pass === 3 && timeSinceLastSync >= 120 * 60 * 1000) {
+            console.log(`[LiveContestScheduler] 2 hours elapsed since Pass 3. Initiating Sync Pass #4 (Final Verification)...`);
+            await this._triggerSyncPass(contest.id, 4);
+          }
         } else {
-          const lastSync = contest.lastSyncAt ? new Date(contest.lastSyncAt) : null;
-          const timeSinceLastSync = lastSync ? (now - lastSync) : Infinity;
-
-          // Run sync if 5 minutes have elapsed since the last execution
+          // Contest running: sync periodically every 5 minutes
           if (timeSinceLastSync >= 5 * 60 * 1000) {
-            console.log(`[LiveContestScheduler] 5 minutes elapsed since last sync. Initiating sync run for: "${contest.contestName}"`);
-            await this._triggerSync(contest.id);
+            console.log(`[LiveContestScheduler] Live sync interval reached. Triggering Sync Pass #0 for: "${contest.contestName}"`);
+            await this._triggerSyncPass(contest.id, 0);
           }
         }
       }
@@ -86,9 +113,13 @@ class LiveContestScheduler {
       );
 
       for (const contest of upcomingContests) {
+        if (isMockContestSlug(contest.contestSlug)) {
+          continue;
+        }
+
         console.log(`[LiveContestScheduler] Upcoming contest "${contest.contestName}" is starting. Transitioning state to Live.`);
-        await db.query("UPDATE LiveContests SET status = 'Live' WHERE id = ?", [contest.id]);
-        await this._triggerSync(contest.id);
+        await db.query("UPDATE LiveContests SET status = 'Live', currentSyncPass = 0 WHERE id = ?", [contest.id]);
+        await this._triggerSyncPass(contest.id, 0);
       }
     } catch (err) {
       console.error('[LiveContestScheduler] State check loop exception:', err.message);
@@ -99,90 +130,83 @@ class LiveContestScheduler {
    * Invokes the concurrent sync queue for a live contest.
    */
   async _triggerSync(contestId) {
-    if (studentSyncQueue.activeContestId) {
-      console.log('[LiveContestScheduler] Synchronization queue is currently busy. Skipping this cycle.');
-      return;
-    }
-
-    try {
-      await db.query("UPDATE LiveContests SET status = 'Synchronizing', lastSyncAt = NOW() WHERE id = ?", [contestId]);
-
-      const provider = FeatureFlags.isEnabled('scraper') || FeatureFlags.isEnabled('graphql')
-        ? this.leetcodeProvider
-        : this.mockProvider;
-
-      const students = await db.query("SELECT id, name, leetcode_username FROM Users WHERE status = 'active'");
-      
-      const syncFunc = async (student, prov) => {
-        const stats = await prov.getStudentContestStatus(student.leetcode_username, 'mock-weekly');
-        const status = stats.participating ? 'Participating' : 'Unknown';
-
-        await snapshotEngine.compareAndUpdate(contestId, student.id, student.leetcode_username, {
-          attendanceStatus: status,
-          rank: stats.rank || null,
-          solved: stats.solved || 0,
-          score: stats.score || 0.00,
-          penalty: stats.penalty || 0,
-          ratingBefore: stats.ratingBefore || null
-        });
-      };
-
-      await snapshotEngine.loadSnapshot(contestId);
-      
-      studentSyncQueue.start(contestId, students, provider, syncFunc)
-        .then(async () => {
-          await db.query("UPDATE LiveContests SET status = 'Live', lastSyncAt = NOW() WHERE id = ?", [contestId]);
-        })
-        .catch(async (queueErr) => {
-          console.error('[LiveContestScheduler] Sync queue processing failed:', queueErr.message);
-          await db.query("UPDATE LiveContests SET status = 'Live' WHERE id = ?", [contestId]);
-        });
-    } catch (err) {
-      console.error(`[LiveContestScheduler] Failed to initialize sync for ID ${contestId}:`, err.message);
-      await db.query("UPDATE LiveContests SET status = 'Live' WHERE id = ?", [contestId]);
-    }
+    return this._triggerSyncPass(contestId, 0);
   }
 
   /**
    * Finalizes the contest attendance record mappings.
    */
   async _finalizeContest(contestId) {
+    return this._triggerSyncPass(contestId, 4);
+  }
+
+  /**
+   * Triggers a specific synchronization pass (0=live intermediate, 1-3=stages, 4=final verification)
+   */
+  async _triggerSyncPass(contestId, pass) {
+    const jobQueue = require('./jobQueueService');
+    const ContestAttendanceSyncService = require('./ContestAttendanceSyncService');
+
+    // Check if a sync job is already running for this contest and pass
+    const activeJobs = jobQueue.listJobs({
+      type: jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
+      status: jobQueue.JOB_STATUS.RUNNING
+    });
+    const isAlreadyRunning = activeJobs.some(j => j.payload?.contestId === contestId && j.payload?.pass === pass);
+    if (isAlreadyRunning) {
+      console.log(`[LiveContestScheduler] Sync Pass #${pass} is already running in background for contest ID: ${contestId}. Skipping duplicate enqueue.`);
+      return;
+    }
+
     try {
-      await db.query("UPDATE LiveContests SET status = 'Completed', lastSyncAt = NOW() WHERE id = ?", [contestId]);
-      
-      const students = await db.query("SELECT id, leetcode_username FROM Users WHERE status = 'active'");
-      await snapshotEngine.loadSnapshot(contestId);
+      await db.query(
+        "UPDATE LiveContests SET status = 'Synchronizing', lastSyncAt = NOW(), currentSyncPass = ? WHERE id = ?", 
+        [pass, contestId]
+      );
 
-      for (const s of students) {
-        const prev = snapshotEngine.previousSnapshots[contestId] || {};
-        const old = prev[s.id];
+      // Enqueue the job in the background queue
+      jobQueue.enqueue(
+        jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
+        { contestId, pass },
+        async (job, updateProgress) => {
+          const result = await ContestAttendanceSyncService.syncContestAttendance(contestId, {
+            pass,
+            jobId: job.id,
+            updateProgress
+          });
 
-        let finalStatus = 'Absent';
-        let solved = 0;
-        let score = 0;
-        let rank = null;
-        let penalty = 0;
-        let ratingBefore = null;
+          // Finalize contest status on pass 4 completion
+          const EventBus = require('./EventBus');
+          if (pass === 4) {
+            await db.query(
+              "UPDATE LiveContests SET status = 'Completed', lastSyncAt = NOW() WHERE id = ?", 
+              [contestId]
+            );
+            console.log(`[LiveContestScheduler] Final Sync Pass #4 complete. Contest ID ${contestId} finalized.`);
+            EventBus.emit('ContestCompleted', { contestId, status: 'Completed', pass });
+          } else {
+            const nextStatus = pass === 0 ? 'Live' : 'Synchronizing';
+            await db.query(
+              "UPDATE LiveContests SET status = ?, lastSyncAt = NOW() WHERE id = ?", 
+              [nextStatus, contestId]
+            );
+            console.log(`[LiveContestScheduler] Sync Pass #${pass} completed successfully for contest ID ${contestId}.`);
+            EventBus.emit('ContestCompleted', { contestId, status: nextStatus, pass });
+          }
 
-        if (old && (old.attendanceStatus === 'Participating' || old.attendanceStatus === 'Present')) {
-          finalStatus = 'Present';
-          solved = old.solved;
-          score = old.score;
-          rank = old.rank;
-          penalty = old.penalty;
-          ratingBefore = old.ratingBefore;
+          return result;
         }
+      );
 
-        await snapshotEngine.compareAndUpdate(contestId, s.id, s.leetcode_username, {
-          attendanceStatus: finalStatus,
-          rank, solved, score, penalty, ratingBefore
-        });
-      }
-
-      await snapshotEngine.recordContestSnapshot(contestId);
-      console.log(`[LiveContestScheduler] Finalized contest ID: ${contestId}`);
+      console.log(`[LiveContestScheduler] Enqueued Sync Pass #${pass} for contest ID: ${contestId}`);
     } catch (err) {
-      console.error(`[LiveContestScheduler] Finalization routine failed for ID ${contestId}:`, err.message);
+      console.error(`[LiveContestScheduler] Failed to enqueue sync job for contest ID ${contestId}:`, err.message);
+      const failStatus = pass === 0 ? 'Live' : 'Synchronizing';
+      try {
+        await db.query("UPDATE LiveContests SET status = ? WHERE id = ?", [failStatus, contestId]);
+      } catch (dbErr) {
+        console.error(`[LiveContestScheduler] Failed to update fallback status in DB for contest ID ${contestId}:`, dbErr.message);
+      }
     }
   }
 

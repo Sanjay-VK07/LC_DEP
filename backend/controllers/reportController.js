@@ -335,8 +335,13 @@ async function getAttendanceLog(req, res) {
     if (contestId) { sql += ' AND ar.contest_id = ?'; params.push(contestId); }
     if (userId) { sql += ' AND ar.user_id = ?'; params.push(userId); }
     if (status) { sql += ' AND ar.attendance_status = ?'; params.push(status); }
-    sql += ' ORDER BY ar.last_updated DESC LIMIT ? OFFSET ?';
-    params.push(Number(limit), (Number(page) - 1) * Number(limit));
+    const safeLimit = Number.parseInt(limit, 10) || 50;
+    const safeOffset = (Number.parseInt(page, 10) - 1) * safeLimit;
+    if (!Number.isInteger(safeLimit) || safeLimit <= 0 || !Number.isInteger(safeOffset) || safeOffset < 0) {
+      throw new Error("Invalid limit or offset");
+    }
+
+    sql += ` ORDER BY ar.last_updated DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
     const rows = await db.query(sql, params);
     return res.json({ success: true, data: rows });
   } catch (error) {

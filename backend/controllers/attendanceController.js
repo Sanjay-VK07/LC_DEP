@@ -3,6 +3,7 @@ const xlsx = require('xlsx');
 const leetcode = require('../utils/leetcode');
 const { getUserCodeChefStats } = require('../utils/codechef');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
+const { normalizeUsername } = require('../utils/usernameNormalizer');
 
 // Helper to parse dates timezone-independently
 function parseDateOnly(dateInput) {
@@ -19,8 +20,8 @@ function parseDateOnly(dateInput) {
     dateStr = dateInput.substring(0, 10);
   } else {
     const year = d.getFullYear();
-    const month = String(dateInput.getMonth() + 1).padStart(2, '0');
-    const day = String(dateInput.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     dateStr = `${year}-${month}-${day}`;
   }
   const parts = dateStr.split('-');
@@ -166,9 +167,25 @@ async function processContestUpload(req, res) {
     let present = 0;
     let absent = 0;
 
+    // Fetch all existing attendance records for this contest in a single query to prevent N+1 reads
+    const existingRecords = await db.query(
+      "SELECT user_id, attendance_source, attendance_status FROM AttendanceRecords WHERE contest_id = ?",
+      [targetContestId]
+    );
+    const existingMap = new Map();
+    existingRecords.forEach(r => {
+      existingMap.set(r.user_id, r);
+    });
+
     for (const student of eligibleStudents) {
-      const lcUserLower = student.leetcode_username.trim().toLowerCase();
+      const rawUsername = student.leetcode_username || '';
+      const lcUserLower = normalizeUsername(rawUsername);
       const attended = fileUsernames.has(lcUserLower);
+
+      // Check if we already have a record in AttendanceRecords to prevent overwrites / downgrades
+      const existing = existingMap.get(student.id);
+      const hasManualOverride = existing && existing.attendance_source === 'MANUAL';
+      const isAlreadyPresent = existing && existing.attendance_status === 'PRESENT';
 
       if (attended) {
         present++;
@@ -187,13 +204,15 @@ async function processContestUpload(req, res) {
           [student.id, targetContestId]
         );
 
-        // Update AttendanceRecords
-        await db.query(
-          `INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source)
-           VALUES (?, ?, 'PRESENT', 'AUTO')
-           ON DUPLICATE KEY UPDATE attendance_status = 'PRESENT', attendance_source = 'AUTO'`,
-          [student.id, targetContestId]
-        );
+        // Update AttendanceRecords if no manual override exists
+        if (!hasManualOverride) {
+          await db.query(
+            `INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source)
+             VALUES (?, ?, 'PRESENT', 'AUTO')
+             ON DUPLICATE KEY UPDATE attendance_status = 'PRESENT', attendance_source = 'AUTO'`,
+            [student.id, targetContestId]
+          );
+        }
       } else {
         absent++;
 
@@ -203,12 +222,15 @@ async function processContestUpload(req, res) {
           [student.id, targetContestId]
         );
 
-        await db.query(
-          `INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source)
-           VALUES (?, ?, 'ABSENT', 'AUTO')
-           ON DUPLICATE KEY UPDATE attendance_status = 'ABSENT', attendance_source = 'AUTO'`,
-          [student.id, targetContestId]
-        );
+        // Update AttendanceRecords to ABSENT only if no manual override exists and it's not a downgrade from PRESENT
+        if (!hasManualOverride && !isAlreadyPresent) {
+          await db.query(
+            `INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source)
+             VALUES (?, ?, 'ABSENT', 'AUTO')
+             ON DUPLICATE KEY UPDATE attendance_status = 'ABSENT', attendance_source = 'AUTO'`,
+            [student.id, targetContestId]
+          );
+        }
       }
     }
 
@@ -293,13 +315,14 @@ async function getContestAttendance(req, res) {
              ar.rank as contest_rank, ar.score as problems_solved, ar.rating_change,
              (SELECT registration_time FROM Registrations r WHERE r.user_id = u.id AND r.contest_id = ?) as registration_time,
              (SELECT join_time FROM ParticipationLogs p WHERE p.user_id = u.id AND p.contest_id = ?) as join_time,
+             (SELECT ca.attendanceStatus FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = u.id AND lc.contestSlug = ? LIMIT 1) as sync_status,
              IFNULL(lp.current_rating, ${defaultRating}) as current_rating
       FROM Users u
       LEFT JOIN AttendanceRecords ar ON u.id = ar.user_id AND ar.contest_id = ?
       LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
       WHERE u.status = 'active'
     `;
-    const params = [contest.contest_id, contest.contest_id, contest.contest_id];
+    const params = [contest.contest_id, contest.contest_id, contest.slug, contest.contest_id];
 
     if (batch) {
       sql += ` AND u.academic_batch = ?`;
@@ -335,35 +358,60 @@ async function getContestAttendance(req, res) {
       const isUnrated = contest.contest_status && contest.contest_status.toLowerCase() === 'unrated';
       const isRegistered = item.registration_time !== null;
 
-      // Determine final status
+      // Determine final status and reason based on required Priority Order
       let status = 'absent';
-      let hasAttended = false;
-
-      if (item.attendance_source === 'MANUAL' && item.attendance_status) {
-        hasAttended = item.attendance_status === 'PRESENT';
-      } else {
-        hasAttended = item.attendance_status === 'PRESENT' || item.join_time !== null;
-      }
+      let reason = null;
 
       if (isOngoing || now < cDateVal) {
         status = 'contest in progress';
-      } else if (isUnrated) {
-        status = hasAttended ? 'present' : 'absent';
       } else {
-        status = hasAttended ? 'present' : 'absent';
-      }
-
-      // Determine reason if absent
-      let reason = null;
-      if (status === 'absent') {
-        if (!item.platform_username || !item.platform_username.trim()) {
-          reason = 'Username Not Linked';
-        } else if (!isRegistered) {
-          reason = 'Not Registered';
-        } else {
+        // Priority 1: Manual Override
+        if (item.attendance_source === 'MANUAL' && item.attendance_status) {
+          const hasAttended = item.attendance_status === 'PRESENT';
+          status = hasAttended ? 'present' : 'absent';
+          reason = hasAttended ? 'Manual Override (PRESENT)' : 'Manual Override (ABSENT)';
+        }
+        // Priority 2: Official Leaderboard (from ContestAttendance)
+        else if (item.sync_status === 'Present' || item.sync_status === 'Participating') {
+          status = 'present';
+          reason = 'Participated via official leaderboard';
+        }
+        // Priority 3: Contest Rank
+        else if (item.contest_rank !== null && item.contest_rank > 0) {
+          status = 'present';
+          reason = 'Participated via official leaderboard';
+        }
+        // Priority 4: Participation Log (join_time exists)
+        else if (item.join_time !== null) {
+          status = 'present';
+          reason = 'Participation Log';
+        }
+        // Priority 4b: Already marked PRESENT in database
+        else if (item.attendance_status === 'PRESENT') {
+          status = 'present';
+          reason = 'Participated via official leaderboard';
+        }
+        // Priority 5: Incomplete Leaderboard
+        else if (item.sync_status === 'Unknown') {
+          status = 'unknown';
+          reason = 'Leaderboard Sync Incomplete';
+        }
+        // Priority 6: Registered but missing
+        else if (isRegistered) {
+          status = 'absent';
           reason = 'Registered but Did Not Participate';
         }
+        // Priority 7: Not Registered
+        else {
+          status = 'absent';
+          reason = 'Not Registered';
+        }
       }
+
+      // Print diagnostics block for every student as requested
+      const normalizedUsername = normalizeUsername(item.platform_username);
+      const isFoundInLeaderboard = item.sync_status === 'Present' || item.sync_status === 'Participating' || (item.contest_rank !== null && item.contest_rank > 0);
+      console.log(`[ATTENDANCE DECISION]\nStudent:\n${item.student_id}\n\nUsername:\n${item.platform_username || ''}\n\nNormalized:\n${normalizedUsername}\n\nRegistered:\n${isRegistered}\n\nLeaderboard:\n${isFoundInLeaderboard}\n\nContest Rank:\n${item.contest_rank}\n\nJoin Time:\n${item.join_time}\n\nContestAttendance:\n${item.sync_status || 'null'}\n\nAttendanceRecords:\n${item.attendance_status || 'null'}\n\nDecision:\n${status.toUpperCase()}\n\nReason:\n${reason || 'null'}\n====================================================`);
 
       return {
         student_id: item.student_id,
@@ -521,6 +569,14 @@ async function getStudentAttendanceHistory(req, res) {
   const { studentId } = req.params;
   const { refresh } = req.query;
 
+  // Enforce ownership check for Students
+  const requester = req.user;
+  if (requester && (requester.role === 'Student' || !['Super Admin', 'Faculty', 'HOD'].includes(requester.role))) {
+    if (String(requester.id) !== String(studentId) && String(requester.studentId) !== String(studentId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You can only view your own attendance history.' });
+    }
+  }
+
   try {
     const studentRows = await db.query(
       "SELECT id, name, roll_no, department, leetcode_username, codechef_username, academic_batch, academic_start_date, academic_end_date FROM Users WHERE id = ?",
@@ -533,7 +589,9 @@ async function getStudentAttendanceHistory(req, res) {
     const { leetcode_username, codechef_username } = student;
     const startDate = parseDateOnly(student.academic_start_date);
     const endDate = parseDateOnly(student.academic_end_date);
-    endDate.setHours(23, 59, 59, 999);
+    if (endDate) {
+      endDate.setHours(23, 59, 59, 999);
+    }
 
     // Fetch LeetCode Profile
     let profileRows = await db.query(
@@ -608,21 +666,48 @@ async function getStudentAttendanceHistory(req, res) {
           const ccData = await getUserCodeChefStats(codechef_username);
           if (ccData && ccData.success) {
             const ccContestList = ccData.contestHistory || [];
-            const ccRating = ccData.rating || 0;
-            const ccHighest = ccData.maxRating || ccRating;
+            const ccRating = ccData.rating ?? null;
+            const ccHighest = ccData.maxRating ?? ccRating ?? null;
+            const ccLowest = ccData.lowestRating ?? null;
+            const ccRatingHistory = ccData.ratingHistory || [];
             const ccHistoryJson = JSON.stringify(ccContestList);
 
+            const isRated = ccRating !== null;
+            const isProvisional = ccData.isProvisional || false;
+            let status = 'UNRATED';
+            if (isRated) {
+              status = isProvisional ? 'PROVISIONAL' : 'RATED';
+            }
+
+            console.log('[AUDIT][DB SAVE] currentRating =', ccRating, 'highestRating =', ccHighest, 'lowestRating =', ccLowest, 'ratingHistory.length =', ccRatingHistory.length);
+            console.log('[AUDIT LOG][Database Save][Attendance] currentRating =', ccRating);
             await db.query(`
-              INSERT INTO CodeChefProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved, stars, contest_history)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
+              INSERT INTO CodeChefProfiles (user_id, current_rating, highest_rating, lowest_rating, is_provisional, status, global_ranking, problems_solved, stars, contest_history, rating_history)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
-                current_rating = VALUES(current_rating),
-                highest_rating = VALUES(highest_rating),
-                global_ranking = VALUES(global_ranking),
-                problems_solved = VALUES(problems_solved),
-                stars = VALUES(stars),
-                contest_history = VALUES(contest_history)
-            `, [studentId, ccRating, ccHighest, ccData.globalRanking || null, ccData.problemsSolved || 0, ccData.stars || null, ccHistoryJson]);
+                current_rating = COALESCE(VALUES(current_rating), current_rating),
+                highest_rating = COALESCE(VALUES(highest_rating), highest_rating),
+                lowest_rating = COALESCE(VALUES(lowest_rating), lowest_rating),
+                is_provisional = COALESCE(VALUES(is_provisional), is_provisional),
+                status = COALESCE(VALUES(status), status),
+                global_ranking = COALESCE(VALUES(global_ranking), global_ranking),
+                problems_solved = GREATEST(COALESCE(VALUES(problems_solved), 0), COALESCE(problems_solved, 0)),
+                stars = COALESCE(VALUES(stars), stars),
+                contest_history = COALESCE(VALUES(contest_history), contest_history),
+                rating_history = COALESCE(VALUES(rating_history), rating_history)
+            `, [
+              studentId,
+              ccRating,
+              ccHighest,
+              ccLowest,
+              isProvisional ? 1 : 0,
+              status,
+              ccData.globalRanking || null,
+              ccData.problemsSolved || 0,
+              ccData.stars || null,
+              ccContestList.length > 0 ? ccHistoryJson : null,
+              ccRatingHistory.length > 0 ? JSON.stringify(ccRatingHistory) : null
+            ]);
 
             // Reload from DB
             ccProfileRows = await db.query(

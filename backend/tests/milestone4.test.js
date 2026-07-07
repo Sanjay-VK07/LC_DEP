@@ -50,6 +50,11 @@ test('LiveContestScheduler - processes live check sweeps', async () => {
 
   // 1. Seed an upcoming contest whose start time is past (meaning it should transition to Live)
   await db.query(`
+    INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
+    VALUES ('Starting Contest', ?, 'Weekly', 103, DATE_SUB(NOW(), INTERVAL 10 SECOND), 3600, 'RATED', 'LeetCode', 'SYNC')
+  `, [slug]);
+
+  await db.query(`
     INSERT INTO LiveContests (platform, contestSlug, contestName, contestType, startTime, endTime, status)
     VALUES ('LeetCode', ?, 'Starting Contest', 'Weekly', DATE_SUB(NOW(), INTERVAL 10 SECOND), DATE_ADD(NOW(), INTERVAL 1 HOUR), 'Upcoming')
   `, [slug]);
@@ -139,4 +144,6 @@ after(async () => {
   if (pool) {
     await pool.end();
   }
+  // Force exit to clean up keep-alive network sockets
+  process.exit(0);
 });

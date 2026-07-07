@@ -23,8 +23,13 @@ test('DataHealthAudit - detects duplicates, invalid records, missing fields, and
         // 9902 and 9903 have never synced
       ];
     }
-    if (sql.includes("FROM CodeChefProfiles") || sql.includes("FROM CodeforcesProfiles") || sql.includes("FROM HackerRankProfiles")) {
+    if (sql.includes("FROM CodeforcesProfiles") || sql.includes("FROM HackerRankProfiles") || sql.includes("FROM CodeChefProfiles")) {
       return [];
+    }
+    if (sql.includes("FROM StudentPlatformSync")) {
+      return [
+        { user_id: 9901, platform: 'leetcode', username: 'lc_a', sync_status: 'Healthy', last_successful_sync: new Date(), last_attempt: new Date(), retry_count: 0, failure_reason: null, failure_category: null, data_completeness: 100, next_retry: null }
+      ];
     }
     if (sql.includes("FROM departments")) {
       return [{ code: 'DEC' }];
@@ -60,9 +65,9 @@ test('DataHealthAudit - detects duplicates, invalid records, missing fields, and
     const clientA = responseData.students.find(s => s.id === 9901);
     assert.ok(clientA);
     // Student A has 3 connections that are not synced: codechef, codeforces, hackerrank.
-    // Score starts at 100, deducts 15 * 3 = 45. Health score should be 55.
-    assert.equal(clientA.healthScore, 55);
-    assert.equal(clientA.healthIndicator, 'Partial');
+    // Score is average: (100 + 0 + 0 + 0) / 4 = 25.
+    assert.equal(clientA.healthScore, 25);
+    assert.equal(clientA.healthIndicator, 'Needs Attention');
 
     // Find Student C in response
     const clientC = responseData.students.find(s => s.id === 9903);

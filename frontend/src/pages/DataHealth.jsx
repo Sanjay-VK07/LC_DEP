@@ -25,6 +25,13 @@ function DataHealth() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // HARDENING CONTROLS STATE
+  const [globalSyncing, setGlobalSyncing] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const [syncingPlatforms, setSyncingPlatforms] = useState({}); // studentId:platform -> boolean
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState('success');
   
   // Filters
   const [searchText, setSearchText] = useState('');
@@ -36,6 +43,56 @@ function DataHealth() {
 
   // Expanded rows state (student ID -> boolean)
   const [expandedStudents, setExpandedStudents] = useState({});
+
+  const showToast = (msg, type = 'success') => {
+    setToastMessage(msg);
+    setToastType(type);
+    setTimeout(() => setToastMessage(''), 4000);
+  };
+
+  const handleForceFullSync = async () => {
+    setGlobalSyncing(true);
+    try {
+      const res = await axios.post('/api/students/sync-all');
+      if (res.data.success) {
+        showToast('Platform-wide synchronization started in background.');
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Failed to start full sync.', 'error');
+    } finally {
+      setGlobalSyncing(false);
+    }
+  };
+
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      const res = await axios.post('/api/students/clear-cache');
+      if (res.data.success) {
+        showToast('Analytics and placement cache successfully invalidated.');
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Failed to invalidate cache.', 'error');
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const handleRetryPlatformSync = async (studentId, platform) => {
+    const key = `${studentId}:${platform}`;
+    setSyncingPlatforms(prev => ({ ...prev, [key]: true }));
+    try {
+      const res = await axios.post(`/api/students/${studentId}/sync/${platform}`);
+      if (res.data.success) {
+        showToast(`Successfully synchronized ${platform} handle!`);
+        await fetchHealthAudit();
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || `Failed to sync ${platform} handle.`, 'error');
+    } finally {
+      setSyncingPlatforms(prev => ({ ...prev, [key]: false }));
+    }
+  };
 
   const fetchHealthAudit = async (forceRefresh = false) => {
     setLoading(true);
@@ -110,9 +167,11 @@ function DataHealth() {
   };
 
   const getPlatformStatusDot = (platConn) => {
-    if (!platConn.connected) return <span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-700" title="Not connected"></span>;
-    if (platConn.synced) return <span className="h-2 w-2 rounded-full bg-emerald-500" title="Connected and Synced"></span>;
-    return <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" title="Connection Sync Failure"></span>;
+    if (!platConn.connected) return <span className="h-2 w-2 rounded-full bg-slate-350 dark:bg-slate-755" title="Not connected"></span>;
+    if (platConn.syncStatus === 'Healthy') return <span className="h-2 w-2 rounded-full bg-emerald-500" title="Connected and Healthy"></span>;
+    if (platConn.syncStatus === 'Partial') return <span className="h-2 w-2 rounded-full bg-amber-400" title="Connected and Partial"></span>;
+    if (platConn.syncStatus === 'Failed') return <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse" title="Connection Sync Failure"></span>;
+    return <span className="h-2 w-2 rounded-full bg-slate-400" title="Never Synced"></span>;
   };
 
   if (loading) {
@@ -148,7 +207,19 @@ function DataHealth() {
   });
 
   return (
-    <div className="space-y-6">
+    <>
+      {/* Toast Alert popup */}
+      {toastMessage && (
+        <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg border text-xs font-bold transition-all transform translate-y-0 ${
+          toastType === 'success' 
+            ? 'bg-emerald-500/10 border-emerald-550/20 text-emerald-600 dark:text-emerald-400' 
+            : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-455'
+        }`}>
+          <span>{toastType === 'success' ? '✔' : '❌'}</span>
+          <span>{toastMessage}</span>
+        </div>
+      )}
+      <div className="space-y-6">
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -159,7 +230,21 @@ function DataHealth() {
             Internal administrative reliability, duplicate detection, and platform sync audits
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={handleForceFullSync}
+            disabled={globalSyncing}
+            className="flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
+          >
+            <RotateCw className={`h-4 w-4 ${globalSyncing ? 'animate-spin' : ''}`} /> Force Full Sync
+          </button>
+          <button
+            onClick={handleClearCache}
+            disabled={clearingCache}
+            className="flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
+          >
+            <Database className="h-4 w-4" /> Flush Cache
+          </button>
           <button
             onClick={() => fetchHealthAudit(true)}
             className="flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3.5 py-2.5 rounded-xl transition-all shadow-sm hover:bg-slate-50 dark:hover:bg-slate-850"
@@ -426,48 +511,85 @@ function DataHealth() {
 
                             {/* Connection statuses */}
                             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-2">
-                              {Object.entries(s.connections).map(([platform, info]) => (
-                                <div key={platform} className="p-3 bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80 rounded-2xl space-y-2">
-                                  <div className="flex justify-between items-center pb-1.5 border-b border-slate-100 dark:border-slate-800">
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{platform}</span>
+                              {Object.entries(s.connections).map(([platform, info]) => {
+                                const key = `${s.id}:${platform}`;
+                                const isSyncing = !!syncingPlatforms[key];
+                                return (
+                                  <div key={platform} className="p-3 bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80 rounded-2xl space-y-2 text-left">
+                                    <div className="flex justify-between items-center pb-1.5 border-b border-slate-100 dark:border-slate-800">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{platform}</span>
+                                      <div className="flex items-center gap-1.5">
+                                        {info.connected ? (
+                                          info.syncStatus === 'Healthy' ? (
+                                            <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-0.5">🟢 Healthy ({info.dataCompleteness}%)</span>
+                                          ) : info.syncStatus === 'Partial' ? (
+                                            <span className="text-[10px] font-bold text-amber-500 flex items-center gap-0.5">🟡 Partial ({info.dataCompleteness}%)</span>
+                                          ) : info.syncStatus === 'Failed' ? (
+                                            <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">🔴 Failed</span>
+                                          ) : (
+                                            <span className="text-[10px] font-bold text-slate-400 flex items-center gap-0.5">⚫ Never Synced</span>
+                                          )
+                                        ) : (
+                                          <span className="text-[10px] font-bold text-slate-350 dark:text-slate-600">Disconnected</span>
+                                        )}
+                                        {info.connected && (
+                                          <button
+                                            disabled={isSyncing}
+                                            onClick={(e) => { e.stopPropagation(); handleRetryPlatformSync(s.id, platform); }}
+                                            className="text-slate-400 hover:text-primary-500 p-0.5 rounded transition-all disabled:opacity-30"
+                                            title="Retry Sync"
+                                          >
+                                            <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
                                     {info.connected ? (
-                                      info.synced ? (
-                                        <span className="text-[10px] font-bold text-emerald-500">Synced</span>
-                                      ) : (
-                                        <span className="text-[10px] font-bold text-rose-500">Sync Error</span>
-                                      )
+                                      <div className="space-y-1 text-[11px]">
+                                        <div className="flex justify-between">
+                                          <span className="text-slate-400">Handle:</span>
+                                          <span className="font-bold text-slate-700 dark:text-slate-200">{info.username}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span className="text-slate-400">Status:</span>
+                                          <span className="font-bold text-slate-700 dark:text-slate-200">{info.syncStatus}</span>
+                                        </div>
+                                        {info.syncStatus !== 'Never Synced' && (
+                                          <>
+                                            <div className="flex justify-between">
+                                              <span className="text-slate-400">Solved / Rating:</span>
+                                              <span className="font-bold text-slate-700 dark:text-slate-200">{info.problemsSolved} / {Math.round(info.currentRating)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                              <span className="text-slate-400">Retries:</span>
+                                              <span className="font-bold text-slate-700 dark:text-slate-200">{info.retryCount}</span>
+                                            </div>
+                                            {info.lastSuccessfulSync && (
+                                              <div className="flex justify-between">
+                                                <span className="text-slate-400">Last Success:</span>
+                                                <span className="font-bold text-slate-750 dark:text-slate-250 text-right">{new Date(info.lastSuccessfulSync).toLocaleString()}</span>
+                                              </div>
+                                            )}
+                                            {info.lastAttempt && (
+                                              <div className="flex justify-between">
+                                                <span className="text-slate-400">Last Attempt:</span>
+                                                <span className="font-bold text-slate-700 dark:text-slate-300 text-right">{new Date(info.lastAttempt).toLocaleString()}</span>
+                                              </div>
+                                            )}
+                                            {info.failureReason && (
+                                              <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 text-[10px] text-rose-500 italic break-words">
+                                                Reason: {info.failureReason}
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
                                     ) : (
-                                      <span className="text-[10px] font-bold text-slate-400">Disconnected</span>
+                                      <span className="text-[10px] text-slate-400 block italic">No account configured.</span>
                                     )}
                                   </div>
-                                  {info.connected ? (
-                                    <div className="space-y-1 text-[11px]">
-                                      <div className="flex justify-between">
-                                        <span className="text-slate-400">Handle:</span>
-                                        <span className="font-bold text-slate-700 dark:text-slate-200">{info.username}</span>
-                                      </div>
-                                      {info.synced && (
-                                        <>
-                                          <div className="flex justify-between">
-                                            <span className="text-slate-400">Solved:</span>
-                                            <span className="font-bold text-slate-700 dark:text-slate-200">{info.problemsSolved}</span>
-                                          </div>
-                                          <div className="flex justify-between">
-                                            <span className="text-slate-400">Rating:</span>
-                                            <span className="font-bold text-slate-700 dark:text-slate-200">{Math.round(info.currentRating)}</span>
-                                          </div>
-                                          <div className="flex justify-between">
-                                            <span className="text-slate-400">Last Sync:</span>
-                                            <span className="font-bold text-slate-700 dark:text-slate-200">{new Date(info.lastSynced).toLocaleString()}</span>
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-400 block italic">No account configured.</span>
-                                  )}
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </td>
                         </tr>
@@ -478,10 +600,11 @@ function DataHealth() {
               )}
             </tbody>
           </table>
-        </div>
       </div>
     </div>
-  );
+  </div>
+</>
+);
 }
 
 export default DataHealth;

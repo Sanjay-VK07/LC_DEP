@@ -227,6 +227,63 @@ async function validateSyncData(platform, rawData, username) {
   return { valid: true };
 }
 
+/**
+ * Evaluates the completeness of synchronized platform profile data.
+ * Returns percentage (0-100), boolean indicating if complete, and list of missing fields.
+ */
+function evaluateCompleteness(platform, rawData) {
+  const missing = [];
+  let score = 100;
+  
+  if (!rawData || typeof rawData !== 'object') {
+    return { complete: false, score: 0, missing: ['profile_data'] };
+  }
+
+  const p = platform.toLowerCase();
+
+  if (p === 'leetcode') {
+    const totalSolved = Number(rawData.totalSolved || rawData.problemsSolved || 0);
+    const hasHistory = Array.isArray(rawData.contestHistory) && rawData.contestHistory.length > 0;
+    
+    if (totalSolved <= 0) { missing.push('problems_solved'); score -= 20; }
+    if (rawData.easySolved === undefined && (rawData.metadata?.easySolved === undefined)) { missing.push('easy_solved'); score -= 15; }
+    if (rawData.mediumSolved === undefined && (rawData.metadata?.mediumSolved === undefined)) { missing.push('medium_solved'); score -= 15; }
+    if (rawData.hardSolved === undefined && (rawData.metadata?.hardSolved === undefined)) { missing.push('hard_solved'); score -= 15; }
+    if (!Array.isArray(rawData.topicStats) || rawData.topicStats.length === 0) { missing.push('topic_stats'); score -= 20; }
+    if (!hasHistory) { missing.push('contest_history'); score -= 15; }
+  } else if (p === 'codeforces') {
+    const totalSolved = Number(rawData.problemsSolved || 0);
+    const hasHistory = Array.isArray(rawData.contestHistory) && rawData.contestHistory.length > 0;
+
+    if (totalSolved <= 0) { missing.push('problems_solved'); score -= 30; }
+    if (rawData.rating === undefined || rawData.rating === null) { missing.push('rating'); score -= 25; }
+    if (rawData.maxRating === undefined || rawData.maxRating === null) { missing.push('max_rating'); score -= 20; }
+    if (rawData.rank === undefined || rawData.rank === null) { missing.push('rank'); score -= 10; }
+    if (!hasHistory) { missing.push('contest_history'); score -= 15; }
+  } else if (p === 'codechef') {
+    const totalSolved = Number(rawData.problemsSolved || 0);
+    const hasHistory = Array.isArray(rawData.contestHistory) && rawData.contestHistory.length > 0;
+
+    if (totalSolved <= 0) { missing.push('problems_solved'); score -= 30; }
+    if (rawData.rating === undefined || rawData.rating === null) { missing.push('rating'); score -= 30; }
+    if (rawData.stars === undefined || rawData.stars === null) { missing.push('stars'); score -= 25; }
+    if (!hasHistory) { missing.push('contest_history'); score -= 15; }
+  } else if (p === 'hackerrank') {
+    const totalSolved = Number(rawData.problemsSolved || 0);
+    const badges = Array.isArray(rawData.badges) ? rawData.badges : [];
+
+    if (totalSolved <= 0) { missing.push('problems_solved'); score -= 50; }
+    if (badges.length === 0) { missing.push('badges'); score -= 50; }
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  return {
+    complete: missing.length === 0,
+    score,
+    missing
+  };
+}
+
 module.exports = {
   validateUsername,
   validateRating,
@@ -236,6 +293,7 @@ module.exports = {
   sanitizeRating,
   logValidationFailure,
   validateSyncData,
+  evaluateCompleteness,
   PLATFORM_USERNAME_REGEX,
   RATING_BOUNDS
 };

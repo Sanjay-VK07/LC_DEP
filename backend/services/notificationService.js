@@ -186,8 +186,12 @@ async function getNotifications({ severity, type, search, limit = 50, unreadOnly
       params.push(`%${search}%`, `%${search}%`);
     }
 
-    sql += ' ORDER BY n.is_read ASC, n.created_at DESC LIMIT ?';
-    params.push(Number(limit));
+    const safeLimit = Number.parseInt(limit, 10) || 50;
+    if (!Number.isInteger(safeLimit) || safeLimit <= 0) {
+      throw new Error("Invalid limit");
+    }
+
+    sql += ` ORDER BY n.is_read ASC, n.created_at DESC LIMIT ${safeLimit}`;
 
     return await db.query(sql, params);
   } catch (err) {

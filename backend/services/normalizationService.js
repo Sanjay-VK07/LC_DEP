@@ -25,8 +25,8 @@ function normalizeLeetCodeProfile(result, username) {
 
   if (result?.success || result?.verified) {
     profile.verified = true;
-    profile.rating = result.contestRating || result.rating || null;
-    profile.maxRating = result.maxRating || result.contestRating || result.rating || null;
+    profile.rating = result.contestRating ?? result.rating ?? null;
+    profile.maxRating = result.maxRating ?? result.contestRating ?? result.rating ?? null;
     profile.problemsSolved = result.totalSolved || result.problemsSolved || 0;
     profile.contests = result.contestParticipationCount || 0;
     profile.rank = result.globalRanking || null;
@@ -50,16 +50,65 @@ function normalizeCodeChefProfile(result, username) {
 
   if (result?.success || result?.verified) {
     profile.verified = true;
-    profile.rating = result.rating || null;
-    profile.maxRating = result.maxRating || result.rating || null;
+    
+    let ratingHistory = result.ratingHistory;
+    if (!Array.isArray(ratingHistory)) {
+      if (Array.isArray(result.contestHistory)) {
+        ratingHistory = result.contestHistory.map(c => c.newRating || c.rating).filter(r => r !== null && r !== undefined);
+      } else {
+        ratingHistory = [];
+      }
+    }
+
+    let ccRating = result.rating ?? null;
+    let ccHighest = result.maxRating ?? result.highestRating ?? ccRating ?? null;
+    let ccLowest = result.lowestRating ?? null;
+    
+    // 1. If scraper fails to provide currentRating: derive Current Rating = latest contest rating
+    if (ccRating === null && ratingHistory.length > 0) {
+      ccRating = ratingHistory[ratingHistory.length - 1];
+    }
+    
+    // 2. If scraper fails to provide highestRating: derive Highest Rating = MAX(all ratings in ratingHistory)
+    if (ccHighest === null && ratingHistory.length > 0) {
+      ccHighest = Math.max(...ratingHistory);
+    }
+    
+    // 3. If scraper fails to provide lowestRating: derive Lowest Rating = MIN(all ratings)
+    if (ccLowest === null && ratingHistory.length > 0) {
+      ccLowest = Math.min(...ratingHistory);
+    } else if (ccLowest === null && ccRating !== null) {
+      ccLowest = ccRating;
+    }
+    
+    profile.rating = ccRating;
+    profile.maxRating = ccHighest;
+    profile.lowestRating = ccLowest;
+
+    const isRated = ccRating !== null;
+    const isProvisional = result.isProvisional || false;
+    let status = 'UNRATED';
+    if (isRated) {
+      status = isProvisional ? 'PROVISIONAL' : 'RATED';
+    }
+
+    profile.isRated = isRated;
+    profile.isProvisional = isProvisional;
+    profile.status = status;
+    profile.currentRating = ccRating;
+    profile.highestRating = ccHighest;
+
+    console.log('[AUDIT][NORMALIZATION] currentRating =', ccRating, 'highestRating =', ccHighest, 'lowestRating =', ccLowest, 'ratingHistory.length =', ratingHistory.length);
+    console.log('[AUDIT LOG][Normalization] currentRating =', profile.rating);
+    
     profile.problemsSolved = result.problemsSolved || 0;
     profile.contests = result.contestParticipationCount || 0;
     profile.rank = result.globalRanking || null;
     profile.countryRank = result.countryRank || null;
 
     let calculatedStars = result.stars;
-    if (!calculatedStars && result.rating) {
-      const r = Number(result.rating);
+    if (!calculatedStars && profile.rating) {
+      const r = Number(profile.rating);
       if (r < 1400) calculatedStars = '1★';
       else if (r < 1600) calculatedStars = '2★';
       else if (r < 1800) calculatedStars = '3★';
@@ -71,7 +120,9 @@ function normalizeCodeChefProfile(result, username) {
     profile.stars = calculatedStars;
     profile.metadata = {
       stars: calculatedStars || '1★',
-      contestHistory: result.contestHistory || []
+      contestHistory: result.contestHistory || [],
+      ratingHistory,
+      lowestRating: ccLowest
     };
   }
 
@@ -86,8 +137,8 @@ function normalizeCodeforcesProfile(result, username) {
 
   if (result?.success || result?.verified) {
     profile.verified = true;
-    profile.rating = result.rating || null;
-    profile.maxRating = result.maxRating || result.rating || null;
+    profile.rating = result.rating ?? null;
+    profile.maxRating = result.maxRating ?? result.rating ?? null;
     profile.problemsSolved = result.problemsSolved || 0;
     profile.contests = result.contestParticipationCount || 0;
     profile.rank = result.rank || null;

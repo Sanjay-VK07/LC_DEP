@@ -99,8 +99,12 @@ async function getLogs({ action, severity, limit = 100 } = {}) {
     const params = [];
     if (action) { sql += ' AND action = ?'; params.push(action); }
     if (severity) { sql += ' AND severity = ?'; params.push(severity); }
-    sql += ' ORDER BY created_at DESC LIMIT ?';
-    params.push(limit);
+    const safeLimit = Number.parseInt(limit, 10) || 100;
+    if (!Number.isInteger(safeLimit) || safeLimit <= 0) {
+      throw new Error("Invalid limit");
+    }
+
+    sql += ` ORDER BY created_at DESC LIMIT ${safeLimit}`;
     return await db.query(sql, params);
   } catch (err) {
     console.warn('[AuditLog] Failed to query audit logs:', err.message);

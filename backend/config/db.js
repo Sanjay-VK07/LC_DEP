@@ -88,7 +88,7 @@ async function initializeDatabase() {
     try {
       const conn = await pool.getConnection();
       try {
-        await conn.query("SELECT 1 FROM students LIMIT 1");
+        await conn.query("SELECT 1 FROM Users LIMIT 1");
       } catch (err) {
         schemaNeeded = true;
       } finally {
@@ -121,6 +121,23 @@ async function initializeDatabase() {
         next_retry TIMESTAMP NULL DEFAULT NULL,
         UNIQUE KEY idx_user_platform (user_id, platform),
         FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB
+    `);
+
+    // Ensure contest_attendance table exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS contest_attendance (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        contest_slug VARCHAR(255) NOT NULL,
+        student_id INT NOT NULL,
+        leetcode_username VARCHAR(255) NOT NULL,
+        attendance ENUM('PRESENT', 'ABSENT') NOT NULL,
+        \`rank\` INT DEFAULT NULL,
+        score DECIMAL(10,2) DEFAULT NULL,
+        finish_time INT DEFAULT NULL,
+        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_student_contest_slug_idx (student_id, contest_slug),
+        FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB
     `);
 

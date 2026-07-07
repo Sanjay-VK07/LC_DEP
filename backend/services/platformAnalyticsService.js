@@ -67,8 +67,13 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
       WHERE u.status = 'active'${filterSql}
     `;
 
-    const rows = await db.query(baseQuery + ' ORDER BY lc_current_rating DESC, cc_current_rating DESC LIMIT ?',
-      [...params, Math.max(Number(limit), 10)]);
+    const safeLimit = Number.parseInt(limit, 10) || 100;
+    if (!Number.isInteger(safeLimit) || safeLimit <= 0) {
+      throw new Error("Invalid limit");
+    }
+
+    const rows = await db.query(baseQuery + ` ORDER BY lc_current_rating DESC, cc_current_rating DESC LIMIT ${Math.max(safeLimit, 10)}`,
+      params);
 
     const enriched = rows.map(r => {
       const totalSolved = Number(r.lc_solved) + Number(r.cc_solved) + Number(r.cf_solved) + Number(r.hr_solved);
@@ -280,11 +285,12 @@ async function getUnifiedStudentProfile(userId) {
             lp.topic_stats as lc_topic_stats, lp.recent_submissions as lc_recent_submissions,
             lp.easy_solved as lc_easy_solved, lp.medium_solved as lc_medium_solved,
             lp.hard_solved as lc_hard_solved, lp.acceptance_rate as lc_acceptance_rate,
-            cp.current_rating as cc_rating, cp.highest_rating as cc_best_rating,
+            cp.current_rating as cc_rating, cp.highest_rating as cc_best_rating, cp.lowest_rating as cc_lowest_rating,
+            cp.is_provisional as cc_is_provisional, cp.status as cc_status,
             cp.global_ranking as cc_rank, cp.country_rank as cc_country_rank,
-            cp.problems_solved as cc_solved, cp.stars as cc_stars, cp.contest_history as cc_history,
+            cp.problems_solved as cc_solved, cp.stars as cc_stars, cp.contest_history as cc_history, cp.rating_history as cc_rating_history,
             cfp.current_rating as cf_rating, cfp.highest_rating as cf_best_rating,
-            cfp.\`rank\` as cf_rank, cfp.max_rank as cf_max_rank,
+            cfp.rank as cf_rank, cfp.max_rank as cf_max_rank,
             cfp.problems_solved as cf_solved, cfp.contest_history as cf_history,
             hrp.problems_solved as hr_solved, hrp.stars as hr_stars,
             hrp.badges as hr_badges, hrp.certificates as hr_certs
@@ -298,6 +304,23 @@ async function getUnifiedStudentProfile(userId) {
   );
 
   if (!row) return null;
+  
+  const ccRatingHistory = (() => {
+    try {
+      return typeof row.cc_rating_history === 'string' ? JSON.parse(row.cc_rating_history) : (row.cc_rating_history || []);
+    } catch {
+      return [];
+    }
+  })();
+  const ccLowestRating = row.cc_lowest_rating !== null ? Number(row.cc_lowest_rating) : null;
+  const ccCurrentRating = row.cc_rating !== null ? Number(row.cc_rating) : null;
+  const ccHighestRating = row.cc_best_rating !== null ? Number(row.cc_best_rating) : null;
+  const ccIsProvisional = row.cc_is_provisional === 1;
+  const ccStatus = row.cc_status || (ccCurrentRating !== null ? 'RATED' : 'UNRATED');
+  const ccIsRated = ccCurrentRating !== null;
+
+  console.log('[AUDIT][DB READ] currentRating =', ccCurrentRating, 'highestRating =', ccHighestRating, 'lowestRating =', ccLowestRating, 'ratingHistory.length =', ccRatingHistory.length);
+  console.log('[AUDIT LOG][Database Read] currentRating (row.cc_rating) =', row.cc_rating);
 
   const lcHistory = parseContestHistory(row.lc_history).map(normalizeLeetCodeEntry).filter(e => e.attended);
   const ccHistory = parseContestHistory(row.cc_history).map(normalizeCodeChefEntry).filter(e => e.attended);
@@ -329,14 +352,21 @@ async function getUnifiedStudentProfile(userId) {
       platform: 'codechef',
       verified: !!row.codechef_username,
       username: row.codechef_username,
-      rating: Number(row.cc_rating) || null,
-      maxRating: Number(row.cc_best_rating) || null,
+      rating: ccCurrentRating,
+      maxRating: ccHighestRating,
+      lowestRating: ccLowestRating,
+      currentRating: ccCurrentRating,
+      highestRating: ccHighestRating,
+      isRated: ccIsRated,
+      isProvisional: ccIsProvisional,
+      status: ccStatus,
       globalRanking: row.cc_rank || null,
       countryRank: row.cc_country_rank || null,
       stars: row.cc_stars || null,
       problemsSolved: Number(row.cc_solved) || 0,
       contests: ccHistory.length,
-      contestHistory: ccHistory
+      contestHistory: ccHistory,
+      ratingHistory: ccRatingHistory
     },
     codeforces: {
       platform: 'codeforces',

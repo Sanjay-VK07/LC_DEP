@@ -1,0 +1,1599 @@
+{
+  "time": 1783222647.851799,
+  "is_past": false,
+  "submissions": [
+    {
+      "4031": {
+        "id": 7369144,
+        "date": 1783221331,
+        "question_id": 4031,
+        "submission_id": 734138128,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4188": {
+        "id": 7368378,
+        "date": 1783220364,
+        "question_id": 4188,
+        "submission_id": 734134867,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4346": {
+        "id": 7367584,
+        "date": 1783219455,
+        "question_id": 4346,
+        "submission_id": 734131956,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4356": {
+        "id": 7367248,
+        "date": 1783219078,
+        "question_id": 4356,
+        "submission_id": 734130827,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      }
+    },
+    {
+      "4031": {
+        "id": 32885709,
+        "date": 1783221031,
+        "question_id": 4031,
+        "submission_id": 2056409923,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "python"
+      },
+      "4188": {
+        "id": 32862529,
+        "date": 1783220073,
+        "question_id": 4188,
+        "submission_id": 2056381368,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python"
+      },
+      "4346": {
+        "id": 32853322,
+        "date": 1783219695,
+        "question_id": 4346,
+        "submission_id": 2056370085,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python"
+      },
+      "4356": {
+        "id": 32848715,
+        "date": 1783219505,
+        "question_id": 4356,
+        "submission_id": 2056364473,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python"
+      }
+    },
+    {
+      "4031": {
+        "id": 32892574,
+        "date": 1783221334,
+        "question_id": 4031,
+        "submission_id": 2056418647,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32857222,
+        "date": 1783219856,
+        "question_id": 4188,
+        "submission_id": 2056374868,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32879223,
+        "date": 1783220752,
+        "question_id": 4346,
+        "submission_id": 2056401788,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32831822,
+        "date": 1783218844,
+        "question_id": 4356,
+        "submission_id": 2056344248,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32878884,
+        "date": 1783220738,
+        "question_id": 4031,
+        "submission_id": 2056401353,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32863280,
+        "date": 1783220103,
+        "question_id": 4188,
+        "submission_id": 2056382272,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32847417,
+        "date": 1783219452,
+        "question_id": 4346,
+        "submission_id": 2056362941,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32831356,
+        "date": 1783218817,
+        "question_id": 4356,
+        "submission_id": 2056343656,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32886019,
+        "date": 1783221044,
+        "question_id": 4031,
+        "submission_id": 2056410304,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32874846,
+        "date": 1783220572,
+        "question_id": 4188,
+        "submission_id": 2056396358,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32853024,
+        "date": 1783219683,
+        "question_id": 4346,
+        "submission_id": 2056369721,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32836275,
+        "date": 1783219021,
+        "question_id": 4356,
+        "submission_id": 2056349568,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32892950,
+        "date": 1783221350,
+        "question_id": 4031,
+        "submission_id": 2056419132,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32891029,
+        "date": 1783221261,
+        "question_id": 4188,
+        "submission_id": 2056416663,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32882343,
+        "date": 1783220885,
+        "question_id": 4346,
+        "submission_id": 2056405666,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32865942,
+        "date": 1783220209,
+        "question_id": 4356,
+        "submission_id": 2056385475,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32879299,
+        "date": 1783220756,
+        "question_id": 4031,
+        "submission_id": 2056401882,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32866902,
+        "date": 1783220247,
+        "question_id": 4188,
+        "submission_id": 2056386624,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32879521,
+        "date": 1783220766,
+        "question_id": 4346,
+        "submission_id": 2056402165,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 2,
+        "lang": "java"
+      },
+      "4356": {
+        "id": 32840839,
+        "date": 1783219192,
+        "question_id": 4356,
+        "submission_id": 2056354975,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32886774,
+        "date": 1783221078,
+        "question_id": 4031,
+        "submission_id": 2056411270,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32866664,
+        "date": 1783220238,
+        "question_id": 4188,
+        "submission_id": 2056386336,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32856924,
+        "date": 1783219844,
+        "question_id": 4346,
+        "submission_id": 2056374514,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32834741,
+        "date": 1783218964,
+        "question_id": 4356,
+        "submission_id": 2056347758,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32865189,
+        "date": 1783220180,
+        "question_id": 4031,
+        "submission_id": 2056384575,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 3,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32849292,
+        "date": 1783219529,
+        "question_id": 4188,
+        "submission_id": 2056365181,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32844770,
+        "date": 1783219347,
+        "question_id": 4346,
+        "submission_id": 2056359765,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "java"
+      },
+      "4356": {
+        "id": 32838846,
+        "date": 1783219118,
+        "question_id": 4356,
+        "submission_id": 2056352625,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32887036,
+        "date": 1783221089,
+        "question_id": 4031,
+        "submission_id": 2056411598,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32873279,
+        "date": 1783220508,
+        "question_id": 4188,
+        "submission_id": 2056394414,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32860075,
+        "date": 1783219973,
+        "question_id": 4346,
+        "submission_id": 2056378370,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32846716,
+        "date": 1783219423,
+        "question_id": 4356,
+        "submission_id": 2056362097,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 7368746,
+        "date": 1783220798,
+        "question_id": 4031,
+        "submission_id": 734136359,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4188": {
+        "id": 7368443,
+        "date": 1783220440,
+        "question_id": 4188,
+        "submission_id": 734135139,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4346": {
+        "id": 7367672,
+        "date": 1783219546,
+        "question_id": 4346,
+        "submission_id": 734132254,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4356": {
+        "id": 7366912,
+        "date": 1783218758,
+        "question_id": 4356,
+        "submission_id": 734129840,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      }
+    },
+    {
+      "4031": {
+        "id": 7368110,
+        "date": 1783220027,
+        "question_id": 4031,
+        "submission_id": 734133761,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4188": {
+        "id": 7368748,
+        "date": 1783220799,
+        "question_id": 4188,
+        "submission_id": 734136363,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4346": {
+        "id": 7367543,
+        "date": 1783219403,
+        "question_id": 4346,
+        "submission_id": 734131783,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4356": {
+        "id": 7366865,
+        "date": 1783218692,
+        "question_id": 4356,
+        "submission_id": 734129662,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      }
+    },
+    {
+      "4031": {
+        "id": 32887522,
+        "date": 1783221110,
+        "question_id": 4031,
+        "submission_id": 2056412214,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32872009,
+        "date": 1783220454,
+        "question_id": 4188,
+        "submission_id": 2056392841,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32858258,
+        "date": 1783219898,
+        "question_id": 4346,
+        "submission_id": 2056376151,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32846426,
+        "date": 1783219412,
+        "question_id": 4356,
+        "submission_id": 2056361754,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32894315,
+        "date": 1783221412,
+        "question_id": 4031,
+        "submission_id": 2056420889,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32866872,
+        "date": 1783220246,
+        "question_id": 4188,
+        "submission_id": 2056386586,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32852046,
+        "date": 1783219644,
+        "question_id": 4346,
+        "submission_id": 2056368538,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32837594,
+        "date": 1783219069,
+        "question_id": 4356,
+        "submission_id": 2056351145,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32880661,
+        "date": 1783220814,
+        "question_id": 4031,
+        "submission_id": 2056403587,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      },
+      "4188": {
+        "id": 32874159,
+        "date": 1783220546,
+        "question_id": 4188,
+        "submission_id": 2056395513,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      },
+      "4346": {
+        "id": 32871051,
+        "date": 1783220415,
+        "question_id": 4346,
+        "submission_id": 2056391678,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 2,
+        "lang": "python3"
+      },
+      "4356": {
+        "id": 32853868,
+        "date": 1783219719,
+        "question_id": 4356,
+        "submission_id": 2056370757,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      }
+    },
+    {
+      "4031": {
+        "id": 7368995,
+        "date": 1783221116,
+        "question_id": 4031,
+        "submission_id": 734137443,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4188": {
+        "id": 7368555,
+        "date": 1783220565,
+        "question_id": 4188,
+        "submission_id": 734135584,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4346": {
+        "id": 7367900,
+        "date": 1783219811,
+        "question_id": 4346,
+        "submission_id": 734133029,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4356": {
+        "id": 7367065,
+        "date": 1783218875,
+        "question_id": 4356,
+        "submission_id": 734130255,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      }
+    },
+    {
+      "4031": {
+        "id": 32894397,
+        "date": 1783221416,
+        "question_id": 4031,
+        "submission_id": 2056420987,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32877895,
+        "date": 1783220694,
+        "question_id": 4188,
+        "submission_id": 2056400105,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32855707,
+        "date": 1783219793,
+        "question_id": 4346,
+        "submission_id": 2056373013,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32835941,
+        "date": 1783219010,
+        "question_id": 4356,
+        "submission_id": 2056349172,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32887744,
+        "date": 1783221120,
+        "question_id": 4031,
+        "submission_id": 2056412478,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      },
+      "4188": {
+        "id": 32876934,
+        "date": 1783220657,
+        "question_id": 4188,
+        "submission_id": 2056398926,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      },
+      "4346": {
+        "id": 32855199,
+        "date": 1783219771,
+        "question_id": 4346,
+        "submission_id": 2056372380,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "python3"
+      },
+      "4356": {
+        "id": 32833491,
+        "date": 1783218919,
+        "question_id": 4356,
+        "submission_id": 2056346306,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "python3"
+      }
+    },
+    {
+      "4031": {
+        "id": 32887870,
+        "date": 1783221125,
+        "question_id": 4031,
+        "submission_id": 2056412643,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32886272,
+        "date": 1783221055,
+        "question_id": 4188,
+        "submission_id": 2056410631,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32880700,
+        "date": 1783220816,
+        "question_id": 4346,
+        "submission_id": 2056403631,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "java"
+      },
+      "4356": {
+        "id": 32844947,
+        "date": 1783219354,
+        "question_id": 4356,
+        "submission_id": 2056359977,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32894807,
+        "date": 1783221433,
+        "question_id": 4031,
+        "submission_id": 2056421521,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32886351,
+        "date": 1783221059,
+        "question_id": 4188,
+        "submission_id": 2056410735,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32879308,
+        "date": 1783220756,
+        "question_id": 4346,
+        "submission_id": 2056401892,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32867016,
+        "date": 1783220251,
+        "question_id": 4356,
+        "submission_id": 2056386759,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 32888096,
+        "date": 1783221135,
+        "question_id": 4031,
+        "submission_id": 2056412922,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32875258,
+        "date": 1783220589,
+        "question_id": 4188,
+        "submission_id": 2056396864,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32861135,
+        "date": 1783220015,
+        "question_id": 4346,
+        "submission_id": 2056379656,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32854098,
+        "date": 1783219728,
+        "question_id": 4356,
+        "submission_id": 2056371034,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    },
+    {
+      "4031": {
+        "id": 7368785,
+        "date": 1783220841,
+        "question_id": 4031,
+        "submission_id": 734136510,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      },
+      "4188": {
+        "id": 7368295,
+        "date": 1783220255,
+        "question_id": 4188,
+        "submission_id": 734134524,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4346": {
+        "id": 7367493,
+        "date": 1783219350,
+        "question_id": 4346,
+        "submission_id": 734131624,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 1,
+        "lang": ""
+      },
+      "4356": {
+        "id": 7366863,
+        "date": 1783218680,
+        "question_id": 4356,
+        "submission_id": 734129636,
+        "status": 10,
+        "contest_id": 1377,
+        "data_region": "CN",
+        "fail_count": 0,
+        "lang": ""
+      }
+    },
+    {
+      "4031": {
+        "id": 32888289,
+        "date": 1783221142,
+        "question_id": 4031,
+        "submission_id": 2056413158,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32871781,
+        "date": 1783220445,
+        "question_id": 4188,
+        "submission_id": 2056392562,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32854259,
+        "date": 1783219735,
+        "question_id": 4346,
+        "submission_id": 2056371228,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4356": {
+        "id": 32844442,
+        "date": 1783219333,
+        "question_id": 4356,
+        "submission_id": 2056359362,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 1,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32895119,
+        "date": 1783221447,
+        "question_id": 4031,
+        "submission_id": 2056421936,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4188": {
+        "id": 32873886,
+        "date": 1783220533,
+        "question_id": 4188,
+        "submission_id": 2056395172,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4346": {
+        "id": 32854770,
+        "date": 1783219754,
+        "question_id": 4346,
+        "submission_id": 2056371863,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      },
+      "4356": {
+        "id": 32839687,
+        "date": 1783219148,
+        "question_id": 4356,
+        "submission_id": 2056353617,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "java"
+      }
+    },
+    {
+      "4031": {
+        "id": 32895262,
+        "date": 1783221454,
+        "question_id": 4031,
+        "submission_id": 2056422130,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4188": {
+        "id": 32871371,
+        "date": 1783220427,
+        "question_id": 4188,
+        "submission_id": 2056392053,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4346": {
+        "id": 32846335,
+        "date": 1783219408,
+        "question_id": 4346,
+        "submission_id": 2056361633,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      },
+      "4356": {
+        "id": 32833526,
+        "date": 1783218920,
+        "question_id": 4356,
+        "submission_id": 2056346346,
+        "status": 10,
+        "contest_id": 1315,
+        "data_region": "US",
+        "fail_count": 0,
+        "lang": "cpp"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": 5365,
+      "question_id": 4356,
+      "credit": 3,
+      "title": "Sum of Integers with Maximum Digit Range",
+      "title_slug": "sum-of-integers-with-maximum-digit-range",
+      "category_slug": "contest"
+    },
+    {
+      "id": 5366,
+      "question_id": 4346,
+      "credit": 5,
+      "title": "Subsequence After One Replacement",
+      "title_slug": "subsequence-after-one-replacement",
+      "category_slug": "contest"
+    },
+    {
+      "id": 5367,
+      "question_id": 4188,
+      "credit": 5,
+      "title": "Divisible Game",
+      "title_slug": "divisible-game",
+      "category_slug": "contest"
+    },
+    {
+      "id": 5368,
+      "question_id": 4031,
+      "credit": 6,
+      "title": "Palindromic Subarray Sum",
+      "title_slug": "palindromic-subarray-sum",
+      "category_slug": "contest"
+    }
+  ],
+  "total_rank": [
+    {
+      "contest_id": 1377,
+      "username": "千乘仲达",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "AlfredoCheng",
+      "country_code": "",
+      "country_name": "",
+      "rank": 326,
+      "score": 19,
+      "finish_time": 1783221331,
+      "global_ranking": 0,
+      "data_region": "CN",
+      "avatar_url": "https://assets.leetcode.cn/aliyun-lc-upload/users/alfredocheng/avatar_1735046656.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Aaditya Sengar",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "aksse01",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 327,
+      "score": 19,
+      "finish_time": 1783221331,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/aksse01/avatar_1782475016.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Sneh Shah",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Sneh_1610",
+      "country_code": "",
+      "country_name": null,
+      "rank": 328,
+      "score": 19,
+      "finish_time": 1783221334,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/avatars/avatar_1659245531.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Yashwanth_kanaboina",
+      "username_color": null,
+      "user_badge": {
+        "icon": "/static/images/badges/guardian.png",
+        "display_name": "Guardian"
+      },
+      "user_slug": "Yashwanth_kanaboina",
+      "country_code": "",
+      "country_name": null,
+      "rank": 329,
+      "score": 19,
+      "finish_time": 1783221338,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/Yashwanth_kanaboina/avatar_1758256784.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Gaurav Choudhary",
+      "username_color": null,
+      "user_badge": {
+        "icon": "/static/images/badges/knight.png",
+        "display_name": "Knight"
+      },
+      "user_slug": "2VkVd9us3B",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 330,
+      "score": 19,
+      "finish_time": 1783221344,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/2VkVd9us3B/avatar_1780842160.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Piyush Priyanshu",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Piyush6_9",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 331,
+      "score": 19,
+      "finish_time": 1783221350,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/default_avatar.jpg",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Sathwika_Vollala",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Sathwika_Vollala",
+      "country_code": "",
+      "country_name": null,
+      "rank": 332,
+      "score": 19,
+      "finish_time": 1783221366,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/Sathwika_Vollala/avatar_1783058676.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Priyadarshan_Garg",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Priyadarshan_Garg",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 333,
+      "score": 19,
+      "finish_time": 1783221378,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/Priyadarshan_Garg/avatar_1767446133.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "parthcodeX_",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "parthcoder_",
+      "country_code": "",
+      "country_name": null,
+      "rank": 334,
+      "score": 19,
+      "finish_time": 1783221380,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/parthcoder_/avatar_1776132056.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Kartik Maheshwari",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Dawgcode",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 335,
+      "score": 19,
+      "finish_time": 1783221389,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/Dawgcode/avatar_1760010391.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1377,
+      "username": "w285714",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "w285714",
+      "country_code": "",
+      "country_name": "中国",
+      "rank": 336,
+      "score": 19,
+      "finish_time": 1783221398,
+      "global_ranking": 0,
+      "data_region": "CN",
+      "avatar_url": "https://assets.leetcode.cn/aliyun-lc-upload/users/w285714/avatar_1593094918.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1377,
+      "username": "牧瀬 紅莉栖",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "lucifer1006",
+      "country_code": "",
+      "country_name": "美国",
+      "rank": 337,
+      "score": 19,
+      "finish_time": 1783221399,
+      "global_ranking": 0,
+      "data_region": "CN",
+      "avatar_url": "https://assets.leetcode.cn/aliyun-lc-upload/users/lucifer1006/avatar_1638096982.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Manish",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "__ZERO",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 338,
+      "score": 19,
+      "finish_time": 1783221410,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/__ZERO/avatar_1770479696.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "JAGADISH SUNIL PEDNEKAR",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "JagadishSP",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 339,
+      "score": 19,
+      "finish_time": 1783221412,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/JagadishSP/avatar_1739173768.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Rohitsharma2845",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "Rohitsharma2845",
+      "country_code": "",
+      "country_name": null,
+      "rank": 340,
+      "score": 19,
+      "finish_time": 1783221414,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/Rohitsharma2845/avatar_1754927283.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1377,
+      "username": "Phoebe-xylon",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "phoebe-xylon",
+      "country_code": "",
+      "country_name": null,
+      "rank": 341,
+      "score": 19,
+      "finish_time": 1783221416,
+      "global_ranking": 0,
+      "data_region": "CN",
+      "avatar_url": "https://assets.leetcode.cn/aliyun-lc-upload/users/phoebe-xylon/avatar_1655791799.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Laszlo Papp",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "lpapp",
+      "country_code": "GB",
+      "country_name": "United Kingdom",
+      "rank": 342,
+      "score": 19,
+      "finish_time": 1783221416,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/avatars/avatar_1705224555.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "raghav2611",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "raghav2611",
+      "country_code": "IN",
+      "country_name": "India",
+      "rank": 343,
+      "score": 19,
+      "finish_time": 1783221420,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/raghav2611/avatar_1743427367.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "gehna_01",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "gehna_01",
+      "country_code": "",
+      "country_name": null,
+      "rank": 344,
+      "score": 19,
+      "finish_time": 1783221425,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/default_avatar.jpg",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "coder_krimsh",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "coder_krimsh",
+      "country_code": "",
+      "country_name": null,
+      "rank": 345,
+      "score": 19,
+      "finish_time": 1783221433,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/default_avatar.jpg",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "MittalSahab",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "MittalSahab1062",
+      "country_code": "",
+      "country_name": null,
+      "rank": 346,
+      "score": 19,
+      "finish_time": 1783221435,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/55K7lTXjX6/avatar_1780320945.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1377,
+      "username": "涂汇康",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "tonghuikang",
+      "country_code": "",
+      "country_name": "新加坡",
+      "rank": 347,
+      "score": 19,
+      "finish_time": 1783221441,
+      "global_ranking": 0,
+      "data_region": "CN",
+      "avatar_url": "https://assets.leetcode.cn/aliyun-lc-upload/users/tong-hui-kang/avatar_1572753476.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "DkshEntropy",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "DkshEntropy",
+      "country_code": "",
+      "country_name": null,
+      "rank": 348,
+      "score": 19,
+      "finish_time": 1783221442,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/DkshEntropy/avatar_1782710667.png",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "R_Jayanth2005",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "R_Jayanth2005",
+      "country_code": "",
+      "country_name": null,
+      "rank": 349,
+      "score": 19,
+      "finish_time": 1783221447,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/default_avatar.jpg",
+      "replays": null
+    },
+    {
+      "contest_id": 1315,
+      "username": "Barnali Devi",
+      "username_color": null,
+      "user_badge": null,
+      "user_slug": "CsQwChx58u",
+      "country_code": "",
+      "country_name": null,
+      "rank": 350,
+      "score": 19,
+      "finish_time": 1783221454,
+      "global_ranking": 0,
+      "data_region": "US",
+      "avatar_url": "https://assets.leetcode.com/users/CsQwChx58u/avatar_1773629604.png",
+      "replays": null
+    }
+  ],
+  "user_num": 38022
+}

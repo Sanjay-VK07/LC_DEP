@@ -55,16 +55,20 @@ function parseCodeChefHtml(html) {
   const result = {
     rating: null,
     highestRating: null,
+    isProvisional: false,
     globalRank: null,
     stars: null,
     problemsSolved: 0
   };
 
-  // 1. Rating — try multiple patterns
-  const ratingMatch = html.match(/class="rating-number"[^>]*>\s*(\d+)\s*<\/div>/i) ||
-                      html.match(/"currentRating"\s*:\s*(\d+)/i) ||
-                      html.match(/rating-number[^>]*>(\d+)/i);
-  if (ratingMatch) result.rating = parseInt(ratingMatch[1], 10);
+  // 1. Rating — try multiple patterns (supporting provisional ? and newlines/spaces)
+  const ratingMatch = html.match(/class="rating-number"[^>]*>\s*(\d+)(\??)/i) ||
+                      html.match(/rating-number[^>]*>\s*(\d+)(\??)/i) ||
+                      html.match(/"currentRating"\s*:\s*(\d+)(\??)/i);
+  if (ratingMatch) {
+    result.rating = parseInt(ratingMatch[1], 10);
+    result.isProvisional = ratingMatch[2] === '?';
+  }
 
   // 2. Highest Rating
   const highestMatch = html.match(/Highest Rating\D+(\d+)/i) ||
@@ -305,20 +309,27 @@ async function getUserCodeChefStats(username) {
 
       const rating = parsed.rating;
       const highestRating = parsed.highestRating || rating;
+      const ratingHistory = contestHistory.map(c => c.newRating || c.rating).filter(r => r !== null && r !== undefined);
+      const lowestRating = ratingHistory.length > 0 ? Math.min(...ratingHistory) : rating;
 
       if (rating !== null || response.data.includes(trimmedUsername)) {
+        console.log('[AUDIT][SCRAPER] currentRating =', rating, 'highestRating =', highestRating, 'ratingHistory.length =', ratingHistory.length);
+        console.log('[AUDIT LOG][Scraper] currentRating =', rating);
         console.log(`[CodeChef Stats] Successfully fetched stats for ${trimmedUsername}: rating=${rating}, contests=${contestHistory.length}`);
         return {
           success: true,
           username: trimmedUsername,
           rating,
           maxRating: highestRating,
+          lowestRating,
+          isProvisional: parsed.isProvisional,
           stars: parsed.stars,
           globalRanking: parsed.globalRank,
           countryRank: parsed.countryRank,
           problemsSolved: parsed.problemsSolved || 0,
           contestParticipationCount: contestHistory.length,
-          contestHistory
+          contestHistory,
+          ratingHistory
         };
       }
 
@@ -344,17 +355,27 @@ async function getUserCodeChefStats(username) {
       const json = JSON.parse(response.data);
       const rating = json.currentRating ? parseInt(json.currentRating, 10) : (json.rating ? parseInt(json.rating, 10) : null);
       if (rating) {
+        const highestRating = json.highestRating ? parseInt(json.highestRating, 10) : rating;
+        const ratingHistory = [];
+        const lowestRating = rating;
+        const currentRatingStr = json.currentRating ? String(json.currentRating) : (json.rating ? String(json.rating) : '');
+        const isProvisional = currentRatingStr.includes('?');
+
+        console.log('[AUDIT][SCRAPER] currentRating =', rating, 'highestRating =', highestRating, 'ratingHistory.length =', ratingHistory.length);
         console.log(`[CodeChef Stats] Vercel fallback succeeded for ${trimmedUsername} (no history)`);
         return {
           success: true,
           username: trimmedUsername,
           rating,
-          maxRating: json.highestRating ? parseInt(json.highestRating, 10) : rating,
+          maxRating: highestRating,
+          lowestRating,
+          isProvisional,
           stars: json.stars || null,
           globalRanking: json.globalRank ? parseInt(json.globalRank, 10) : null,
           problemsSolved: json.problemsSolved ? parseInt(json.problemsSolved, 10) : 0,
           contestParticipationCount: 0,
-          contestHistory: [] // Vercel API doesn't provide history
+          contestHistory: [], // Vercel API doesn't provide history
+          ratingHistory
         };
       }
     }

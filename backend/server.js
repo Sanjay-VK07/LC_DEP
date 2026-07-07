@@ -145,6 +145,14 @@ async function startServer() {
       console.warn('[Server] Background master contest seeding failed (non-critical):', err.message);
     });
 
+    const startupRecovery = require('./services/startupRecovery');
+    await startupRecovery.run().catch(err => {
+      console.error('[Server] Startup recovery failed:', err.message);
+    });
+
+    const liveContestScheduler = require('./services/liveContestScheduler');
+    liveContestScheduler.start();
+
   } catch (err) {
     console.error('[Server] Critical error starting database:', err.message);
   }

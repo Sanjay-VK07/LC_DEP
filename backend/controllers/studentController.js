@@ -1,12 +1,31 @@
 const db = require('../config/db');
-const { verifyLeetCode, getLeetCodeStats } = require('../services/leetcodeService');
-const { verifyCodeChef } = require('../services/codechefService');
-const { verifyCodeforces } = require('../services/codeforcesService');
-const { verifyHackerRank } = require('../services/hackerrankService');
+const { getAdapter } = require('../services/adapters/AdapterFactory');
 const { getUnifiedStudentProfile } = require('../services/platformAnalyticsService');
+const { getLeetCodeStats } = require('../services/leetcodeService');
 const xlsx = require('xlsx');
-const { recalculateStudentSummary } = require('./attendanceController');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Reusable handle validation regex constants
+const LEETCODE_REGEX = /^[a-zA-Z0-9_-]{3,30}$/;
+const CODEFORCES_REGEX = /^[a-zA-Z0-9_-]{3,24}$/;
+const CODECHEF_REGEX = /^[a-zA-Z0-9_]{3,30}$/;
+const HACKERRANK_REGEX = /^[a-zA-Z0-9_.-]{3,30}$/;
+
+function validateHandles(leetcode, codechef, codeforces, hackerrank) {
+  if (!LEETCODE_REGEX.test(leetcode)) {
+    return 'Invalid LeetCode username format.';
+  }
+  if (codechef && !CODECHEF_REGEX.test(codechef)) {
+    return 'Invalid CodeChef username format.';
+  }
+  if (codeforces && !CODEFORCES_REGEX.test(codeforces)) {
+    return 'Invalid Codeforces username format.';
+  }
+  if (hackerrank && !HACKERRANK_REGEX.test(hackerrank)) {
+    return 'Invalid HackerRank username format.';
+  }
+  return null;
+}
 
 // 1. Get all students with search and filtering
 async function getStudents(req, res) {
@@ -111,6 +130,12 @@ async function addStudent(req, res) {
     const trimmedForces = codeforcesUsername ? codeforcesUsername.trim() : null;
     const trimmedRank = hackerrankUsername ? hackerrankUsername.trim() : null;
 
+    // Validation using our validation helper
+    const valError = validateHandles(trimmedLC, trimmedChef, trimmedForces, trimmedRank);
+    if (valError) {
+      return res.status(400).json({ success: false, message: valError });
+    }
+
     // Check duplicates in DB
     const checkRoll = await db.query('SELECT id FROM Users WHERE roll_no = ?', [trimmedRoll]);
     if (checkRoll && checkRoll.length > 0) {
@@ -143,7 +168,7 @@ async function addStudent(req, res) {
 
     // LeetCode Handle Verification
     console.log(`Verifying LeetCode username: ${trimmedLC}`);
-    const verifyResult = await verifyLeetCode(trimmedLC);
+    const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
     if (!verifyResult.verified) {
       return res.status(400).json({ 
         success: false, 
@@ -155,7 +180,7 @@ async function addStudent(req, res) {
     let finalChef = null;
     if (trimmedChef) {
       console.log(`Verifying CodeChef username: ${trimmedChef}`);
-      const verifyChef = await verifyCodeChef(trimmedChef);
+      const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
       if (!verifyChef.verified) {
         return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
       }
@@ -166,7 +191,7 @@ async function addStudent(req, res) {
     let finalForces = null;
     if (trimmedForces) {
       console.log(`Verifying Codeforces username: ${trimmedForces}`);
-      const verifyForces = await verifyCodeforces(trimmedForces);
+      const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
       if (!verifyForces.verified) {
         return res.status(400).json({ success: false, message: verifyForces.message || `Codeforces handle '${trimmedForces}' could not be verified.` });
       }
@@ -177,7 +202,7 @@ async function addStudent(req, res) {
     let finalRank = null;
     if (trimmedRank) {
       console.log(`Verifying HackerRank username: ${trimmedRank}`);
-      const verifyRank = await verifyHackerRank(trimmedRank);
+      const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
       if (!verifyRank.verified) {
         return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
       }
@@ -187,26 +212,54 @@ async function addStudent(req, res) {
     const sqlStartDate = formatDateForSql(academicStartDate);
     const sqlEndDate = formatDateForSql(academicEndDate);
 
-    // Insert student
-    const result = await db.query(
-      `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
-      [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), verifyResult.username, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate]
-    );
+    // Insert student inside Transaction
+    const connection = await db.getPool().getConnection();
+    let newStudentId;
+    try {
+      await connection.beginTransaction();
 
-    const newStudentId = result.insertId;
+      const result = await connection.query(
+        `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), verifyResult.username, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate]
+      );
 
-    // Seed empty LeetCodeProfiles record for the new student
-    await db.query(
-      `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved)
-       VALUES (?, 1500.00, 1500.00, NULL, 0)`,
-      [newStudentId]
-    );
+      newStudentId = result.insertId || result[0]?.insertId;
 
-    // Seed empty profile records for other platforms
-    await db.query(`INSERT INTO CodeChefProfiles (user_id) VALUES (?)`, [newStudentId]);
-    await db.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
-    await db.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
+      // Seed empty LeetCodeProfiles record for the new student
+      await connection.query(
+        `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved)
+         VALUES (?, 1500.00, 1500.00, NULL, 0)`,
+        [newStudentId]
+      );
+
+      // Seed empty profile records for other platforms
+      await connection.query(`INSERT INTO CodeChefProfiles (user_id) VALUES (?)`, [newStudentId]);
+      await connection.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
+      await connection.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
+
+      await connection.commit();
+    } catch (transactionErr) {
+      await connection.rollback();
+      throw transactionErr;
+    } finally {
+      connection.release();
+    }
+
+    // Trigger historical synchronization in the background
+    const { syncStudentPlatform } = require('../utils/scheduler');
+    if (verifyResult.username) {
+      syncStudentPlatform(newStudentId, 'leetcode', true).catch(err => console.error('[Historical Sync Error] LeetCode:', err.message));
+    }
+    if (finalChef) {
+      syncStudentPlatform(newStudentId, 'codechef', true).catch(err => console.error('[Historical Sync Error] CodeChef:', err.message));
+    }
+    if (finalForces) {
+      syncStudentPlatform(newStudentId, 'codeforces', true).catch(err => console.error('[Historical Sync Error] Codeforces:', err.message));
+    }
+    if (finalRank) {
+      syncStudentPlatform(newStudentId, 'hackerrank', true).catch(err => console.error('[Historical Sync Error] HackerRank:', err.message));
+    }
 
     return res.status(201).json({
       success: true,
@@ -233,7 +286,6 @@ async function addStudent(req, res) {
   }
 }
 
-// 3. Edit student
 // 3. Edit student
 async function editStudent(req, res) {
   const { id } = req.params;
@@ -270,6 +322,12 @@ async function editStudent(req, res) {
     const trimmedChef = codechefUsername ? codechefUsername.trim() : null;
     const trimmedForces = codeforcesUsername ? codeforcesUsername.trim() : null;
     const trimmedRank = hackerrankUsername ? hackerrankUsername.trim() : null;
+
+    // Validation using our validation helper
+    const valError = validateHandles(trimmedLC, trimmedChef, trimmedForces, trimmedRank);
+    if (valError) {
+      return res.status(400).json({ success: false, message: valError });
+    }
 
     // Check duplicate roll number
     const checkRoll = await db.query('SELECT id FROM Users WHERE roll_no = ? AND id != ?', [trimmedRoll, id]);
@@ -312,7 +370,7 @@ async function editStudent(req, res) {
     // Re-verify LeetCode handle only if it changed
     if (currentLeetCode !== trimmedLC.toLowerCase()) {
       console.log(`Re-verifying LeetCode username: ${trimmedLC}`);
-      const verifyResult = await verifyLeetCode(trimmedLC);
+      const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
       if (!verifyResult.verified) {
         return res.status(400).json({ 
           success: false, 
@@ -325,7 +383,7 @@ async function editStudent(req, res) {
     let finalChef = trimmedChef;
     if (trimmedChef && currentCodeChef !== trimmedChef.toLowerCase()) {
       console.log(`Re-verifying CodeChef username: ${trimmedChef}`);
-      const verifyChef = await verifyCodeChef(trimmedChef);
+      const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
       if (!verifyChef.verified) {
         return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
       }
@@ -335,7 +393,7 @@ async function editStudent(req, res) {
     let finalForces = trimmedForces;
     if (trimmedForces && currentCodeforces !== trimmedForces.toLowerCase()) {
       console.log(`Re-verifying Codeforces username: ${trimmedForces}`);
-      const verifyForces = await verifyCodeforces(trimmedForces);
+      const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
       if (!verifyForces.verified) {
         return res.status(400).json({ success: false, message: verifyForces.message || `Codeforces handle '${trimmedForces}' could not be verified.` });
       }
@@ -345,7 +403,7 @@ async function editStudent(req, res) {
     let finalRank = trimmedRank;
     if (trimmedRank && currentHackerRank !== trimmedRank.toLowerCase()) {
       console.log(`Re-verifying HackerRank username: ${trimmedRank}`);
-      const verifyRank = await verifyHackerRank(trimmedRank);
+      const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
       if (!verifyRank.verified) {
         return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
       }
@@ -355,20 +413,47 @@ async function editStudent(req, res) {
     const sqlStartDate = formatDateForSql(academicStartDate);
     const sqlEndDate = formatDateForSql(academicEndDate);
 
-    // Update DB
-    await db.query(
-      `UPDATE Users 
-       SET name = ?, roll_no = ?, department = ?, section = ?, leetcode_username = ?, 
-           codechef_username = ?, codeforces_username = ?, hackerrank_username = ?,
-           academic_batch = ?, academic_start_date = ?, academic_end_date = ?, status = ? 
-       WHERE id = ?`,
-      [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), finalLCUsername, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate, status || 'active', id]
-    );
+    // Update DB inside transaction
+    const connection = await db.getPool().getConnection();
+    try {
+      await connection.beginTransaction();
 
-    // Seed missing profile cache tables if they don't exist
-    await db.query(`INSERT IGNORE INTO CodeChefProfiles (user_id) VALUES (?)`, [id]);
-    await db.query(`INSERT IGNORE INTO CodeforcesProfiles (user_id) VALUES (?)`, [id]);
-    await db.query(`INSERT IGNORE INTO HackerRankProfiles (user_id) VALUES (?)`, [id]);
+      await connection.query(
+        `UPDATE Users 
+         SET name = ?, roll_no = ?, department = ?, section = ?, leetcode_username = ?, 
+             codechef_username = ?, codeforces_username = ?, hackerrank_username = ?,
+             academic_batch = ?, academic_start_date = ?, academic_end_date = ?, status = ? 
+         WHERE id = ?`,
+        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), finalLCUsername, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate, status || 'active', id]
+      );
+
+      // Seed missing profile cache tables if they don't exist
+      await connection.query(`INSERT IGNORE INTO CodeChefProfiles (user_id) VALUES (?)`, [id]);
+      await connection.query(`INSERT IGNORE INTO CodeforcesProfiles (user_id) VALUES (?)`, [id]);
+      await connection.query(`INSERT IGNORE INTO HackerRankProfiles (user_id) VALUES (?)`, [id]);
+
+      await connection.commit();
+    } catch (transactionErr) {
+      await connection.rollback();
+      throw transactionErr;
+    } finally {
+      connection.release();
+    }
+
+    // Trigger historical synchronization in the background for changed handles
+    const { syncStudentPlatform } = require('../utils/scheduler');
+    if (finalLCUsername && currentLeetCode !== finalLCUsername.toLowerCase()) {
+      syncStudentPlatform(id, 'leetcode', true).catch(err => console.error('[Historical Sync Error] LeetCode:', err.message));
+    }
+    if (finalChef && currentCodeChef !== finalChef.toLowerCase()) {
+      syncStudentPlatform(id, 'codechef', true).catch(err => console.error('[Historical Sync Error] CodeChef:', err.message));
+    }
+    if (finalForces && currentCodeforces !== finalForces.toLowerCase()) {
+      syncStudentPlatform(id, 'codeforces', true).catch(err => console.error('[Historical Sync Error] Codeforces:', err.message));
+    }
+    if (finalRank && currentHackerRank !== finalRank.toLowerCase()) {
+      syncStudentPlatform(id, 'hackerrank', true).catch(err => console.error('[Historical Sync Error] HackerRank:', err.message));
+    }
 
     return res.json({
       success: true,
@@ -382,6 +467,10 @@ async function editStudent(req, res) {
 
 // 4. Delete student
 async function deleteStudent(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
   const { id } = req.params;
 
   try {
@@ -400,6 +489,11 @@ async function deleteStudent(req, res) {
 
 // 5. Bulk Import Students from Excel
 async function bulkImportStudents(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+
   if (!req.file) {
     return res.status(400).json({ success: false, message: 'Please upload an Excel file.' });
   }
@@ -424,6 +518,29 @@ async function bulkImportStudents(req, res) {
       const key = Object.keys(row).find(k => fields.includes(k.toLowerCase().trim().replace(/[\s_-]/g, '')));
       return key ? String(row[key]).trim() : '';
     };
+
+    // Cache all existing active/inactive student usernames and roll numbers to avoid N+1 duplicate queries
+    const existingUsers = await db.query(
+      "SELECT roll_no, leetcode_username, codechef_username, codeforces_username, hackerrank_username FROM Users"
+    );
+
+    const rollNoCache = new Set();
+    const lcCache = new Set();
+    const chefCache = new Set();
+    const forcesCache = new Set();
+    const rankCache = new Set();
+
+    existingUsers.forEach(u => {
+      if (u.roll_no) rollNoCache.add(u.roll_no.trim().toUpperCase());
+      if (u.leetcode_username) lcCache.add(u.leetcode_username.trim().toLowerCase());
+      if (u.codechef_username) chefCache.add(u.codechef_username.trim().toLowerCase());
+      if (u.codeforces_username) forcesCache.add(u.codeforces_username.trim().toLowerCase());
+      if (u.hackerrank_username) rankCache.add(u.hackerrank_username.trim().toLowerCase());
+    });
+
+    // Cache all active departments
+    const activeDeptsRows = await db.query("SELECT code FROM departments WHERE status = 'active'");
+    const activeDepts = new Set(activeDeptsRows.map(d => d.code.trim().toUpperCase()));
 
     // Parallel processing with chunks to avoid rate limits
     const chunkSize = 5;
@@ -450,12 +567,8 @@ async function bulkImportStudents(req, res) {
           return;
         }
 
-        // Validate department is active
-        const deptCheck = await db.query(
-          "SELECT id FROM departments WHERE code = ? AND status = 'active'",
-          [dept.trim().toUpperCase()]
-        );
-        if (!deptCheck || deptCheck.length === 0) {
+        // Validate department is active in-memory
+        if (!activeDepts.has(dept.trim().toUpperCase())) {
           errors.push(`Row ${globalRowIndex}: Department '${dept}' is either invalid or inactive. Please configure it in Department Management first.`);
           return;
         }
@@ -485,43 +598,39 @@ async function bulkImportStudents(req, res) {
         const trimmedForces = codeforcesUsername ? codeforcesUsername.trim() : null;
         const trimmedRank = hackerrankUsername ? hackerrankUsername.trim() : null;
 
-        // DB uniqueness checks
-        const checkRoll = await db.query('SELECT id FROM Users WHERE roll_no = ?', [trimmedRoll]);
-        if (checkRoll && checkRoll.length > 0) {
+        // Validation using our validation helper
+        const valError = validateHandles(trimmedLC, trimmedChef, trimmedForces, trimmedRank);
+        if (valError) {
+          errors.push(`Row ${globalRowIndex}: ${valError}`);
+          return;
+        }
+
+        // DB uniqueness checks in-memory
+        if (rollNoCache.has(trimmedRoll)) {
           duplicates.push(`Row ${globalRowIndex} (Roll No: ${trimmedRoll}): Roll number already exists.`);
           return;
         }
 
-        const checkLC = await db.query('SELECT id FROM Users WHERE leetcode_username = ?', [trimmedLC]);
-        if (checkLC && checkLC.length > 0) {
+        if (lcCache.has(trimmedLC.toLowerCase())) {
           duplicates.push(`Row ${globalRowIndex} (LeetCode: ${trimmedLC}): LeetCode username already registered.`);
           return;
         }
 
-        if (trimmedChef) {
-          const checkChef = await db.query('SELECT id FROM Users WHERE codechef_username = ?', [trimmedChef]);
-          if (checkChef && checkChef.length > 0) {
-            duplicates.push(`Row ${globalRowIndex} (CodeChef: ${trimmedChef}): CodeChef username already registered.`);
-            return;
-          }
+        if (trimmedChef && chefCache.has(trimmedChef.toLowerCase())) {
+          duplicates.push(`Row ${globalRowIndex} (CodeChef: ${trimmedChef}): CodeChef username already registered.`);
+          return;
         }
-        if (trimmedForces) {
-          const checkForces = await db.query('SELECT id FROM Users WHERE codeforces_username = ?', [trimmedForces]);
-          if (checkForces && checkForces.length > 0) {
-            duplicates.push(`Row ${globalRowIndex} (Codeforces: ${trimmedForces}): Codeforces username already registered.`);
-            return;
-          }
+        if (trimmedForces && forcesCache.has(trimmedForces.toLowerCase())) {
+          duplicates.push(`Row ${globalRowIndex} (Codeforces: ${trimmedForces}): Codeforces username already registered.`);
+          return;
         }
-        if (trimmedRank) {
-          const checkRank = await db.query('SELECT id FROM Users WHERE hackerrank_username = ?', [trimmedRank]);
-          if (checkRank && checkRank.length > 0) {
-            duplicates.push(`Row ${globalRowIndex} (HackerRank: ${trimmedRank}): HackerRank username already registered.`);
-            return;
-          }
+        if (trimmedRank && rankCache.has(trimmedRank.toLowerCase())) {
+          duplicates.push(`Row ${globalRowIndex} (HackerRank: ${trimmedRank}): HackerRank username already registered.`);
+          return;
         }
 
         // LeetCode verification
-        const verifyResult = await verifyLeetCode(trimmedLC);
+        const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
         if (!verifyResult.verified) {
           invalidHandles.push(`Row ${globalRowIndex} (LeetCode: ${trimmedLC}): ${verifyResult.message || 'Account could not be verified on LeetCode.'}`);
           return;
@@ -530,7 +639,7 @@ async function bulkImportStudents(req, res) {
         // CodeChef verification
         let finalChef = null;
         if (trimmedChef) {
-          const verifyChef = await verifyCodeChef(trimmedChef);
+          const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
           if (!verifyChef.verified) {
             invalidHandles.push(`Row ${globalRowIndex} (CodeChef: ${trimmedChef}): ${verifyChef.message || 'Account could not be verified on CodeChef.'}`);
             return;
@@ -541,7 +650,7 @@ async function bulkImportStudents(req, res) {
         // Codeforces verification
         let finalForces = null;
         if (trimmedForces) {
-          const verifyForces = await verifyCodeforces(trimmedForces);
+          const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
           if (!verifyForces.verified) {
             invalidHandles.push(`Row ${globalRowIndex} (Codeforces: ${trimmedForces}): ${verifyForces.message || 'Account could not be verified on Codeforces.'}`);
             return;
@@ -552,7 +661,7 @@ async function bulkImportStudents(req, res) {
         // HackerRank verification
         let finalRank = null;
         if (trimmedRank) {
-          const verifyRank = await verifyHackerRank(trimmedRank);
+          const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
           if (!verifyRank.verified) {
             invalidHandles.push(`Row ${globalRowIndex} (HackerRank: ${trimmedRank}): ${verifyRank.message || 'Account could not be verified on HackerRank.'}`);
             return;
@@ -563,31 +672,61 @@ async function bulkImportStudents(req, res) {
         const sqlStartDate = formatDateForSql(academicStartDate);
         const sqlEndDate = formatDateForSql(academicEndDate);
 
+        // Transactional insert for each single student to ensure data consistency
+        const connection = await db.getPool().getConnection();
         try {
-          // Insert Student
-          const result = await db.query(
+          await connection.beginTransaction();
+
+          const result = await connection.query(
             `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
             [name, trimmedRoll, dept, sec.toUpperCase(), verifyResult.username, finalChef, finalForces, finalRank, academicBatch, sqlStartDate, sqlEndDate]
           );
 
-          const newStudentId = result.insertId;
+          const newStudentId = result.insertId || result[0]?.insertId;
 
           // Seed empty LeetCodeProfiles record
-          await db.query(
+          await connection.query(
             `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved)
              VALUES (?, 1500.00, 1500.00, NULL, 0)`,
             [newStudentId]
           );
 
           // Seed empty profiles for other platforms
-          await db.query(`INSERT INTO CodeChefProfiles (user_id) VALUES (?)`, [newStudentId]);
-          await db.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
-          await db.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
+          await connection.query(`INSERT INTO CodeChefProfiles (user_id) VALUES (?)`, [newStudentId]);
+          await connection.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
+          await connection.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
+
+          await connection.commit();
+
+          // Add to caches to prevent subsequent duplicates in the same spreadsheet
+          rollNoCache.add(trimmedRoll);
+          lcCache.add(verifyResult.username.toLowerCase());
+          if (finalChef) chefCache.add(finalChef.toLowerCase());
+          if (finalForces) forcesCache.add(finalForces.toLowerCase());
+          if (finalRank) rankCache.add(finalRank.toLowerCase());
+
+          // Trigger historical synchronization in the background
+          const { syncStudentPlatform } = require('../utils/scheduler');
+          if (verifyResult.username) {
+            syncStudentPlatform(newStudentId, 'leetcode', true).catch(err => {});
+          }
+          if (finalChef) {
+            syncStudentPlatform(newStudentId, 'codechef', true).catch(err => {});
+          }
+          if (finalForces) {
+            syncStudentPlatform(newStudentId, 'codeforces', true).catch(err => {});
+          }
+          if (finalRank) {
+            syncStudentPlatform(newStudentId, 'hackerrank', true).catch(err => {});
+          }
 
           imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: verifyResult.username });
         } catch (dbErr) {
+          await connection.rollback();
           errors.push(`Row ${globalRowIndex}: DB insertion failed - ${dbErr.message}`);
+        } finally {
+          connection.release();
         }
       });
 
@@ -614,6 +753,10 @@ async function bulkImportStudents(req, res) {
 
 // 6. Batch Graduated Archive Students
 async function archiveStudents(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
   const { department, academicBatch, academicYear, section } = req.body;
   const batch = academicBatch || academicYear;
 
@@ -638,8 +781,10 @@ async function archiveStudents(req, res) {
     const studentIds = studentsToArchive.map(s => s.id);
     
     // Batch Update Status to graduated
+    const placeholders = studentIds.map(() => '?').join(',');
     await db.query(
-      "UPDATE Users SET status = 'graduated' WHERE id IN (" + studentIds.join(',') + ")"
+      `UPDATE Users SET status = 'graduated' WHERE id IN (${placeholders})`,
+      studentIds
     );
 
     return res.json({
@@ -654,7 +799,11 @@ async function archiveStudents(req, res) {
 
 // 7. Restore Graduated Student Records to Active (Supports Batch or Individual)
 async function restoreStudents(req, res) {
-  const { studentId, department, academicBatch, academicYear } = req.body;
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+  const { studentId, department, academicBatch, academicYear, section } = req.body;
 
   try {
     if (studentId) {
@@ -688,8 +837,10 @@ async function restoreStudents(req, res) {
     const studentIds = studentsToRestore.map(s => s.id);
 
     // Batch Update Status to active
+    const placeholders = studentIds.map(() => '?').join(',');
     await db.query(
-      "UPDATE Users SET status = 'active' WHERE id IN (" + studentIds.join(',') + ")"
+      `UPDATE Users SET status = 'active' WHERE id IN (${placeholders})`,
+      studentIds
     );
 
     return res.json({
@@ -722,8 +873,8 @@ async function getArchivedSummary(req, res) {
 async function checkUsername(req, res) {
   const { username } = req.params;
   try {
-    const result = await verifyLeetCode(username);
-    return res.json({ exists: result.verified, username: result.username, rating: result.rating, globalRanking: result.rank, error: result.message });
+    const result = await getAdapter('leetcode').getProfile(username);
+    return res.json({ exists: result.verified !== false, username: result.username || username, rating: result.rating, globalRanking: result.rank, error: result.message });
   } catch (err) {
     return res.status(500).json({ exists: false, error: err.message });
   }
@@ -744,10 +895,29 @@ async function getUnifiedProfileById(req, res) {
     }
 
     const profile = await getUnifiedStudentProfile(Number(id));
+    const cc = profile?.profiles?.codechef || {};
+    const ratingHistory = cc.ratingHistory || [];
+    console.log('[AUDIT][CONTROLLER] currentRating =', cc.currentRating, 'highestRating =', cc.highestRating, 'lowestRating =', cc.lowestRating, 'ratingHistory.length =', ratingHistory.length);
+    console.log('[AUDIT][API] currentRating =', cc.currentRating, 'highestRating =', cc.highestRating, 'lowestRating =', cc.lowestRating, 'ratingHistory.length =', ratingHistory.length);
+    console.log('[AUDIT LOG][Controller] currentRating =', cc.currentRating);
+    console.log('[AUDIT LOG][API] Response codechef currentRating =', cc.currentRating);
     return res.json({ success: true, data: profile });
   } catch (error) {
-    console.error('Error fetching unified student profile:', error);
-    return res.status(500).json({ success: false, message: 'Failed to fetch unified student profile.' });
+    console.error('====================================================');
+    console.error('DETAILED ERROR LOG');
+    console.error(`Request URL: ${req.originalUrl}`);
+    console.error(`HTTP Method: ${req.method}`);
+    console.error(`Student ID: ${id}`);
+    console.error(`Controller: studentController.getUnifiedProfileById`);
+    console.error(`Original Error: ${error.message}`);
+    console.error(`Full Stack Trace:\n${error.stack}`);
+    console.error('====================================================');
+
+    return res.status(500).json({
+      success: false,
+      platform: req.query.platform || 'all',
+      message: 'Failed to retrieve unified profile data.'
+    });
   }
 }
 
@@ -832,18 +1002,13 @@ async function checkPlatformUsername(req, res) {
   const { platform, username } = req.params;
   try {
     let result = { verified: false };
-    if (platform === 'leetcode') {
-      result = await verifyLeetCode(username);
-    } else if (platform === 'codechef') {
-      result = await verifyCodeChef(username);
-    } else if (platform === 'codeforces') {
-      result = await verifyCodeforces(username);
-    } else if (platform === 'hackerrank') {
-      result = await verifyHackerRank(username);
+    const p = platform.toLowerCase();
+    if (['leetcode', 'codechef', 'codeforces', 'hackerrank'].includes(p)) {
+      result = await getAdapter(p).getProfile(username);
     } else {
       return res.status(400).json({ success: false, message: 'Invalid platform name.' });
     }
-    return res.json({ exists: result.verified, username: result.username, rating: result.rating, globalRanking: result.rank, error: result.message });
+    return res.json({ exists: result.verified !== false, username: result.username || username, rating: result.rating, globalRanking: result.rank, error: result.message });
   } catch (err) {
     return res.status(500).json({ exists: false, error: err.message });
   }
@@ -867,6 +1032,15 @@ async function getStudentsDataHealth(req, res) {
     const ccRows = await db.query("SELECT user_id, current_rating, problems_solved, last_synced FROM CodeChefProfiles");
     const cfRows = await db.query("SELECT user_id, current_rating, problems_solved, last_synced FROM CodeforcesProfiles");
     const hrRows = await db.query("SELECT user_id, problems_solved, last_synced FROM HackerRankProfiles");
+
+    // Fetch all sync state rows
+    const syncRows = await db.query(`
+      SELECT user_id, platform, username, sync_status, last_successful_sync, last_attempt, retry_count, failure_reason, failure_category, data_completeness, next_retry
+      FROM StudentPlatformSync
+    `);
+
+    // Map by "user_id:platform"
+    const syncMap = new Map(syncRows.map(r => [`${r.user_id}:${r.platform.toLowerCase()}`, r]));
 
     // Index profiles by user_id
     const lcMap = new Map(lcRows.map(r => [r.user_id, r]));
@@ -946,51 +1120,71 @@ async function getStudentsDataHealth(req, res) {
       checkPlatformDup(user.hackerrank_username, 'HackerRank', hrCounts);
 
       // Check platform sync status
-      const getPlatformStatus = (platform, username, profileMap, statObj) => {
+      const getPlatformStatus = (platformKey, username, profileMap, statObj) => {
+        const platLower = platformKey.toLowerCase();
         if (!username || !username.trim()) {
           return { connected: false };
         }
         statObj.total++;
+        
+        const syncState = syncMap.get(`${user.id}:${platLower}`);
         const profile = profileMap.get(user.id);
-        if (!profile || !profile.last_synced) {
-          syncErrors.push(`${platform} profile has never successfully synchronized`);
-          return { connected: true, synced: false, username };
+        
+        if (syncState && (syncState.sync_status === 'Healthy' || syncState.sync_status === 'Partial')) {
+          statObj.synced++;
         }
-        statObj.synced++;
+        
         return {
           connected: true,
-          synced: true,
           username,
-          lastSynced: profile.last_synced,
-          problemsSolved: profile.problems_solved || 0,
-          currentRating: profile.current_rating || 0
+          syncStatus: syncState ? syncState.sync_status : 'Never Synced',
+          lastSuccessfulSync: syncState ? syncState.last_successful_sync : null,
+          lastAttempt: syncState ? syncState.last_attempt : null,
+          retryCount: syncState ? syncState.retry_count : 0,
+          failureReason: syncState ? syncState.failure_reason : null,
+          failureCategory: syncState ? syncState.failure_category : null,
+          dataCompleteness: syncState ? syncState.data_completeness : 0,
+          nextRetry: syncState ? syncState.next_retry : null,
+          problemsSolved: profile ? (profile.problems_solved || 0) : 0,
+          currentRating: profile ? (profile.current_rating || 0) : 0
         };
       };
 
       const connections = {
-        leetcode: getPlatformStatus('LeetCode', user.leetcode_username, lcMap, platformStats.leetcode),
-        codechef: getPlatformStatus('CodeChef', user.codechef_username, ccMap, platformStats.codechef),
-        codeforces: getPlatformStatus('Codeforces', user.codeforces_username, cfMap, platformStats.codeforces),
-        hackerrank: getPlatformStatus('HackerRank', user.hackerrank_username, hrMap, platformStats.hackerrank)
+        leetcode: getPlatformStatus('leetcode', user.leetcode_username, lcMap, platformStats.leetcode),
+        codechef: getPlatformStatus('codechef', user.codechef_username, ccMap, platformStats.codechef),
+        codeforces: getPlatformStatus('codeforces', user.codeforces_username, cfMap, platformStats.codeforces),
+        hackerrank: getPlatformStatus('hackerrank', user.hackerrank_username, hrMap, platformStats.hackerrank)
       };
 
       if (!user.leetcode_username || !user.leetcode_username.trim()) {
         missingFields.push('leetcode_username (Required)');
       }
 
-      // Calculate health score (starts at 100)
+      // Calculate health score dynamically
       let score = 100;
+      let totalConnected = 0;
+      let totalPoints = 0;
       
-      const hasAnyConnection = Object.values(connections).some(conn => conn.connected);
-      if (!hasAnyConnection) {
-        score -= 15;
-        syncErrors.push('No platform accounts connected');
-      } else {
-        Object.entries(connections).forEach(([platName, conn]) => {
-          if (conn.connected && !conn.synced) {
-            score -= 15;
+      Object.entries(connections).forEach(([platName, conn]) => {
+        if (conn.connected) {
+          totalConnected++;
+          if (conn.syncStatus === 'Healthy') {
+            totalPoints += 100;
+          } else if (conn.syncStatus === 'Partial') {
+            totalPoints += conn.dataCompleteness;
+          } else {
+            totalPoints += 0;
+            syncErrors.push(`${platName} profile synchronization status is: ${conn.syncStatus}`);
           }
-        });
+        }
+      });
+      
+      if (totalConnected > 0) {
+        score = Math.round(totalPoints / totalConnected);
+      } else {
+        score = 0;
+        syncErrors.push('No platform accounts connected');
       }
 
       missingFields.forEach(f => {
@@ -1041,7 +1235,7 @@ async function getStudentsDataHealth(req, res) {
     const totalSynced = platformStats.leetcode.synced + platformStats.codechef.synced + platformStats.codeforces.synced + platformStats.hackerrank.synced;
     const overallRate = totalConnections > 0 ? Math.round((totalSynced / totalConnections) * 100) : 100;
 
-    // System Health percentage = average of all student health scores
+    // System Health percentage
     const avgHealthScore = totalStudents > 0 
       ? Math.round(studentHealths.reduce((sum, s) => sum + s.healthScore, 0) / totalStudents)
       : 100;
@@ -1074,8 +1268,59 @@ async function getStudentsDataHealth(req, res) {
   }
 }
 
+async function syncStudentPlatformManual(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+  const { id, platform } = req.params;
+  try {
+    const { syncStudentPlatform } = require('../utils/scheduler');
+    const result = await syncStudentPlatform(Number(id), platform, true); // forceSync = true
+    if (result.success) {
+      return res.json({ success: true, message: `Successfully synchronized ${platform}`, status: result.status, completenessScore: result.completenessScore });
+    } else {
+      return res.status(500).json({ success: false, message: result.error, category: result.category });
+    }
+  } catch (err) {
+    console.error('[Manual Sync] Error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function forceFullSync(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+  try {
+    const { syncAllData } = require('../utils/scheduler');
+    syncAllData().catch(err => console.error('[Full Sync Error]', err.message));
+    return res.json({ success: true, message: 'Platform-wide synchronization started in background.' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function clearCacheManual(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+  try {
+    const cache = require('../services/analyticsCacheService');
+    cache.invalidateAll();
+    return res.json({ success: true, message: 'Analytics and placement cache successfully invalidated.' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 module.exports = {
   getStudentsDataHealth,
+  syncStudentPlatformManual,
+  forceFullSync,
+  clearCacheManual,
   getStudents,
   addStudent,
   editStudent,

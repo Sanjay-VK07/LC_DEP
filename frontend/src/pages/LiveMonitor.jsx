@@ -9,6 +9,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 function LiveMonitor() {
   const [contest, setContest] = useState(null);
+  const [hasLiveContest, setHasLiveContest] = useState(false);
   const [students, setStudents] = useState([]);
   const [analytics, setAnalytics] = useState({ batch: [], department: [], section: [], history: [] });
   const [health, setHealth] = useState(null);
@@ -41,9 +42,11 @@ function LiveMonitor() {
       setLoading(true);
       const currentRes = await axios.get('/api/contestmaster/live/current');
       const activeContest = currentRes.data.contest;
+      const liveFlag = currentRes.data.hasLiveContest;
       setContest(activeContest);
+      setHasLiveContest(liveFlag);
 
-      if (activeContest) {
+      if (activeContest && liveFlag) {
         // Fetch students and analytics
         const studentsRes = await axios.get(`/api/contestmaster/live/students?contestId=${activeContest.id}`);
         setStudents(studentsRes.data.students);
@@ -80,7 +83,7 @@ function LiveMonitor() {
 
   // Countdown timer calculations
   useEffect(() => {
-    if (!contest) return;
+    if (!hasLiveContest || !contest) return;
 
     const timer = setInterval(() => {
       const now = new Date();
@@ -95,11 +98,13 @@ function LiveMonitor() {
         setTimeRemaining(`Ends in: ${formatDuration(diff)}`);
       } else {
         setTimeRemaining('Contest Ended');
+        clearInterval(timer);
+        fetchData();
       }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [contest]);
+  }, [contest, hasLiveContest]);
 
   const formatDuration = (ms) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -111,7 +116,7 @@ function LiveMonitor() {
 
   // SSE Stream handler
   useEffect(() => {
-    if (!contest) return;
+    if (!hasLiveContest || !contest) return;
 
     // Establish event stream connection
     const connectSSE = () => {
@@ -178,6 +183,12 @@ function LiveMonitor() {
           .then(res => setAnalytics(res.data))
           .catch(() => {});
       });
+
+      source.addEventListener('SyncProgress', (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.contestId !== contest.id) return;
+        setContest(prev => prev ? { ...prev, syncProgress: payload.progress } : null);
+      });
     };
 
     connectSSE();
@@ -232,12 +243,12 @@ function LiveMonitor() {
     );
   }
 
-  if (!contest) {
+  if (!hasLiveContest || !contest) {
     return (
       <div className="flex h-[80vh] items-center justify-center bg-slate-950 text-white rounded-3xl p-6 text-center">
         <div className="max-w-md">
           <ShieldAlert className="h-16 w-16 text-yellow-500 mx-auto mb-4 animate-bounce" />
-          <h2 className="text-xl font-bold tracking-tight mb-2">No Active LeetCode Contest</h2>
+          <h2 className="text-xl font-bold tracking-tight mb-2">No Active Contest</h2>
           <p className="text-slate-400 text-sm mb-6">
             There is currently no ongoing Weekly or Biweekly contest detected. You can seed a test contest using admin controls or check back during contest hours.
           </p>

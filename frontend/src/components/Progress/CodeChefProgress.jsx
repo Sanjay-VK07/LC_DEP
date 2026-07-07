@@ -7,21 +7,17 @@ import ProgressStat from './ProgressStat';
 import { RatingTrendChart } from './ProgressChart';
 import { RefreshCw, Code2, Award, Star, Trophy } from 'lucide-react';
 
-export default function CodeChefProgress() {
+export default function CodeChefProgress(props) {
   const { data, loading, error, refresh, retry } = usePlatformData('codechef');
   const config = platformConfig.codechef;
 
-  // Unconditionally calculate lowest rating at the top level
-  const lowestRating = React.useMemo(() => {
-    const contestHistory = data?.contestHistory;
-    if (!contestHistory || contestHistory.length === 0) return 0;
-    const ratings = contestHistory.map(c => c.newRating || c.rating || 0).filter(r => r > 0);
-    return ratings.length > 0 ? Math.min(...ratings) : 0;
-  }, [data]);
-
   React.useEffect(() => {
     if (data) {
-      logger.info(`[CodeChef] Loaded metrics for user: ${data.profile?.username}`);
+      const profile = data.profile || {};
+      const ratingHistory = data.ratingHistory || [];
+      console.log('[AUDIT][FRONTEND] currentRating =', profile.currentRating, 'highestRating =', profile.highestRating, 'lowestRating =', profile.lowestRating, 'ratingHistory.length =', ratingHistory.length);
+      console.log('[AUDIT LOG][Frontend] currentRating =', profile.currentRating);
+      logger.info(`[CodeChef] Loaded metrics for user: ${profile.username}`);
     }
   }, [data]);
 
@@ -73,7 +69,18 @@ export default function CodeChefProgress() {
     );
   }
 
-  const { profile, contestHistory, solvedStats, ratingHistory } = data;
+  const profile = data?.profile;
+  console.log(profile);
+  console.log(data.profile);
+  console.log(props);
+
+  const { contestHistory, solvedStats, ratingHistory } = data;
+  const currentRating = profile?.rating ?? null;
+  const highestRating = profile?.maxRating ?? null;
+  const lowestRating = profile?.lowestRating ?? null;
+  const ratingValue = profile?.status === 'UNRATED' || currentRating === null
+    ? 'Unrated'
+    : `${currentRating}${profile?.isProvisional ? '?' : ''}`;
 
   const handleRefresh = async () => {
     logger.info('[CodeChef] Triggering manual refresh...');
@@ -119,10 +126,10 @@ export default function CodeChefProgress() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <ProgressStat 
             label="Current Rating" 
-            value={profile.rating || 0} 
+            value={ratingValue} 
             icon={<Award className="h-5 w-5" />} 
             color="primary" 
-            subtext={`Highest: ${profile.maxRating || profile.rating || 0}`}
+            subtext={highestRating !== null ? `Highest: ${highestRating}` : undefined}
           />
           <ProgressStat 
             label="Global Rank" 
@@ -175,13 +182,13 @@ export default function CodeChefProgress() {
               <div>
                 <span className="text-[9px] text-slate-400 block font-semibold">Highest Rating</span>
                 <span className="text-sm font-bold text-slate-700 dark:text-white">
-                  {profile.maxRating || profile.rating || 0}
+                  {highestRating !== null ? highestRating : 'N/A'}
                 </span>
               </div>
               <div>
                 <span className="text-[9px] text-slate-400 block font-semibold">Lowest Rating</span>
                 <span className="text-sm font-bold text-slate-700 dark:text-white">
-                  {lowestRating > 0 && lowestRating < 9999 ? lowestRating : profile.rating || 0}
+                  {lowestRating !== null ? lowestRating : 'N/A'}
                 </span>
               </div>
               <div>

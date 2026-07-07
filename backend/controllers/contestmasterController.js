@@ -14,6 +14,8 @@ const studentSyncQueue = require('../services/studentSyncQueue');
 const snapshotEngine = require('../services/snapshotEngine');
 const EventBus = require('../services/EventBus');
 const MockProvider = require('../services/connectors/MockProvider');
+const LeetCodeProvider = require('../services/connectors/LeetCodeProvider');
+const FeatureFlags = require('../config/featureFlags');
 
 // Helper to determine date only
 function parseDateOnly(dateInput) {
@@ -670,29 +672,54 @@ async function getContestMasterBatches(req, res) {
   }
 }
 
+async function checkAndUpdateContestLifecycle() {
+  // Query for the latest contest that isn't 'Completed'
+  const rows = await db.query(
+    "SELECT * FROM LiveContests WHERE status IN ('Upcoming', 'Live', 'Synchronizing') ORDER BY startTime DESC LIMIT 1"
+  );
+  if (rows.length === 0) {
+    return { contest: null, status: 'FINISHED', hasLiveContest: false };
+  }
+
+  const contest = rows[0];
+  const now = new Date();
+  const startTime = new Date(contest.startTime);
+  const endTime = new Date(contest.endTime);
+
+  if (now > endTime) {
+    // Contest has ended
+    if (contest.status !== 'Completed') {
+      await db.query(
+        "UPDATE LiveContests SET status = 'Completed', lastSyncAt = NOW() WHERE id = ?",
+        [contest.id]
+      );
+      // Stop sync jobs
+      if (studentSyncQueue.activeContestId === contest.id) {
+        studentSyncQueue.pause();
+      }
+      // Emit completing event to stop SSE updates on frontend
+      EventBus.emit('ContestCompleted', { contestId: contest.id, status: 'Completed' });
+    }
+
+    return { contest: null, status: 'FINISHED', hasLiveContest: false };
+  }
+
+  if (now < startTime) {
+    return { contest, status: 'UPCOMING', hasLiveContest: true };
+  }
+
+  return { contest, status: 'LIVE', hasLiveContest: true };
+}
+
 async function getLiveCurrent(req, res) {
   try {
-    let rows = await db.query(
-      "SELECT * FROM LiveContests WHERE status IN ('Live', 'Synchronizing') ORDER BY startTime DESC LIMIT 1"
-    );
-    
-    if (rows.length === 0) {
-      rows = await db.query(
-        "SELECT * FROM LiveContests WHERE status = 'Upcoming' ORDER BY startTime ASC LIMIT 1"
-      );
-    }
-
-    if (rows.length === 0) {
-      rows = await db.query(
-        "SELECT * FROM LiveContests ORDER BY startTime DESC LIMIT 1"
-      );
-    }
-
-    if (rows.length === 0) {
-      return res.json({ success: true, contest: null });
-    }
-
-    return res.json({ success: true, contest: rows[0] });
+    const lifecycle = await checkAndUpdateContestLifecycle();
+    return res.json({
+      success: true,
+      contest: lifecycle.contest,
+      hasLiveContest: lifecycle.hasLiveContest,
+      status: lifecycle.status
+    });
   } catch (err) {
     console.error('[ContestMasterController] Error fetching current contest:', err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -952,11 +979,38 @@ async function triggerLiveControl(req, res) {
         return res.status(400).json({ success: false, message: 'A synchronization is already running.' });
       }
 
+      // Fetch target contest details
+      const contestRows = await db.query("SELECT platform, contestSlug, endTime FROM LiveContests WHERE id = ?", [targetContestId]);
+      if (contestRows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Target contest not found.' });
+      }
+      const { platform, contestSlug, endTime } = contestRows[0];
+
+      if (new Date() > new Date(endTime)) {
+        return res.status(400).json({ success: false, message: 'Cannot start manual synchronization for an ended contest.' });
+      }
+
+      // Resolve provider
+      const providerInstance = platform === 'LeetCode' && (FeatureFlags.isEnabled('scraper') || FeatureFlags.isEnabled('graphql'))
+        ? new LeetCodeProvider()
+        : new MockProvider();
+
       const students = await db.query("SELECT id, name, leetcode_username FROM Users WHERE status = 'active'");
-      const mockProvider = new MockProvider();
       
       const syncFunc = async (student, provider) => {
-        const stats = await provider.getStudentContestStatus(student.leetcode_username, 'mock-weekly');
+        if (!student.leetcode_username || !student.leetcode_username.trim()) {
+          await snapshotEngine.compareAndUpdate(targetContestId, student.id, student.leetcode_username || '', {
+            attendanceStatus: 'Absent',
+            rank: null,
+            solved: 0,
+            score: 0.00,
+            penalty: 0,
+            ratingBefore: null
+          });
+          return;
+        }
+
+        const stats = await provider.getStudentContestStatus(student.leetcode_username, contestSlug);
         let mappedStatus = 'Unknown';
         if (stats.participating) {
           mappedStatus = 'Participating';
@@ -964,17 +1018,17 @@ async function triggerLiveControl(req, res) {
         
         await snapshotEngine.compareAndUpdate(targetContestId, student.id, student.leetcode_username, {
           attendanceStatus: mappedStatus,
-          rank: stats.rank,
-          solved: stats.solved,
-          score: stats.score,
-          penalty: stats.penalty,
-          ratingBefore: stats.ratingBefore
+          rank: stats.rank || null,
+          solved: stats.solved || 0,
+          score: stats.score || 0.00,
+          penalty: stats.penalty || 0,
+          ratingBefore: stats.ratingBefore || null
         });
       };
 
       await snapshotEngine.loadSnapshot(targetContestId);
 
-      studentSyncQueue.start(targetContestId, students, mockProvider, syncFunc).catch(err => {
+      studentSyncQueue.start(targetContestId, students, providerInstance, syncFunc).catch(err => {
         console.error('[Sync Trigger] Queue crashed asynchronously:', err.message);
       });
 
@@ -987,24 +1041,47 @@ async function triggerLiveControl(req, res) {
     }
 
     if (action === 'resume') {
-      const mockProvider = new MockProvider();
+      // Fetch target contest details
+      const contestRows = await db.query("SELECT platform, contestSlug FROM LiveContests WHERE id = ?", [targetContestId]);
+      if (contestRows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Target contest not found.' });
+      }
+      const { platform, contestSlug } = contestRows[0];
+
+      // Resolve provider
+      const providerInstance = platform === 'LeetCode' && (FeatureFlags.isEnabled('scraper') || FeatureFlags.isEnabled('graphql'))
+        ? new LeetCodeProvider()
+        : new MockProvider();
+
       const syncFunc = async (student, provider) => {
-        const stats = await provider.getStudentContestStatus(student.leetcode_username, 'mock-weekly');
+        if (!student.leetcode_username || !student.leetcode_username.trim()) {
+          await snapshotEngine.compareAndUpdate(targetContestId, student.id, student.leetcode_username || '', {
+            attendanceStatus: 'Absent',
+            rank: null,
+            solved: 0,
+            score: 0.00,
+            penalty: 0,
+            ratingBefore: null
+          });
+          return;
+        }
+
+        const stats = await provider.getStudentContestStatus(student.leetcode_username, contestSlug);
         let mappedStatus = 'Unknown';
         if (stats.participating) {
           mappedStatus = 'Participating';
         }
         await snapshotEngine.compareAndUpdate(targetContestId, student.id, student.leetcode_username, {
           attendanceStatus: mappedStatus,
-          rank: stats.rank,
-          solved: stats.solved,
-          score: stats.score,
-          penalty: stats.penalty,
-          ratingBefore: stats.ratingBefore
+          rank: stats.rank || null,
+          solved: stats.solved || 0,
+          score: stats.score || 0.00,
+          penalty: stats.penalty || 0,
+          ratingBefore: stats.ratingBefore || null
         });
       };
       
-      studentSyncQueue.resume(mockProvider, syncFunc);
+      studentSyncQueue.resume(providerInstance, syncFunc);
       return res.json({ success: true, message: 'Sync queue resumed successfully.' });
     }
 
@@ -1082,9 +1159,14 @@ async function getLiveStream(req, res) {
     res.write(`event: SnapshotCreated\ndata: ${JSON.stringify(payload)}\n\n`);
   };
 
+  const onSyncProgress = (payload) => {
+    res.write(`event: SyncProgress\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+
   EventBus.on('StudentUpdated', onStudentUpdated);
   EventBus.on('ContestCompleted', onContestCompleted);
   EventBus.on('SnapshotCreated', onSnapshotCreated);
+  EventBus.on('SyncProgress', onSyncProgress);
 
   const heartbeat = setInterval(() => {
     res.write(': heartbeat\n\n');
@@ -1095,6 +1177,7 @@ async function getLiveStream(req, res) {
     EventBus.off('StudentUpdated', onStudentUpdated);
     EventBus.off('ContestCompleted', onContestCompleted);
     EventBus.off('SnapshotCreated', onSnapshotCreated);
+    EventBus.off('SyncProgress', onSyncProgress);
     console.log('[SSE] Client disconnected, listeners cleared.');
   });
 }

@@ -1342,6 +1342,120 @@ async function run() {
       console.log('[Migration] Migration "contest_leaderboard_sync_service" completed.');
     }
 
+    // 11. Entrahub Sync Hardening Migration
+    const entrahubHardeningMigration = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'entrahub_sync_hardening'"
+    );
+    if (entrahubHardeningMigration.length === 0) {
+      console.log('[Migration] Applying Entrahub Sync Hardening modifications...');
+      
+      // 1. Alter LiveContests table to add currentSyncPass column
+      const liveContestCols = await db.query("SHOW COLUMNS FROM LiveContests");
+      const liveContestColNames = liveContestCols.map(c => c.Field);
+      
+      if (!liveContestColNames.includes('currentSyncPass')) {
+        await db.query("ALTER TABLE LiveContests ADD COLUMN currentSyncPass INT DEFAULT 0 AFTER syncProgress");
+        console.log('[Migration] Added currentSyncPass to LiveContests.');
+      }
+      
+      // 2. Alter ContestAttendance table:
+      // - Modify attendanceStatus ENUM to include 'Pending', 'Present', 'Absent', 'Verified'
+      // - Add verified column
+      // - Add syncPass column
+      const attendanceCols = await db.query("SHOW COLUMNS FROM ContestAttendance");
+      const attendanceColNames = attendanceCols.map(c => c.Field);
+      
+      await db.query(`
+        ALTER TABLE ContestAttendance 
+        MODIFY COLUMN attendanceStatus ENUM('Unknown', 'Participating', 'Present', 'Absent', 'Pending', 'Verified') 
+        NOT NULL DEFAULT 'Pending'
+      `);
+      console.log('[Migration] Altered attendanceStatus ENUM in ContestAttendance.');
+
+      if (!attendanceColNames.includes('verified')) {
+        await db.query("ALTER TABLE ContestAttendance ADD COLUMN verified TINYINT(1) DEFAULT 0 AFTER ratingChange");
+        console.log('[Migration] Added verified to ContestAttendance.');
+      }
+      
+      if (!attendanceColNames.includes('syncPass')) {
+        await db.query("ALTER TABLE ContestAttendance ADD COLUMN syncPass INT DEFAULT 0 AFTER verified");
+        console.log('[Migration] Added syncPass to ContestAttendance.');
+      }
+      
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('entrahub_sync_hardening')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "entrahub_sync_hardening" completed.');
+    }
+
+    // ==========================================
+    // MIGRATION 13: codechef_schema_hardening
+    // ==========================================
+    const rows13 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'codechef_schema_hardening'"
+    );
+
+    if (rows13.length > 0) {
+      console.log('[Migration] Migration "codechef_schema_hardening" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Applying CodeChef Schema Hardening modifications...');
+      
+      const ccCols = await db.query("SHOW COLUMNS FROM CodeChefProfiles");
+      const ccColNames = ccCols.map(c => c.Field);
+      
+      if (!ccColNames.includes('lowest_rating')) {
+        await db.query("ALTER TABLE CodeChefProfiles ADD COLUMN lowest_rating INT DEFAULT NULL AFTER highest_rating");
+        console.log('[Migration] Added lowest_rating to CodeChefProfiles.');
+      }
+      
+      if (!ccColNames.includes('rating_history')) {
+        await db.query("ALTER TABLE CodeChefProfiles ADD COLUMN rating_history LONGTEXT DEFAULT NULL AFTER contest_history");
+        console.log('[Migration] Added rating_history to CodeChefProfiles.');
+      }
+      
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('codechef_schema_hardening')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "codechef_schema_hardening" completed.');
+    }
+
+    // ==========================================
+    // MIGRATION 14: codechef_provisional_support
+    // ==========================================
+    const rows14 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'codechef_provisional_support'"
+    );
+
+    if (rows14.length > 0) {
+      console.log('[Migration] Migration "codechef_provisional_support" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Applying CodeChef Provisional Support modifications...');
+      
+      const ccCols = await db.query("SHOW COLUMNS FROM CodeChefProfiles");
+      const ccColNames = ccCols.map(c => c.Field);
+      
+      if (!ccColNames.includes('is_provisional')) {
+        await db.query("ALTER TABLE CodeChefProfiles ADD COLUMN is_provisional TINYINT(1) DEFAULT 0 AFTER lowest_rating");
+        console.log('[Migration] Added is_provisional to CodeChefProfiles.');
+      }
+      
+      if (!ccColNames.includes('status')) {
+        await db.query("ALTER TABLE CodeChefProfiles ADD COLUMN status VARCHAR(20) DEFAULT 'UNRATED' AFTER is_provisional");
+        console.log('[Migration] Added status to CodeChefProfiles.');
+      }
+      
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('codechef_provisional_support')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "codechef_provisional_support" completed.');
+    }
+
     process.exit(0);
   } catch (err) {
     console.error('[Migration] Migration failed:', err.message);

@@ -16,7 +16,7 @@ class SnapshotEngine {
    */
   async loadSnapshot(contestId) {
     const rows = await db.query(
-      `SELECT studentId, attendanceStatus, \`rank\`, solved, score, penalty, ratingBefore, ratingAfter, ratingChange 
+      `SELECT studentId, attendanceStatus, \`rank\`, solved, score, penalty, ratingBefore, ratingAfter, ratingChange, verified, syncPass 
        FROM ContestAttendance 
        WHERE contestId = ?`,
       [contestId]
@@ -32,7 +32,9 @@ class SnapshotEngine {
         penalty: r.penalty,
         ratingBefore: r.ratingBefore ? parseFloat(r.ratingBefore) : null,
         ratingAfter: r.ratingAfter ? parseFloat(r.ratingAfter) : null,
-        ratingChange: r.ratingChange ? parseFloat(r.ratingChange) : null
+        ratingChange: r.ratingChange ? parseFloat(r.ratingChange) : null,
+        verified: r.verified || 0,
+        syncPass: r.syncPass || 0
       };
     }
     this.previousSnapshots[contestId] = snapshot;
@@ -58,7 +60,9 @@ class SnapshotEngine {
       penalty: newStats.penalty !== undefined ? parseInt(newStats.penalty, 10) : 0,
       ratingBefore: newStats.ratingBefore !== undefined && newStats.ratingBefore !== null ? parseFloat(newStats.ratingBefore) : null,
       ratingAfter: newStats.ratingAfter !== undefined && newStats.ratingAfter !== null ? parseFloat(newStats.ratingAfter) : null,
-      ratingChange: newStats.ratingChange !== undefined && newStats.ratingChange !== null ? parseFloat(newStats.ratingChange) : null
+      ratingChange: newStats.ratingChange !== undefined && newStats.ratingChange !== null ? parseFloat(newStats.ratingChange) : null,
+      verified: newStats.verified !== undefined ? parseInt(newStats.verified, 10) : 0,
+      syncPass: newStats.syncPass !== undefined ? parseInt(newStats.syncPass, 10) : 0
     };
 
     let hasChanged = false;
@@ -80,9 +84,9 @@ class SnapshotEngine {
       await db.query(`
         INSERT INTO ContestAttendance (
           contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty, 
-          ratingBefore, ratingAfter, ratingChange, firstDetectedAt
+          ratingBefore, ratingAfter, ratingChange, verified, syncPass, firstDetectedAt
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           attendanceStatus = VALUES(attendanceStatus),
           \`rank\` = VALUES(\`rank\`),
@@ -91,7 +95,9 @@ class SnapshotEngine {
           penalty = VALUES(penalty),
           ratingBefore = VALUES(ratingBefore),
           ratingAfter = VALUES(ratingAfter),
-          ratingChange = VALUES(ratingChange)
+          ratingChange = VALUES(ratingChange),
+          verified = VALUES(verified),
+          syncPass = VALUES(syncPass)
       `, [
         contestId,
         studentId,
@@ -103,7 +109,9 @@ class SnapshotEngine {
         updatedStats.penalty,
         updatedStats.ratingBefore,
         updatedStats.ratingAfter,
-        updatedStats.ratingChange
+        updatedStats.ratingChange,
+        updatedStats.verified,
+        updatedStats.syncPass
       ]);
 
       // Cache updated values locally

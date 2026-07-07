@@ -94,7 +94,8 @@ function determineAttendanceStatus(student, contest, participated, attendanceSou
  */
 async function getStudentAttendance(userId) {
   const [student] = await db.query(
-    `SELECT id, name, roll_no, department, section, academic_start_date, academic_end_date, academic_batch
+    `SELECT id, name, roll_no, department, section, academic_start_date, academic_end_date, academic_batch,
+            leetcode_username, codeforces_username, codechef_username, hackerrank_username
      FROM Users WHERE id = ?`,
     [userId]
   );
@@ -111,7 +112,7 @@ async function getStudentAttendance(userId) {
      FROM Contests c
      LEFT JOIN AttendanceRecords ar ON c.contest_id = ar.contest_id AND ar.user_id = ?
      ORDER BY c.start_time ASC`,
-    [userId, userId, userId]
+    [userId, userId]
   );
 
   const formattedHistory = history.map(h => {
@@ -301,7 +302,7 @@ async function getContestAttendanceSheet(contestId) {
 
   return rows.map(r => ({
     ...r,
-    attendance_status: r.attended_count > 0 ? 'PRESENT' : (r.attendance_status || 'ABSENT'),
+    attendance_status: Number(r.participated) > 0 ? 'PRESENT' : (r.attendance_status || 'ABSENT'),
     participated: Number(r.participated || 0) > 0
   }));
 }

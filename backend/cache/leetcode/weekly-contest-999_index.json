@@ -1,0 +1,182 @@
+{
+  "sean_high_1": {
+    "username": "sean_high_1",
+    "userSlug": "sean_high_1",
+    "rank": 5,
+    "solved": 3,
+    "score": 18,
+    "penalty": 4790,
+    "ratingBefore": null
+  },
+  "alex_high_2": {
+    "username": "alex_high_2",
+    "userSlug": "alex_high_2",
+    "rank": 14,
+    "solved": 3,
+    "score": 18,
+    "penalty": 3912,
+    "ratingBefore": null
+  },
+  "bob_high_3": {
+    "username": "bob_high_3",
+    "userSlug": "bob_high_3",
+    "rank": 32,
+    "solved": 3,
+    "score": 18,
+    "penalty": 4360,
+    "ratingBefore": null
+  },
+  "chris_high_4": {
+    "username": "chris_high_4",
+    "userSlug": "chris_high_4",
+    "rank": 55,
+    "solved": 2,
+    "score": 18,
+    "penalty": 3286,
+    "ratingBefore": null
+  },
+  "david_high_5": {
+    "username": "david_high_5",
+    "userSlug": "david_high_5",
+    "rank": 88,
+    "solved": 2,
+    "score": 18,
+    "penalty": 1227,
+    "ratingBefore": null
+  },
+  "emma_med_1": {
+    "username": "emma_med_1",
+    "userSlug": "emma_med_1",
+    "rank": 1250,
+    "solved": 2,
+    "score": 12,
+    "penalty": 5972,
+    "ratingBefore": null
+  },
+  "frank_med_2": {
+    "username": "frank_med_2",
+    "userSlug": "frank_med_2",
+    "rank": 2310,
+    "solved": 2,
+    "score": 12,
+    "penalty": 5730,
+    "ratingBefore": null
+  },
+  "grace_med_3": {
+    "username": "grace_med_3",
+    "userSlug": "grace_med_3",
+    "rank": 3450,
+    "solved": 1,
+    "score": 12,
+    "penalty": 5484,
+    "ratingBefore": null
+  },
+  "helen_med_4": {
+    "username": "helen_med_4",
+    "userSlug": "helen_med_4",
+    "rank": 4120,
+    "solved": 4,
+    "score": 12,
+    "penalty": 4273,
+    "ratingBefore": null
+  },
+  "ian_med_5": {
+    "username": "ian_med_5",
+    "userSlug": "ian_med_5",
+    "rank": 4999,
+    "solved": 3,
+    "score": 12,
+    "penalty": 3551,
+    "ratingBefore": null
+  },
+  "jack_low_1": {
+    "username": "jack_low_1",
+    "userSlug": "jack_low_1",
+    "rank": 12450,
+    "solved": 1,
+    "score": 7,
+    "penalty": 3965,
+    "ratingBefore": null
+  },
+  "kate_low_2": {
+    "username": "kate_low_2",
+    "userSlug": "kate_low_2",
+    "rank": 15600,
+    "solved": 2,
+    "score": 7,
+    "penalty": 5200,
+    "ratingBefore": null
+  },
+  "leo_low_3": {
+    "username": "leo_low_3",
+    "userSlug": "leo_low_3",
+    "rank": 21300,
+    "solved": 2,
+    "score": 7,
+    "penalty": 5446,
+    "ratingBefore": null
+  },
+  "mary_low_4": {
+    "username": "mary_low_4",
+    "userSlug": "mary_low_4",
+    "rank": 28400,
+    "solved": 3,
+    "score": 7,
+    "penalty": 1813,
+    "ratingBefore": null
+  },
+  "nancy_low_5": {
+    "username": "nancy_low_5",
+    "userSlug": "nancy_low_5",
+    "rank": 35900,
+    "solved": 3,
+    "score": 7,
+    "penalty": 4879,
+    "ratingBefore": null
+  },
+  "ganeshkumar2006": {
+    "username": "Ganeshkumar2006",
+    "userSlug": "Ganeshkumar2006",
+    "rank": 1540,
+    "solved": 3,
+    "score": 12,
+    "penalty": 4761,
+    "ratingBefore": null
+  },
+  "sanjay-vk07": {
+    "username": "Sanjay-vk07",
+    "userSlug": "Sanjay-vk07",
+    "rank": 2890,
+    "solved": 2,
+    "score": 12,
+    "penalty": 1943,
+    "ratingBefore": null
+  },
+  "saran_0909": {
+    "username": "saran_0909",
+    "userSlug": "saran_0909",
+    "rank": 3950,
+    "solved": 2,
+    "score": 12,
+    "penalty": 3508,
+    "ratingBefore": null
+  },
+  "divyaroopa_5": {
+    "username": "Divyaroopa_5",
+    "userSlug": "Divyaroopa_5",
+    "rank": 11200,
+    "solved": 3,
+    "score": 7,
+    "penalty": 4761,
+    "ratingBefore": null
+  },
+  "egambaramt_33": {
+    "username": "egambaramt_33",
+    "userSlug": "egambaramt_33",
+    "rank": 18450,
+    "solved": 3,
+    "score": 7,
+    "penalty": 3002,
+    "ratingBefore": null
+  }
+}

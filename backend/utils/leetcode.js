@@ -1,5 +1,6 @@
 const https = require('https');
 const { exec } = require('child_process');
+const NetworkService = require('./networkService');
 
 /**
  * Generic helper to query LeetCode GraphQL API
@@ -180,62 +181,9 @@ async function getUserContestHistory(username) {
  */
 function getContestRankingPage(contestSlug, page = 1) {
   const url = `https://leetcode.com/contest/api/ranking/${contestSlug}/?pagination=${page}`;
-  const cmd = `curl.exe -s -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "${url}"`;
-  
-  return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        // Fallback to standard request
-        console.warn(`[LeetCode API Warning] Curl failed: ${err.message}. Falling back to standard HTTPS request.`);
-        const options = {
-          hostname: 'leetcode.com',
-          path: `/contest/api/ranking/${contestSlug}/?pagination=${page}`,
-          method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          },
-          timeout: 10000
-        };
-
-        const req = https.request(options, (res) => {
-          let data = '';
-          res.on('data', (chunk) => {
-            data += chunk;
-          });
-          res.on('end', () => {
-            if (res.statusCode === 200) {
-              try {
-                const json = JSON.parse(data);
-                resolve(json);
-              } catch (e) {
-                reject(new Error(`Failed to parse LeetCode response: ${e.message}`));
-              }
-            } else {
-              reject(new Error(`LeetCode API returned status code ${res.statusCode}`));
-            }
-          });
-        });
-
-        req.on('error', (e) => {
-          reject(new Error(`Network error connecting to LeetCode: ${e.message}`));
-        });
-
-        req.on('timeout', () => {
-          req.destroy();
-          reject(new Error('LeetCode contest ranking request timed out'));
-        });
-
-        req.end();
-        return;
-      }
-      
-      try {
-        const json = JSON.parse(stdout);
-        resolve(json);
-      } catch (parseErr) {
-        reject(new Error(`Failed to parse LeetCode response: ${parseErr.message}`));
-      }
-    });
+  return NetworkService.request(url, {
+    useCurlTransport: true,
+    timeout: 15000
   });
 }
 
@@ -318,10 +266,16 @@ async function getUserLeetCodeStats(username) {
       const contestRanking = json.data.userContestRanking || {};
       const rawBadges = json.data.matchedUser.badges || [];
 
-      const solvedStats = {};
-      submitStats.forEach(item => {
-        solvedStats[item.difficulty] = item.count;
-      });
+      const stats = json.data.matchedUser.submitStats?.acSubmissionNum || [];
+      const easySolved = stats.find(s => s.difficulty === "Easy")?.count ?? 0;
+      const mediumSolved = stats.find(s => s.difficulty === "Medium")?.count ?? 0;
+      const hardSolved = stats.find(s => s.difficulty === "Hard")?.count ?? 0;
+      const totalSolvedRaw = stats.find(s => s.difficulty === "All")?.count ?? 0;
+
+      let totalSolved = totalSolvedRaw;
+      if (totalSolved === 0) {
+        totalSolved = easySolved + mediumSolved + hardSolved;
+      }
 
       let parsedCalendar = {};
       if (userCalendar.submissionCalendar) {
@@ -332,8 +286,8 @@ async function getUserLeetCodeStats(username) {
         }
       }
 
-      const acAll = (json.data.matchedUser.submitStats?.acSubmissionNum || []).find(x => x.difficulty === 'All')?.submissions || 0;
-      const totalAll = (json.data.matchedUser.submitStats?.totalSubmissionNum || []).find(x => x.difficulty === 'All')?.submissions || 0;
+      const acAll = (json.data.matchedUser.submitStats?.acSubmissionNum || []).find(x => x.difficulty === 'All')?.submissions ?? 0;
+      const totalAll = (json.data.matchedUser.submitStats?.totalSubmissionNum || []).find(x => x.difficulty === 'All')?.submissions ?? 0;
       const acceptanceRate = totalAll > 0 ? Number(((acAll / totalAll) * 100).toFixed(2)) : 0.0;
 
       const badgesList = rawBadges.map(b => ({
@@ -344,13 +298,16 @@ async function getUserLeetCodeStats(username) {
         slug: b.medal?.slug || ''
       }));
 
+      console.log(`[LeetCode Stats Diagnostics] Username: ${trimmedUsername} | Easy: ${easySolved} | Medium: ${mediumSolved} | Hard: ${hardSolved} | Total Solved: ${totalSolved}`);
+      console.log('[LeetCode Stats Diagnostics] Raw submitStats:', JSON.stringify(json.data.matchedUser.submitStats));
+
       return {
         success: true,
         username: trimmedUsername,
-        totalSolved: solvedStats['All'] || 0,
-        easySolved: solvedStats['Easy'] || 0,
-        mediumSolved: solvedStats['Medium'] || 0,
-        hardSolved: solvedStats['Hard'] || 0,
+        totalSolved,
+        easySolved,
+        mediumSolved,
+        hardSolved,
         activeDays: userCalendar.totalActiveDays || 0,
         submissionCalendar: parsedCalendar,
         contestRating: contestRanking.rating ? Math.round(contestRanking.rating) : null,

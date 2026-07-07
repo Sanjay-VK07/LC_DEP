@@ -121,6 +121,13 @@ function resetHealth(platform) {
 /**
  * Persist current health state to DB (called periodically or after sync).
  */
+function formatMySQLDate(dateInput) {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 async function persistHealthToDb() {
   try {
     await db.query(`
@@ -153,7 +160,7 @@ async function persistHealthToDb() {
            last_failure_at = VALUES(last_failure_at),
            last_error = VALUES(last_error)`,
         [p, h.status, h.successCount, h.failureCount, h.avgLatencyMs, h.consecutiveFailures,
-          h.lastSuccessAt, h.lastFailureAt, h.lastError]
+          formatMySQLDate(h.lastSuccessAt), formatMySQLDate(h.lastFailureAt), h.lastError]
       );
     }
   } catch (err) {

@@ -3,6 +3,8 @@ const path = require('path');
 const ContestProvider = require('./ContestProvider');
 const CapabilityResolver = require('./CapabilityResolver');
 const leetcodeUtils = require('../../utils/leetcode');
+const db = require('../../config/db');
+const { normalizeUsername } = require('../../utils/usernameNormalizer');
 
 /**
  * LeetCode Platform Provider supporting GraphQL queries, Leaderboard scraping, and local file fallbacks.
@@ -26,6 +28,7 @@ class LeetCodeProvider extends ContestProvider {
     this.leaderboardIndices = {}; // contestSlug -> { username: stats }
     this.lastCacheRefresh = {}; // contestSlug -> timestamp
     this.isRefreshingCache = {}; // contestSlug -> boolean
+    this.activeRefreshPromises = {}; // contestSlug -> Promise
   }
 
   /**
@@ -74,18 +77,21 @@ class LeetCodeProvider extends ContestProvider {
           const lastRefresh = this.lastCacheRefresh[slug] || 0;
           const now = Date.now();
           
-          if (!this.isRefreshingCache[slug] && (now - lastRefresh > 4 * 60 * 1000)) {
-            console.log(`[LeetCodeProvider] Cache is stale for contest "${slug}". Re-fetching leaderboard pages...`);
-            // Run cache refresh asynchronously in the background to prevent blocking current requests
-            this.refreshLeaderboardCache(slug).catch(err => {
-              console.error(`[LeetCodeProvider] Leaderboard background caching failed:`, err.message);
-            });
+          if (now - lastRefresh > 4 * 60 * 1000) {
+            console.log(`[LeetCodeProvider] Cache is stale/missing for contest "${slug}". Re-fetching leaderboard pages (awaiting completion)...`);
+            try {
+              await this.refreshLeaderboardCache(slug);
+            } catch (err) {
+              console.error(`[LeetCodeProvider] Leaderboard cache update failed:`, err.message);
+            }
           }
 
           // Read from memory index
           const index = this.leaderboardIndices[slug] || {};
-          const stats = index[username];
+          const cleanUsername = normalizeUsername(username);
+          const stats = index[cleanUsername];
           if (stats) {
+            console.log(`[LeetCodeProvider] [Cache Hit] Matched Student: "${username}" (clean: "${cleanUsername}") in contest "${slug}". Rank: ${stats.rank}, Solved: ${stats.solved}, Score: ${stats.score}`);
             return {
               participating: true,
               rank: stats.rank,
@@ -95,6 +101,7 @@ class LeetCodeProvider extends ContestProvider {
               ratingBefore: stats.ratingBefore
             };
           }
+          console.log(`[LeetCodeProvider] [Cache Miss] Student: "${username}" (clean: "${cleanUsername}") NOT found in contest "${slug}"`);
           return { participating: false };
         }
       },
@@ -113,13 +120,19 @@ class LeetCodeProvider extends ContestProvider {
           throw new Error('Contest cache file not found');
         },
         fetchStudentStatus: async (username, slug) => {
-          // Load index from disk if not already loaded in memory
+          // Load index if not already loaded in memory
           if (!this.leaderboardIndices[slug]) {
-            this._loadLeaderboardFromDisk(slug);
+            await this._loadLeaderboard(slug);
           }
-          const index = this.leaderboardIndices[slug] || {};
-          const stats = index[username];
+          const index = this.leaderboardIndices[slug];
+          if (!index) {
+            // Throwing triggers failover to leaderboard source
+            throw new Error(`Cache missing for contest "${slug}"`);
+          }
+          const cleanUsername = normalizeUsername(username);
+          const stats = index[cleanUsername];
           if (stats) {
+            console.log(`[LeetCodeProvider] [Disk/DB Cache Hit] Matched Student: "${username}" (clean: "${cleanUsername}") in contest "${slug}". Rank: ${stats.rank}, Solved: ${stats.solved}`);
             return {
               participating: true,
               rank: stats.rank,
@@ -129,6 +142,7 @@ class LeetCodeProvider extends ContestProvider {
               ratingBefore: stats.ratingBefore
             };
           }
+          console.log(`[LeetCodeProvider] [Disk/DB Cache Miss] Student: "${username}" (clean: "${cleanUsername}") NOT found in contest "${slug}"`);
           return { participating: false };
         },
         fetchRatings: async (username) => {
@@ -149,79 +163,84 @@ class LeetCodeProvider extends ContestProvider {
     };
   }
 
-  /**
-   * Scrapes leaderboard pages page-by-page from LeetCode and stores them locally.
-   * @param {string} contestSlug - LeetCode contest slug.
-   * @param {number} maxPages - Page scrape ceiling.
-   */
-  async refreshLeaderboardCache(contestSlug, maxPages = 40) {
-    if (this.isRefreshingCache[contestSlug]) return;
-    this.isRefreshingCache[contestSlug] = true;
-    
-    console.log(`[LeetCodeProvider] Rebuilding leaderboard cache for "${contestSlug}"...`);
-    const contestDir = path.join(this.cacheDir, contestSlug);
-    fs.mkdirSync(contestDir, { recursive: true });
-
-    const newIndex = {};
-
-    try {
-      let page = 1;
-      let emptyPagesCount = 0;
-      
-      while (page <= maxPages && emptyPagesCount < 3) {
-        try {
-          const data = await leetcodeUtils.getContestRankingPage(contestSlug, page);
-          
-          if (data && data.total_rank && data.total_rank.length > 0) {
-            // Write page to disk cache
-            fs.writeFileSync(
-              path.join(contestDir, `page_${page}.json`),
-              JSON.stringify(data, null, 2),
-              'utf8'
-            );
-
-            // Index users
-            for (const item of data.total_rank) {
-              newIndex[item.username] = {
-                rank: item.rank,
-                solved: item.score ? Math.floor(item.score / 3) : 0, // simple estimate or parse problems
-                score: item.score ? parseFloat(item.score) : 0.00,
-                penalty: item.finish_time ? parseInt(item.finish_time, 10) : 0,
-                ratingBefore: null // calculated during rating adjustments
-              };
-            }
-            emptyPagesCount = 0;
-          } else {
-            emptyPagesCount++;
-          }
-        } catch (pageErr) {
-          console.warn(`[LeetCodeProvider] Failed to fetch page ${page} of "${contestSlug}": ${pageErr.message}`);
-        }
-        page++;
-        // Add a slight delay to respect LeetCode rate limits
-        await new Promise(res => setTimeout(res, 200));
-      }
-
-      this.leaderboardIndices[contestSlug] = newIndex;
-      this.lastCacheRefresh[contestSlug] = Date.now();
-      
-      // Also write merged index JSON for standalone cache recovery
-      fs.writeFileSync(
-        path.join(this.cacheDir, `${contestSlug}_index.json`),
-        JSON.stringify(newIndex, null, 2),
-        'utf8'
-      );
-
-      console.log(`[LeetCodeProvider] Completed cache rebuild for "${contestSlug}". Indexed ${Object.keys(newIndex).length} participants.`);
-    } finally {
-      this.isRefreshingCache[contestSlug] = false;
+  async refreshLeaderboardCache(contestSlug) {
+    if (this.activeRefreshPromises[contestSlug]) {
+      // Re-use active cache refresh promise
+      return this.activeRefreshPromises[contestSlug];
     }
+
+    const refreshPromise = (async () => {
+      this.isRefreshingCache[contestSlug] = true;
+      console.log(`[LeetCodeProvider] Rebuilding leaderboard cache for "${contestSlug}" using LeetCodeAdapter...`);
+      try {
+        const LeetCodeAdapter = require('../adapters/LeetCodeAdapter');
+        const adapter = new LeetCodeAdapter();
+        const participants = await adapter.getContestParticipants(contestSlug);
+
+        // Index in memory
+        const newIndex = {};
+        for (const item of participants) {
+          const usernameKey = normalizeUsername(item.username);
+          if (!usernameKey) continue;
+          newIndex[usernameKey] = {
+            username: item.username,
+            userSlug: item.username,
+            rank: item.rank,
+            solved: item.solved || (item.score ? Math.floor(item.score / 3) : 0),
+            score: item.score ? parseFloat(item.score) : 0.00,
+            penalty: item.finishTime || 0,
+            ratingBefore: null
+          };
+        }
+        this.leaderboardIndices[contestSlug] = newIndex;
+        this.lastCacheRefresh[contestSlug] = Date.now();
+        console.log(`[LeetCodeProvider] Rebuilt leaderboard cache for "${contestSlug}". Indexed ${participants.length} participants.`);
+      } catch (err) {
+        console.error(`[LeetCodeProvider] Leaderboard cache update failed:`, err.message);
+      } finally {
+        this.isRefreshingCache[contestSlug] = false;
+        delete this.activeRefreshPromises[contestSlug];
+      }
+    })();
+
+    this.activeRefreshPromises[contestSlug] = refreshPromise;
+    return refreshPromise;
   }
 
   /**
-   * Internal helper to load indexes from disk files.
+   * Internal helper to load indexes from DB first, falling back to disk files.
    */
-  _loadLeaderboardFromDisk(contestSlug) {
+  async _loadLeaderboard(contestSlug) {
+    // 1. Try to load from database first
+    try {
+      const rows = await db.query(
+        "SELECT username, `rank`, score, finish_time FROM ContestParticipants WHERE contest_slug = ?",
+        [contestSlug]
+      );
+      if (rows.length > 0) {
+        const index = {};
+        for (const r of rows) {
+          const usernameKey = normalizeUsername(r.username);
+          if (!usernameKey) continue;
+          index[usernameKey] = {
+            username: r.username,
+            userSlug: r.username,
+            rank: r.rank,
+            solved: r.score ? Math.floor(r.score / 3) : 0,
+            score: parseFloat(r.score || 0),
+            penalty: r.finish_time,
+            ratingBefore: null
+          };
+        }
+        this.leaderboardIndices[contestSlug] = index;
+        console.log(`[LeetCodeProvider] Loaded "${contestSlug}" leaderboard index from database cache (${rows.length} rows).`);
+        return;
+      }
+    } catch (err) {
+      console.error(`[LeetCodeProvider] Database cache read failed for "${contestSlug}":`, err.message);
+    }
+
+    // 2. Fallback to disk JSON cache
     const file = path.join(this.cacheDir, `${contestSlug}_index.json`);
     if (fs.existsSync(file)) {
       try {
@@ -265,6 +284,28 @@ class LeetCodeProvider extends ContestProvider {
 
   async getStudentContestHistory(username) {
     return await this.resolver.resolve('contestHistory', this._getSources(), 'fetchContestHistory', [username]);
+  }
+
+  clearContestCache(contestSlug) {
+    delete this.leaderboardIndices[contestSlug];
+    delete this.lastCacheRefresh[contestSlug];
+    
+    // Clear files from disk
+    const indexFile = path.join(this.cacheDir, `${contestSlug}_index.json`);
+    if (fs.existsSync(indexFile)) {
+      try { fs.unlinkSync(indexFile); } catch (e) {}
+    }
+    const contestDir = path.join(this.cacheDir, contestSlug);
+    if (fs.existsSync(contestDir)) {
+      try {
+        const files = fs.readdirSync(contestDir);
+        for (const file of files) {
+          fs.unlinkSync(path.join(contestDir, file));
+        }
+        fs.rmdirSync(contestDir);
+      } catch (e) {}
+    }
+    console.log(`[LeetCodeProvider] Standalone leaderboard cache purged for completed contest: "${contestSlug}"`);
   }
 
   async finalizeContest(contestId) {

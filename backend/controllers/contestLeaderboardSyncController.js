@@ -35,12 +35,12 @@ async function startSync(req, res) {
 
   try {
     // Check if a sync is already running in memory for this contestSlug
-    const activeJobs = jobQueue.listJobs({ 
-      type: jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC,
-      status: jobQueue.JOB_STATUS.RUNNING
-    });
+    const activeJobs = [
+      ...jobQueue.listJobs({ type: jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC, status: jobQueue.JOB_STATUS.RUNNING }),
+      ...jobQueue.listJobs({ type: jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC, status: jobQueue.JOB_STATUS.RUNNING })
+    ];
     
-    const isAlreadyRunning = activeJobs.some(j => j.payload?.contestSlug === contestSlug);
+    const isAlreadyRunning = activeJobs.some(j => j.payload?.contestSlug === contestSlug || j.payload?.contestId === contestSlug);
     if (isAlreadyRunning) {
       return res.status(409).json({
         success: false,
@@ -49,16 +49,29 @@ async function startSync(req, res) {
     }
 
     // Enqueue the job in background queue
+    const ContestAttendanceSyncService = require('../services/ContestAttendanceSyncService');
     const jobId = jobQueue.enqueue(
-      jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC,
+      jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
       { contestSlug, batch: normalizedBatch, forceSync: !!forceSync },
       async (job, updateProgress) => {
-        return await ContestLeaderboardSyncService.syncContest(contestSlug, {
-          batch: normalizedBatch,
-          forceSync: !!forceSync,
-          jobId: job.id,
-          updateProgress
-        });
+        const [contest] = await db.query("SELECT platform FROM Contests WHERE slug = ?", [contestSlug]);
+        const platform = contest ? contest.platform : 'LeetCode';
+
+        if (platform === 'LeetCode') {
+          const ContestLeaderboardSyncService = require('../services/ContestLeaderboardSyncService');
+          return await ContestLeaderboardSyncService.syncContest(contestSlug, {
+            batch: normalizedBatch,
+            forceSync: !!forceSync,
+            jobId: job.id,
+            updateProgress
+          });
+        } else {
+          return await ContestAttendanceSyncService.syncContestAttendance(contestSlug, {
+            jobId: job.id,
+            updateProgress,
+            pass: 4
+          });
+        }
       }
     );
 
@@ -150,16 +163,29 @@ async function retrySync(req, res) {
 
   const { contestSlug, batch, forceSync } = job.payload;
   try {
+    const ContestAttendanceSyncService = require('../services/ContestAttendanceSyncService');
     const newJobId = jobQueue.enqueue(
-      jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC,
-      { contestSlug, batch, forceSync },
+      jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
+      { contestSlug, batch, forceSync: !!forceSync },
       async (j, updateProgress) => {
-        return await ContestLeaderboardSyncService.syncContest(contestSlug, {
-          batch,
-          forceSync,
-          jobId: j.id,
-          updateProgress
-        });
+        const [contest] = await db.query("SELECT platform FROM Contests WHERE slug = ?", [contestSlug]);
+        const platform = contest ? contest.platform : 'LeetCode';
+
+        if (platform === 'LeetCode') {
+          const ContestLeaderboardSyncService = require('../services/ContestLeaderboardSyncService');
+          return await ContestLeaderboardSyncService.syncContest(contestSlug, {
+            batch,
+            forceSync: !!forceSync,
+            jobId: j.id,
+            updateProgress
+          });
+        } else {
+          return await ContestAttendanceSyncService.syncContestAttendance(contestSlug, {
+            jobId: j.id,
+            updateProgress,
+            pass: 4
+          });
+        }
       }
     );
 
@@ -183,14 +209,17 @@ async function retrySync(req, res) {
 async function getSyncHistory(req, res) {
   try {
     // 1. Get recent in-memory jobs from jobQueueService
-    const memoryJobs = jobQueue.listJobs({ type: jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC });
+    const memoryJobs = [
+      ...jobQueue.listJobs({ type: jobQueue.JOB_TYPE.LEETCODE_CONTEST_SYNC }),
+      ...jobQueue.listJobs({ type: jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC })
+    ];
     const formattedMemory = memoryJobs.map(j => ({
       source: 'memory',
       jobId: j.id,
       status: j.status,
       progress: j.progress,
       message: j.message,
-      contestSlug: j.payload?.contestSlug,
+      contestSlug: j.payload?.contestSlug || j.payload?.contestId,
       batch: j.payload?.batch,
       startedAt: j.startedAt,
       completedAt: j.completedAt,

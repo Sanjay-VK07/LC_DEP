@@ -41,15 +41,21 @@ async function getCodeChefStats(username) {
   try {
     const stats = await withRetry(() => getUserCodeChefStats(username));
     if (stats && stats.success) {
+      const ratingHistory = stats.ratingHistory || [];
+      console.log('[AUDIT][SERVICE] currentRating =', stats.rating, 'highestRating =', stats.maxRating, 'lowestRating =', stats.lowestRating, 'ratingHistory.length =', ratingHistory.length);
+      console.log('[AUDIT LOG][Service] currentRating =', stats.rating);
       return normalizeCodeChefProfile({
         verified: true,
         rating: stats.rating,
         maxRating: stats.maxRating,
+        lowestRating: stats.lowestRating,
+        isProvisional: stats.isProvisional,
         problemsSolved: stats.problemsSolved,
         contestParticipationCount: stats.contestParticipationCount,
         globalRanking: stats.globalRanking,
         stars: stats.stars,
-        contestHistory: stats.contestHistory || []
+        contestHistory: stats.contestHistory || [],
+        ratingHistory
       }, stats.username || username);
     }
 

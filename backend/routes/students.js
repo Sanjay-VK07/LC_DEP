@@ -24,6 +24,9 @@ router.get('/sections', studentController.getUniqueSections);
 
 const { authenticate, authorize } = require('../middlewares/authMiddleware');
 router.get('/data-health', authenticate, authorize(['Super Admin']), studentController.getStudentsDataHealth);
+router.post('/:id/sync/:platform', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), studentController.syncStudentPlatformManual);
+router.post('/sync-all', authenticate, authorize(['Super Admin']), studentController.forceFullSync);
+router.post('/clear-cache', authenticate, authorize(['Super Admin']), studentController.clearCacheManual);
 
 // Handle verification helper
 router.get('/verify-leetcode/:username', studentController.checkUsername);

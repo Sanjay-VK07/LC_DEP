@@ -12,10 +12,60 @@ const leetcode = require('../utils/leetcode');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const NetworkService = require('../utils/networkService');
 
-// Sync lock registry (in-memory)
-const activeSyncs = new Set();
+// Sync lock registry (in-memory, global symbol for multi-service safety)
+const lockKey = Symbol.for('leetcode-sync-locks');
+if (!global[lockKey]) {
+  global[lockKey] = new Set();
+}
+const activeSyncLocks = global[lockKey];
+
+class AdaptiveRateLimiter {
+  constructor() {
+    this.minDelay = 800;
+    this.maxDelay = 2500;
+    this.currentBaseDelay = 1000;
+  }
+
+  getDelay() {
+    const jitter = Math.floor(Math.random() * 500) - 200;
+    return Math.max(this.minDelay, Math.min(this.maxDelay, this.currentBaseDelay + jitter));
+  }
+
+  increase() {
+    this.currentBaseDelay = Math.min(this.maxDelay, this.currentBaseDelay + 500);
+    console.log(`[RateLimiter] Increased base delay to ${this.currentBaseDelay}ms`);
+  }
+
+  decrease() {
+    this.currentBaseDelay = Math.max(this.minDelay, this.currentBaseDelay - 50);
+  }
+}
+
+class PageAllocator {
+  constructor(startPage, totalPages) {
+    this.nextPage = startPage;
+    this.totalPages = totalPages;
+    this.isAborted = false;
+  }
+
+  getNextPage() {
+    if (this.isAborted || this.nextPage > this.totalPages) {
+      return null;
+    }
+    return this.nextPage++;
+  }
+
+  abort() {
+    this.isAborted = true;
+  }
+}
 
 class ContestLeaderboardSyncService {
+  static cooldownUntil = null;
+  static cooldownReason = null;
+  static cooldownStart = null;
+  static pageRetries = new Map();
+
   /**
    * Syncs LeetCode leaderboard data and updates ContestAttendance + AttendanceRecords.
    * 
@@ -38,8 +88,17 @@ class ContestLeaderboardSyncService {
       throw new Error('Academic batch is required for attendance synchronization.');
     }
 
+    const normalizedSlug = contestSlug.trim().toLowerCase();
+
+    // Cooldown check
+    if (ContestLeaderboardSyncService.cooldownUntil && Date.now() < ContestLeaderboardSyncService.cooldownUntil.getTime()) {
+      const error = new Error(`Contest synchronization suspended due to Cloudflare cooldown. Retrying allowed after ${ContestLeaderboardSyncService.cooldownUntil.toISOString()}. Reason: ${ContestLeaderboardSyncService.cooldownReason}`);
+      error.statusCode = 429;
+      throw error;
+    }
+
     // 1. Sync Locking Check
-    if (activeSyncs.has(contestSlug)) {
+    if (activeSyncLocks.has(normalizedSlug)) {
       const error = new Error('Contest synchronization already in progress.');
       error.statusCode = 409;
       throw error;
@@ -58,7 +117,7 @@ class ContestLeaderboardSyncService {
     }
 
     // Acquire lock
-    activeSyncs.add(contestSlug);
+    activeSyncLocks.add(normalizedSlug);
     console.log(`\nSync started for contest: ${contestSlug}, batch: ${batch}...`);
     if (updateProgress) {
       updateProgress(1, 'Initializing sync environment and validating slug...');
@@ -72,27 +131,17 @@ class ContestLeaderboardSyncService {
     const syncStartTime = Date.now();
 
     try {
-      // 2. Fetch page 1 to estimate start time & get total participants
-      const firstPageData = await this.fetchPageRaw(contestSlug, 1);
-      if (!firstPageData || !firstPageData.total_rank) {
-        throw new Error('Could not retrieve leaderboard data from LeetCode. Validate the contest slug.');
-      }
+      // Create Rate Limiter
+      const rateLimiter = new AdaptiveRateLimiter();
 
-      // Ensure contest exists in both Contests and LiveContests
-      const records = await this.ensureContestRecords(contestSlug, firstPageData);
+      // Ensure contest records exist (can pass null for firstPageData)
+      const records = await this.ensureContestRecords(contestSlug, null);
       liveContestId = records.liveContestId;
       contestId = records.contestId;
       contestTitle = records.contestTitle;
       contestDate = records.contestDate;
 
-      const totalParticipants = firstPageData.user_num || 0;
-      const totalPages = Math.ceil(totalParticipants / 25);
-      console.log(`Contest: ${contestTitle} | Total participants: ${totalParticipants} (~${totalPages} pages)`);
-      if (updateProgress) {
-        updateProgress(5, `Contest validated. Total participants: ${totalParticipants} (~${totalPages} pages).`);
-      }
-
-      // 3. Resolve Resume Support
+      // 3. Resolve Resume Support & create Sync Log BEFORE page 1 request
       let startPage = 1;
 
       if (forceSync) {
@@ -103,14 +152,12 @@ class ContestLeaderboardSyncService {
         await db.query("DELETE FROM ContestParticipants WHERE contest_slug = ?", [contestSlug]);
         await db.query("DELETE FROM ContestLeaderboardSnapshots WHERE contest_slug = ?", [contestSlug]);
         
-        // Create new Sync Log
         const insertLog = await db.query(`
           INSERT INTO ContestSyncLog (contestId, contest_slug, sync_status, last_page_synced, syncStarted, started_at)
           VALUES (?, ?, 'RUNNING', 0, NOW(), NOW())
         `, [liveContestId, contestSlug]);
         syncLogId = liveInsertId(insertLog);
       } else {
-        // Look for incomplete or existing log
         const unfinished = await db.query(
           "SELECT id, last_page_synced FROM ContestSyncLog WHERE contestId = ? AND sync_status = 'RUNNING' ORDER BY started_at DESC LIMIT 1",
           [liveContestId]
@@ -124,7 +171,6 @@ class ContestLeaderboardSyncService {
             updateProgress(10, `Resuming from page ${startPage}...`);
           }
         } else {
-          // Create new sync log starting from 1
           const insertLog = await db.query(`
             INSERT INTO ContestSyncLog (contestId, contest_slug, sync_status, last_page_synced, syncStarted, started_at)
             VALUES (?, ?, 'RUNNING', 0, NOW(), NOW())
@@ -133,14 +179,49 @@ class ContestLeaderboardSyncService {
         }
       }
 
-      // 4. Controlled Concurrency Pagination Loop
-      let page = startPage;
-      let hasMore = true;
-      const concurrencyLimit = 4; // Fetch 4 pages concurrently
+      // Now fetch page 1 to estimate start time & get total participants
+      const firstPageData = await this.fetchPageRaw(contestSlug, 1, syncLogId);
+      if (!firstPageData || !firstPageData.total_rank) {
+        throw new Error('Could not retrieve leaderboard data from LeetCode. Validate the contest slug.');
+      }
+
+      // Re-update records with actual page 1 details
+      await this.ensureContestRecords(contestSlug, firstPageData);
+
+      const totalParticipants = firstPageData.user_num || 0;
+      const pageSize = 25;
+      const totalPages = Math.ceil(totalParticipants / pageSize);
+      console.log(`Contest: ${contestTitle} | Total participants: ${totalParticipants} (~${totalPages} pages)`);
+      if (updateProgress) {
+        updateProgress(5, `Contest validated. Total participants: ${totalParticipants} (~${totalPages} pages).`);
+      }
+
+      // 4. Rate Limiting, Concurrency, and Queue configuration
+      const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
+      const concurrencyLimit = Math.min(
+        5, // Maximum allowed
+        Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 3
+      );
+
+      const fetchedPagesData = new Map();
+      const pageStatus = new Map(); // page -> 'data' | 'empty'
+      const pageErrors = new Map();
+
+      // If we are starting from page 1, we can reuse the already fetched firstPageData
+      if (startPage === 1) {
+        pageStatus.set(1, 'data');
+        fetchedPagesData.set(1, firstPageData);
+      }
+
+      const pageAllocator = new PageAllocator(startPage > 1 ? startPage : 2, totalPages);
+      let shouldStop = false;
+      let stopReason = 'Completed';
+      let lastSuccessfulPageSynced = startPage - 1;
       let totalParticipantsCollected = 0;
-      
-      // Load current collected count if resuming
-      if (page > 1) {
+      let writeLock = false;
+
+      // Seed starting participants count if resuming
+      if (startPage > 1) {
         const countResult = await db.query(
           "SELECT count(*) as count FROM ContestParticipants WHERE contest_slug = ?",
           [contestSlug]
@@ -148,145 +229,201 @@ class ContestLeaderboardSyncService {
         totalParticipantsCollected = countResult[0]?.count || 0;
       }
 
+      // Synchronous/Mutex Flusher for contiguous pages
+      const flushPagesToDb = async () => {
+        if (writeLock) return;
+        writeLock = true;
+        try {
+          while (fetchedPagesData.has(lastSuccessfulPageSynced + 1)) {
+            const nextPageToFlush = lastSuccessfulPageSynced + 1;
+            const pageData = fetchedPagesData.get(nextPageToFlush);
+            
+            totalParticipantsCollected = await this.savePageAndMetrics(
+              nextPageToFlush,
+              pageData,
+              contestSlug,
+              syncLogId,
+              totalPages,
+              syncStartTime,
+              updateProgress
+            );
+            
+            lastSuccessfulPageSynced = nextPageToFlush;
+            fetchedPagesData.delete(nextPageToFlush);
+          }
+        } finally {
+          writeLock = false;
+        }
+      };
+
+      const runWorker = async (workerId) => {
+        while (!shouldStop) {
+          // Check cancellation
+          if (jobId) {
+            const jobQueue = require('./jobQueueService');
+            const job = jobQueue.getJob(jobId);
+            if (job && job.status === 'CANCELLED') {
+              shouldStop = true;
+              stopReason = 'Cancellation requested';
+              pageAllocator.abort();
+              break;
+            }
+          }
+
+          const currentPage = pageAllocator.getNextPage();
+          if (currentPage === null) {
+            break;
+          }
+
+          if (maxPages && currentPage > maxPages) {
+            pageAllocator.abort();
+            break;
+          }
+
+          let currentPageDelay;
+          try {
+            console.log(`[Sync Worker] workerId=${workerId} page=${currentPage} status=FETCHING`);
+            const startTime = Date.now();
+            const data = await this.fetchPageResilient(contestSlug, currentPage, syncLogId, workerId);
+            const totalRank = data?.total_rank || [];
+            const durationMs = Date.now() - startTime;
+
+            // Decrease rate limiter base delay slowly on success
+            rateLimiter.decrease();
+
+            if (totalRank.length === 0) {
+              pageStatus.set(currentPage, 'empty');
+              console.warn(`[Sync Worker] workerId=${workerId} page=${currentPage} status=EMPTY_PAGE`);
+
+              if (hasConsecutiveEmptyPages()) {
+                pageAllocator.abort();
+                shouldStop = true;
+                stopReason = '2 consecutive empty pages';
+                break;
+              }
+            } else {
+              pageStatus.set(currentPage, 'data');
+              fetchedPagesData.set(currentPage, data);
+              
+              const retryCount = ContestLeaderboardSyncService.pageRetries.get(currentPage) || 0;
+              ContestLeaderboardSyncService.pageRetries.delete(currentPage);
+              
+              const delayMs = rateLimiter.getDelay();
+              const queueDepth = Math.max(0, totalPages - currentPage);
+              const completionPercent = Math.round((currentPage / totalPages) * 100);
+
+              console.log(`[Sync Worker] workerId=${workerId} page=${currentPage} retryCount=${retryCount} duration=${durationMs}ms delay=${delayMs}ms queueDepth=${queueDepth} completion=${completionPercent}% status=SUCCESS users=${totalRank.length}`);
+
+              currentPageDelay = delayMs;
+              
+              // Flush contiguous pages to DB sequentially
+              await flushPagesToDb();
+            }
+
+            // Sleep AFTER successful fetch
+            const sleepMs = currentPageDelay !== undefined ? currentPageDelay : rateLimiter.getDelay();
+            console.log(`[Sync Worker] workerId=${workerId} page=${currentPage} delay=${sleepMs}ms status=WAITING`);
+            await new Promise(resolve => setTimeout(resolve, sleepMs));
+          } catch (err) {
+            // Increase rate limiter base delay substantially on block/limit
+            const isCf = err instanceof NetworkService.CloudflareBlockedError || err.isCloudflare || err.status === 403 || err.status === 429;
+            if (isCf) {
+              rateLimiter.increase();
+            }
+
+            pageErrors.set(currentPage, err);
+            shouldStop = true;
+            pageAllocator.abort();
+            
+            if (isCf) {
+              stopReason = `Cloudflare block/limit on page ${currentPage} (retry limit exceeded)`;
+              console.error(`[Sync Worker] workerId=${workerId} page=${currentPage} status=CLOUDFLARE_BLOCK error="${err.message}"`);
+            } else {
+              stopReason = `Permanent fetch error on page ${currentPage}`;
+              console.error(`[Sync Worker] workerId=${workerId} page=${currentPage} status=FAILED error="${err.message}"`);
+            }
+            break;
+          }
+        }
+      };
+
+      const hasConsecutiveEmptyPages = () => {
+        for (const [p, status] of pageStatus.entries()) {
+          if (status === 'empty' && pageStatus.get(p + 1) === 'empty') {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Launch workers
+      const workers = [];
+      const actualWorkers = Math.min(concurrencyLimit, Math.max(1, totalPages - startPage + 1));
+      
+      console.log(`[Sync] Leaderboard Sync Details:
+  - Total Participants: ${totalParticipants}
+  - Page Size: ${pageSize}
+  - Calculated Total Pages: ${totalPages}
+  - Concurrency Workers: ${actualWorkers}
+  - Start Page: ${startPage}`);
+
       console.log(`Downloading pages...\n`);
 
-      while (hasMore) {
-        // Check if job is cancelled
-        if (jobId) {
-          const jobQueue = require('./jobQueueService');
-          const job = jobQueue.getJob(jobId);
-          if (job && job.status === 'CANCELLED') {
-            throw new Error('Contest synchronization was cancelled by the user.');
-          }
-        }
-
-        // Set up the next chunk of pages to download
-        const pagesToFetch = [];
-        for (let i = 0; i < concurrencyLimit; i++) {
-          const nextPage = page + i;
-          pagesToFetch.push(nextPage);
-        }
-
-        // Fetch pages concurrently with retry mechanism
-        const fetchPromises = pagesToFetch.map(p => 
-          this.fetchPageWithRetry(contestSlug, p, syncLogId).catch(err => {
-            return { error: err, page: p };
-          })
-        );
-
-        const results = await Promise.all(fetchPromises);
-
-        // Sort by page number to insert/cache sequentially
-        const sortedResults = results.map((res, i) => ({
-          page: pagesToFetch[i],
-          data: res.error ? null : res,
-          error: res.error || null
-        }));
-
-        for (const item of sortedResults) {
-          if (item.error) {
-            console.error(`[Sync] Fatal error on page ${item.page}: ${item.error.message}`);
-            throw new Error(`Pagination interrupted on page ${item.page} - ${item.error.message}`);
-          }
-
-          const ranks = item.data?.total_rank || [];
-
-          if (ranks.length === 0) {
-            hasMore = false;
-            break;
-          }
-
-          // Cache raw JSON in ContestLeaderboardSnapshots for future auditing
-          await db.query(`
-            INSERT INTO ContestLeaderboardSnapshots (contest_slug, page_number, raw_json)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE raw_json = VALUES(raw_json), downloaded_at = CURRENT_TIMESTAMP
-          `, [contestSlug, item.page, JSON.stringify(item.data)]);
-
-          // Store participants
-          const participantsBatch = [];
-          for (const ranker of ranks) {
-            if (!ranker.username) continue; // Skip malformed entries
-            
-            participantsBatch.push([
-              contestSlug,
-              ranker.username,
-              parseInt(ranker.rank, 10),
-              parseFloat(ranker.score) || 0.00,
-              parseInt(ranker.finish_time, 10) || 0,
-              ranker.avatar_url || null,
-              ranker.country_name || null,
-              item.page
-            ]);
-          }
-
-          if (participantsBatch.length > 0) {
-            await db.getPool().query(`
-              INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, finish_time, avatar, country, page_number)
-              VALUES ?
-              ON DUPLICATE KEY UPDATE
-                \`rank\` = VALUES(\`rank\`),
-                score = VALUES(score),
-                finish_time = VALUES(finish_time),
-                avatar = VALUES(avatar),
-                country = VALUES(country),
-                page_number = VALUES(page_number),
-                updated_at = CURRENT_TIMESTAMP
-            `, [participantsBatch]);
-
-            totalParticipantsCollected += participantsBatch.length;
-          }
-
-          // Update resume state in DB sync log
-          await db.query(`
-            UPDATE ContestSyncLog
-            SET last_page_synced = ?, participants_synced = ?
-            WHERE id = ?
-          `, [item.page, totalParticipantsCollected, syncLogId]);
-
-          // Progress calculation for display
-          const elapsedSec = (Date.now() - syncStartTime) / 1000;
-          const speed = totalParticipantsCollected / elapsedSec;
-          const pagesRemaining = Math.max(0, totalPages - item.page);
-          const etaSec = speed > 0 ? (pagesRemaining * 25) / speed : 0;
-          const etaStr = this.formatDuration(etaSec);
-
-          console.log(`Page ${item.page}`);
-          console.log(`Participants: ${totalParticipantsCollected}`);
-          console.log(`Speed: ${Math.round(speed)} users/sec`);
-          console.log(`ETA: ${etaStr}`);
-          console.log('-----------------------------');
-
-          const pct = Math.min(95, Math.round((item.page / totalPages) * 100)) || 10;
-          if (updateProgress) {
-            updateProgress(
-              pct,
-              `Fetched page ${item.page}/${totalPages} (${totalParticipantsCollected} users collected). Speed: ${Math.round(speed)}/s. ETA: ${etaStr}`
-            );
-          }
-
-          // If the page has fewer than 25 entries, it means it's the last page
-          if (ranks.length < 25) {
-            hasMore = false;
-            break;
-          }
-
-          if (maxPages && item.page >= maxPages) {
-            hasMore = false;
-            console.log(`[Sync] Reached maximum page limit of ${maxPages}. Ending pagination.`);
-            break;
-          }
-        }
-
-        if (!hasMore) break;
-
-        // Increment the page pointer by our concurrency batch size
-        page += concurrencyLimit;
-
-        // Rate Limiting: random delay of 200–500 ms between request batches
-        const delay = Math.floor(Math.random() * (500 - 200 + 1)) + 200;
-        await new Promise(resolve => setTimeout(resolve, delay));
+      for (let i = 1; i <= actualWorkers; i++) {
+        workers.push(runWorker(i));
       }
+
+      await Promise.all(workers);
+
+      // Check if cancellation was requested during work
+      if (shouldStop && stopReason === 'Cancellation requested') {
+        throw new Error('Contest synchronization was cancelled by the user.');
+      }
+
+      // If a fatal error occurred in any page, escalate it
+      if (pageErrors.size > 0) {
+        const firstErr = Array.from(pageErrors.values())[0];
+        throw firstErr;
+      }
+
+      // Ensure any trailing fetched pages get flushed before final step
+      await flushPagesToDb();
+
+      // 6. Graceful Completion Logging & Summary
+      const successPagesCount = Math.max(0, lastSuccessfulPageSynced - startPage + 1);
+      const totalPagesToSync = Math.max(0, totalPages - startPage + 1);
+      const failedPagesCount = pageErrors.size;
+      const coveragePct = totalPagesToSync > 0
+        ? ((successPagesCount / totalPagesToSync) * 100).toFixed(2)
+        : '100.00';
+
+      let cfBlocks = 0;
+      let netErrors = 0;
+
+      for (const [pageNo, err] of pageErrors.entries()) {
+        console.error(`[ERROR] Page ${pageNo} permanently failed: ${err.message}`);
+        const isCf = err instanceof NetworkService.CloudflareBlockedError || err.isCloudflare || err.status === 403;
+        if (isCf) {
+          cfBlocks++;
+        } else {
+          netErrors++;
+        }
+      }
+
+      const totalSyncDurationSec = Math.floor((Date.now() - syncStartTime) / 1000);
+
+      console.log(`
+Contest Sync Summary
+--------------------
+Pages Total: ${totalPagesToSync}
+Pages Success: ${successPagesCount}
+Pages Failed: ${failedPagesCount}
+Coverage: ${coveragePct}%
+Cloudflare Blocks: ${cfBlocks}
+Network Errors: ${netErrors}
+Duration: ${totalSyncDurationSec}s
+Stop Reason: ${stopReason}
+`);
 
       console.log(`\nParticipants downloaded.`);
       console.log(`Attendance comparison started...`);
@@ -294,7 +431,7 @@ class ContestLeaderboardSyncService {
         updateProgress(96, 'Syncing participants with student database inside transaction...');
       }
 
-      // 5. Attendance Synchronization inside Database Transaction
+      // 7. Attendance Synchronization inside Database Transaction
       const dbPool = db.getPool();
       const connection = await dbPool.getConnection();
 
@@ -352,13 +489,16 @@ class ContestLeaderboardSyncService {
             last_updated = CURRENT_TIMESTAMP
         `, [contestId, contestTitle, contestSlug, contestDate, contestSlug, batch]);
 
-        // Mark sync log as completed
-        const durationSec = Math.floor((Date.now() - syncStartTime) / 1000);
+        // Mark sync log as completed. Include error summary in the ContestSyncLog error field if some pages failed.
+        const summaryErrorStr = failedPagesCount > 0
+          ? `Incomplete sync. Succeeded: ${successPagesCount}, Failed: ${failedPagesCount} (Cloudflare Blocks: ${cfBlocks}, Network Errors: ${netErrors}).`
+          : null;
+
         await connection.query(`
           UPDATE ContestSyncLog
-          SET sync_status = 'COMPLETED', syncCompleted = NOW(), completed_at = NOW(), duration = ?
+          SET sync_status = 'COMPLETED', syncCompleted = NOW(), completed_at = NOW(), duration = ?, errors = ?
           WHERE id = ?
-        `, [durationSec, syncLogId]);
+        `, [totalSyncDurationSec, summaryErrorStr, syncLogId]);
 
         await connection.commit();
         console.log(`Attendance updated.`);
@@ -395,7 +535,7 @@ class ContestLeaderboardSyncService {
       const stats = {
         success: true,
         contest: contestSlug,
-        pagesFetched: parseInt(page - startPage + 1, 10),
+        pagesFetched: parseInt(successPagesCount, 10),
         participants: parseInt(totalParticipantsCollected, 10),
         students: parseInt(statsResult?.totalStudents, 10) || 0,
         present: parseInt(statsResult?.present, 10) || 0,
@@ -414,15 +554,33 @@ class ContestLeaderboardSyncService {
       console.error(`[Sync] Synchronization failed for contest ${contestSlug}:`, err.message);
       
       const isCancelled = err.message.includes('cancelled');
-      const targetStatus = isCancelled ? 'CANCELLED' : 'FAILED';
+      const isRateLimited = err instanceof NetworkService.CloudflareBlockedError || err.isCloudflare || err.status === 429 || err.status === 403;
+      const targetStatus = isCancelled ? 'CANCELLED' : (isRateLimited ? 'RATE_LIMITED' : 'FAILED');
 
-      // Update Sync Log status to FAILED or CANCELLED
+      // Update Sync Log status
       if (syncLogId) {
+        let errorDetails = err.message;
+        if (targetStatus === 'RATE_LIMITED') {
+          const retryAfterMs = (parseInt(process.env.LEETCODE_COOLDOWN_MINUTES, 10) || 15) * 60 * 1000;
+          const cooldownTime = new Date(Date.now() + retryAfterMs);
+          errorDetails = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            reason: err.message,
+            retryAfter: cooldownTime.toISOString()
+          });
+          
+          // Set static properties for in-memory cooldown check
+          ContestLeaderboardSyncService.cooldownUntil = cooldownTime;
+          ContestLeaderboardSyncService.cooldownReason = err.message;
+          ContestLeaderboardSyncService.cooldownStart = new Date();
+          console.warn(`[Sync] Suspending leaderboard sync due to Cloudflare block/limit. Cooldown active until ${cooldownTime.toISOString()}`);
+        }
+
         await db.query(`
           UPDATE ContestSyncLog
           SET sync_status = ?, errors = ?
           WHERE id = ?
-        `, [targetStatus, err.message, syncLogId]).catch(logErr => {
+        `, [targetStatus, errorDetails, syncLogId]).catch(logErr => {
           console.error('[Sync] Failed to write error status to ContestSyncLog:', logErr.message);
         });
       }
@@ -434,53 +592,157 @@ class ContestLeaderboardSyncService {
       throw err;
     } finally {
       // Release lock
-      activeSyncs.delete(contestSlug);
+      activeSyncLocks.delete(normalizedSlug);
+    }
+  }
+
+  /**
+  /**
+   * Internal helper to determine if an error is transient (should retry)
+   */
+  static isTransientError(err) {
+    const code = err.code || '';
+    const status = err.status || (err.response && err.response.status);
+
+    if (status) {
+      // Retry 403 (Cloudflare block), 429 (Rate Limit), and 5xx (Server error)
+      return status === 403 || status === 429 || (status >= 500 && status < 600);
+    }
+
+    if (
+      code === 'NETWORK_TIMEOUT' ||
+      code === 'DNS_FAILURE' ||
+      code === 'TLS_ERROR' ||
+      code === 'EMPTY_RESPONSE' ||
+      code === 'CLOUDFLARE_BLOCK' ||
+      code === 'HTTP_403' ||
+      code === 'HTTP_429'
+    ) {
+      return true;
+    }
+
+    if (code === 'HTTP_404' || code === 'INVALID_CONTEST') {
+      return false;
+    }
+
+    const message = (err.message || '').toLowerCase();
+    return (
+      err.name === 'CloudflareBlockedError' ||
+      err.isCloudflare ||
+      message.includes('network') ||
+      message.includes('timeout') ||
+      message.includes('econnreset') ||
+      message.includes('enotfound') ||
+      message.includes('econnrefused') ||
+      message.includes('etimedout') ||
+      message.includes('socket') ||
+      message.includes('cli curl execution failed')
+    );
+  }
+
+  /**
+   * Internal helper to fetch a ranking page with resilience rules:
+   * 1. If it returns Cloudflare 403/429 (or CloudflareBlockedError/Transient Network Failure):
+   *    - Retry ONLY the SAME page.
+   *    - Maximum retries: 3.
+   *    - Delay: exponential backoff (e.g. Attempt 1 -> 1s, Attempt 2 -> 2s, Attempt 3 -> 4s) with random jitter.
+   *    - If all 3 retries fail, throw error, causing the entire synchronization to STOP.
+   * 2. If it returns an empty total_rank:
+   *    - Retry once.
+   *    - If still empty, return empty response (handled by consecutive empty pages stopping logic).
+   */
+  static async fetchPageResilient(contestSlug, page, syncLogId = null, workerId = 'Main') {
+    const baseUrl = process.env.LEETCODE_CONTEST_API || 'https://leetcode.com/contest/api/ranking';
+    const url = `${baseUrl}/${contestSlug}/?pagination=${page}&region=global_v2`;
+
+    let isEmptyPageRetryUsed = false;
+
+    while (true) {
+      let lastError = null;
+      let cfRetryCount = 0;
+      const maxCfRetries = 3;
+      let data = null;
+
+      while (cfRetryCount <= maxCfRetries) {
+        try {
+          if (syncLogId) {
+            await db.query(
+              "UPDATE ContestSyncLog SET total_requests = total_requests + 1 WHERE id = ?",
+              [syncLogId]
+            );
+          }
+
+          console.log(`[Sync Worker] workerId=${workerId} page=${page} retryAttempt=${cfRetryCount} status=REQUESTING`);
+          
+          data = await NetworkService.request(url, {
+            useCurlTransport: true,
+            timeout: 15000,
+            retries: 0 // We handle retries manually here
+          });
+
+          break;
+        } catch (err) {
+          lastError = err;
+          const isTransient = this.isTransientError(err);
+          const status = err.status || (err.response && err.response.status) || 'NETWORK_ERROR';
+          const isCf = err instanceof NetworkService.CloudflareBlockedError || err.isCloudflare || status === 403;
+
+          console.warn(`[Sync Worker] workerId=${workerId} page=${page} retryAttempt=${cfRetryCount} status=TRANSIENT_FAILURE type=${isCf ? 'CLOUDFLARE' : 'OTHER'} error="${err.message}"`);
+          
+          if (syncLogId) {
+            await db.query(`
+              UPDATE ContestSyncLog 
+              SET failed_requests = failed_requests + 1, 
+                  retry_count = retry_count + 1
+              WHERE id = ?
+            `, [syncLogId]);
+          }
+
+          if (isTransient && cfRetryCount < maxCfRetries) {
+            cfRetryCount++;
+            const baseDelay = 1000 * Math.pow(2, cfRetryCount - 1);
+            const jitter = Math.floor(Math.random() * 500) + 250;
+            const delay = baseDelay + jitter;
+            
+            console.warn(`[Sync Worker] workerId=${workerId} page=${page} retryAttempt=${cfRetryCount} delay=${delay}ms status=BACKOFF`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          } else {
+            break;
+          }
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      const totalRank = data?.total_rank || [];
+      if (totalRank.length === 0) {
+        if (!isEmptyPageRetryUsed) {
+          isEmptyPageRetryUsed = true;
+          console.warn(`[Sync Worker] workerId=${workerId} page=${page} status=EMPTY_RETRYING`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue;
+        }
+      }
+
+      ContestLeaderboardSyncService.pageRetries.set(page, cfRetryCount);
+      return data;
     }
   }
 
   /**
    * Fetches a contest ranking page raw JSON response.
    */
-  static async fetchPageRaw(contestSlug, page) {
-    const baseUrl = process.env.LEETCODE_CONTEST_API || 'https://leetcode.com/contest/api/ranking';
-    const url = `${baseUrl}/${contestSlug}/?pagination=${page}&region=global_v2`;
-
-    return await NetworkService.request(url, {
-      useCurlTransport: true,
-      timeout: 15000
-    });
+  static async fetchPageRaw(contestSlug, page, syncLogId = null) {
+    return await this.fetchPageResilient(contestSlug, page, syncLogId, 'Raw');
   }
 
   /**
    * Fetches a contest ranking page with retries and exponential backoff.
    */
-  static async fetchPageWithRetry(contestSlug, page, syncLogId, retries = 3) {
-    const baseUrl = process.env.LEETCODE_CONTEST_API || 'https://leetcode.com/contest/api/ranking';
-    const url = `${baseUrl}/${contestSlug}/?pagination=${page}&region=global_v2`;
-
-    return await NetworkService.request(url, {
-      useCurlTransport: true,
-      timeout: 15000,
-      retries,
-      backoffFactor: 1500,
-      onRequestAttempt: async (attempt) => {
-        // Track request in sync log
-        await db.query(
-          "UPDATE ContestSyncLog SET total_requests = total_requests + 1 WHERE id = ?",
-          [syncLogId]
-        );
-
-        if (attempt > 1) {
-          // Track failure/retry in sync log
-          await db.query(`
-            UPDATE ContestSyncLog 
-            SET failed_requests = failed_requests + 1, 
-                retry_count = retry_count + 1
-            WHERE id = ?
-          `, [syncLogId]);
-        }
-      }
-    });
+  static async fetchPageWithRetry(contestSlug, page, syncLogId) {
+    return await this.fetchPageResilient(contestSlug, page, syncLogId, 'RetryHelper');
   }
 
   /**
@@ -564,6 +826,88 @@ class ContestLeaderboardSyncService {
       contestDate: startTime,
       contest_status: contestStatus
     };
+  }
+
+  /**
+   * Saves page ranks to database, caches raw snapshot, and updates ContestSyncLog progress metrics.
+   */
+  static async savePageAndMetrics(page, pageData, contestSlug, syncLogId, totalPages, syncStartTime, updateProgress) {
+    const ranks = pageData?.total_rank || [];
+
+    // Cache raw JSON in ContestLeaderboardSnapshots for future auditing
+    await db.query(`
+      INSERT INTO ContestLeaderboardSnapshots (contest_slug, page_number, raw_json)
+      VALUES (?, ?, ?)
+      ON DUPLICATE KEY UPDATE raw_json = VALUES(raw_json), downloaded_at = CURRENT_TIMESTAMP
+    `, [contestSlug, page, JSON.stringify(pageData)]);
+
+    // Store participants
+    const participantsBatch = [];
+    for (const ranker of ranks) {
+      if (!ranker.username) continue; // Skip malformed entries
+      
+      participantsBatch.push([
+        contestSlug,
+        ranker.username,
+        parseInt(ranker.rank, 10),
+        parseFloat(ranker.score) || 0.00,
+        parseInt(ranker.finish_time, 10) || 0,
+        ranker.avatar_url || null,
+        ranker.country_name || null,
+        page
+      ]);
+    }
+
+    if (participantsBatch.length > 0) {
+      await db.getPool().query(`
+        INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, finish_time, avatar, country, page_number)
+        VALUES ?
+        ON DUPLICATE KEY UPDATE
+          \`rank\` = VALUES(\`rank\`),
+          score = VALUES(score),
+          finish_time = VALUES(finish_time),
+          avatar = VALUES(avatar),
+          country = VALUES(country),
+          page_number = VALUES(page_number),
+          updated_at = CURRENT_TIMESTAMP
+      `, [participantsBatch]);
+    }
+
+    // Get current total participant count for the log
+    const countResult = await db.query(
+      "SELECT count(*) as count FROM ContestParticipants WHERE contest_slug = ?",
+      [contestSlug]
+    );
+    const totalParticipantsCollected = countResult[0]?.count || 0;
+
+    // Update resume state in DB sync log
+    await db.query(`
+      UPDATE ContestSyncLog
+      SET last_page_synced = ?, participants_synced = ?
+      WHERE id = ?
+    `, [page, totalParticipantsCollected, syncLogId]);
+
+    // Progress calculation for display
+    const elapsedSec = (Date.now() - syncStartTime) / 1000;
+    const speed = totalParticipantsCollected / elapsedSec;
+    const remainingPages = Math.max(0, totalPages - page);
+    const etaSec = speed > 0 ? (remainingPages * 25) / speed : 0;
+    const etaStr = this.formatDuration(etaSec);
+
+    console.log(`[Sync Worker] Processed Page ${page}`);
+    console.log(`[Sync Worker] Participants Collected: ${totalParticipantsCollected}`);
+    console.log(`[Sync Worker] Remaining Pages: ${remainingPages}`);
+    console.log('-----------------------------');
+
+    const pct = Math.min(95, Math.round((page / totalPages) * 100)) || 10;
+    if (updateProgress) {
+      updateProgress(
+        pct,
+        `Processed page ${page}/${totalPages} (${totalParticipantsCollected} users collected). ETA: ${etaStr}`
+      );
+    }
+    
+    return totalParticipantsCollected;
   }
 
   /**
