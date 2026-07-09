@@ -77,9 +77,12 @@ async function detectCurlCapabilities() {
         compression.push('zstd');
       }
       
+      const verMatch = versionLine.match(/curl\s+([^\s]+)/i);
+      const curlVer = verMatch ? verMatch[1] : versionLine.trim();
+
       curlCapabilities = {
         supported: true,
-        version: versionLine.trim(),
+        version: curlVer,
         sslBackend,
         features,
         protocols,
@@ -88,13 +91,16 @@ async function detectCurlCapabilities() {
       };
       
       console.log(`
-=== [NetworkService Startup Diagnostics] ===
-cURL Version: ${curlCapabilities.version}
-SSL Backend: ${curlCapabilities.sslBackend}
-Supported Protocols: ${protocols.join(', ')}
-Supported Features: ${features.join(', ')}
-Supported Compression: ${compression.join(', ')}
-============================================
+Curl Version
+${curlVer}
+SSL Backend
+${sslBackend}
+Protocols
+${protocols.join(' ').toUpperCase()}
+Features
+${features.join('\n')}
+Compression
+${compression.join('\n')}
 `);
       resolve(curlCapabilities);
     });
@@ -107,43 +113,43 @@ Supported Compression: ${compression.join(', ')}
 detectCurlCapabilities().catch(err => console.error('[NetworkService] Failed to detect cURL capabilities:', err));
 
 function classifyCurlError(err, stdout, stderr) {
-  const code = err.code;
+  const exitCode = err.code !== undefined ? Number(err.code) : null;
   const stderrStr = (stderr || '').toLowerCase();
   
-  if (err.killed || code === 28 || stderrStr.includes('timed out') || stderrStr.includes('timeout')) {
+  if (err.killed || exitCode === 28 || stderrStr.includes('timed out') || stderrStr.includes('timeout')) {
     return { code: 'NETWORK_TIMEOUT', message: 'Connection timed out after 15 seconds' };
   }
-  if (code === 127 || stderrStr.includes('not found') || stderrStr.includes('not recognized')) {
+  if (exitCode === 127 || stderrStr.includes('not found') || stderrStr.includes('not recognized')) {
     return { code: 'CURL_NOT_FOUND', message: 'curl executable not found in PATH' };
   }
-  if (code === 6 || stderrStr.includes('could not resolve host') || stderrStr.includes('resolve')) {
+  if (exitCode === 6 || stderrStr.includes('could not resolve host') || stderrStr.includes('resolve')) {
     return { code: 'DNS_FAILURE', message: 'DNS resolution failed' };
   }
-  if (code === 7 || stderrStr.includes('connection refused') || stderrStr.includes('failed to connect')) {
+  if (exitCode === 7 || stderrStr.includes('connection refused') || stderrStr.includes('failed to connect')) {
     return { code: 'CONNECTION_FAILED', message: 'Failed to connect to host (connection refused)' };
   }
-  if (code === 35 || stderrStr.includes('tls handshake') || stderrStr.includes('handshake failed')) {
+  if (exitCode === 35 || stderrStr.includes('tls handshake') || stderrStr.includes('handshake failed')) {
     return { code: 'TLS_HANDSHAKE_FAILED', message: 'TLS handshake failed' };
   }
-  if (code === 47 || stderrStr.includes('redirect loop') || stderrStr.includes('too many redirects')) {
+  if (exitCode === 47 || stderrStr.includes('redirect loop') || stderrStr.includes('too many redirects')) {
     return { code: 'REDIRECT_LOOP', message: 'Maximum redirect limit exceeded (redirect loop)' };
   }
-  if (code === 51 || stderrStr.includes('ssl certificate') || stderrStr.includes('peer certificate')) {
+  if (exitCode === 51 || stderrStr.includes('ssl certificate') || stderrStr.includes('peer certificate')) {
     return { code: 'SSL_CERTIFICATE_ERROR', message: 'SSL certificate validation failed' };
   }
-  if (code === 52 || stderrStr.includes('empty response') || stderrStr.includes('returned nothing')) {
+  if (exitCode === 52 || stderrStr.includes('empty response') || stderrStr.includes('returned nothing')) {
     return { code: 'EMPTY_RESPONSE', message: 'Server returned nothing (empty response)' };
   }
-  if (code === 56 || stderrStr.includes('connection reset') || stderrStr.includes('recv failure')) {
+  if (exitCode === 56 || stderrStr.includes('connection reset') || stderrStr.includes('recv failure')) {
     return { code: 'CONNECTION_RESET', message: 'Connection reset by peer' };
   }
-  if (code === 60 || stderrStr.includes('certificate verify') || stderrStr.includes('ca cert')) {
+  if (exitCode === 60 || stderrStr.includes('certificate verify') || stderrStr.includes('ca cert')) {
     return { code: 'SSL_CERTIFICATE_VERIFY_FAILED', message: 'TLS certificate verification failed' };
   }
-  if (code === 61 || stderrStr.includes('unrecognized transfer encoding') || stderrStr.includes('bad content encoding') || stderrStr.includes('unrecognized content encoding')) {
-    return { code: 'UNSUPPORTED_CONTENT_ENCODING', message: 'Unrecognized content or transfer encoding (cURL failed to decompress response - possibly unsupported Brotli/br compression)' };
+  if (exitCode === 61 || stderrStr.includes('unrecognized transfer encoding') || stderrStr.includes('bad content encoding') || stderrStr.includes('unrecognized content encoding')) {
+    return { code: 'UNSUPPORTED_CONTENT_ENCODING', message: 'Unrecognized transfer or content encoding (cURL failed to decompress response - server sent Brotli or other unsupported compression format that this cURL binary cannot decode)' };
   }
-  return { code: `CURL_EXIT_CODE_${code}`, message: `cURL exited with code ${code}: ${stderr || err.message}` };
+  return { code: `CURL_EXIT_CODE_${err.code}`, message: `cURL exited with code ${err.code}: ${stderr || err.message}` };
 }
 
 function isRetryableError(err) {
@@ -253,23 +259,36 @@ Retry Decision: ${retryDecision}
     const requestId = `REQ-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     const method = (options.method || 'GET').toUpperCase();
 
-    const capabilities = await detectCurlCapabilities();
-    let acceptEncoding = 'gzip, deflate';
-    if (capabilities && capabilities.compression) {
-      acceptEncoding = capabilities.compression.join(', ');
-    }
-
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': acceptEncoding,
       'Referer': 'https://leetcode.com/contest/',
       'Origin': 'https://leetcode.com',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       ...options.headers
     };
+
+    // Capability-based compression filtering for manual Accept-Encoding headers
+    const acceptEncodingKey = Object.keys(headers).find(k => k.toLowerCase() === 'accept-encoding');
+    if (acceptEncodingKey) {
+      const capabilities = await detectCurlCapabilities();
+      const requestedEncodings = headers[acceptEncodingKey]
+        .split(',')
+        .map(s => s.trim().toLowerCase());
+      
+      const supportedEncodings = requestedEncodings.filter(enc => 
+        capabilities.compression.includes(enc)
+      );
+
+      if (supportedEncodings.length > 0) {
+        headers[acceptEncodingKey] = supportedEncodings.join(', ');
+      } else {
+        // Automatically downgrade to only supported encodings instead of failing
+        headers[acceptEncodingKey] = capabilities.compression.join(', ');
+      }
+    }
     const timeout = options.timeout || 15000;
     
     // Parse contest slug and page from URL
@@ -477,9 +496,6 @@ Retry Decision: ${retryDecision}
       let headerFlags = '';
       if (headers) {
         for (const [key, value] of Object.entries(headers)) {
-          if (key.toLowerCase() === 'accept-encoding') {
-            continue;
-          }
           const escapedValue = String(value).replace(/"/g, '\\"');
           headerFlags += ` -H "${key}: ${escapedValue}"`;
         }
@@ -635,6 +651,13 @@ Retry Decision: ${retryDecision}
         }
       });
     });
+  }
+
+  /**
+   * Exposes detectCurlCapabilities externally.
+   */
+  static async detectCurlCapabilities() {
+    return await detectCurlCapabilities();
   }
 
   /**

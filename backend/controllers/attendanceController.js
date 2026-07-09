@@ -4,6 +4,7 @@ const leetcode = require('../utils/leetcode');
 const { getUserCodeChefStats } = require('../utils/codechef');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const { normalizeUsername } = require('../utils/usernameNormalizer');
+const attendanceService = require('../services/attendanceService');
 
 // Helper to parse dates timezone-independently
 function parseDateOnly(dateInput) {
@@ -279,181 +280,28 @@ async function processContestUpload(req, res) {
 async function getContestAttendance(req, res) {
   const { contestId } = req.params;
   let { batch, department, section } = req.query;
-  const cName = contestId;
 
-  // Normalize batch YYYY-YYYY format to YYYY-YY
-  batch = normalizeBatchToShort(batch);
-
-  if (!cName) {
+  if (!contestId) {
     return res.status(400).json({ success: false, message: 'Contest name/ID is required.' });
   }
 
   try {
-    // 1. Resolve the contest and its platform
-    const contestRows = await db.query(
-      "SELECT contest_id, platform, title, start_time, slug, contest_status, duration FROM Contests WHERE contest_id = ? OR slug = ?",
-      [cName, cName]
-    );
-    if (contestRows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Contest not found.' });
-    }
-    const contest = contestRows[0];
-    const platform = (contest.platform || 'LeetCode').toLowerCase();
-
-    // Map platform parameters
-    const usernameCol = `${platform}_username`;
-    const profileTable = platform === 'leetcode' ? 'LeetCodeProfiles' : 
-                         platform === 'codechef' ? 'CodeChefProfiles' : 'CodeforcesProfiles';
-    const defaultRating = platform === 'leetcode' ? 1500 : 0;
-
-    // 2. Fetch all active students, left-joining correct platform profile
-    let sql = `
-      SELECT u.id as student_id, u.roll_no as register_number, u.name, u.department, u.section, u.academic_batch as academic_year,
-             u.${usernameCol} as platform_username,
-             u.academic_start_date, u.academic_end_date,
-             ar.attendance_status, ar.attendance_source, ar.last_updated, ar.remarks,
-             ar.rank as contest_rank, ar.score as problems_solved, ar.rating_change,
-             (SELECT registration_time FROM Registrations r WHERE r.user_id = u.id AND r.contest_id = ?) as registration_time,
-             (SELECT join_time FROM ParticipationLogs p WHERE p.user_id = u.id AND p.contest_id = ?) as join_time,
-             (SELECT ca.attendanceStatus FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = u.id AND lc.contestSlug = ? LIMIT 1) as sync_status,
-             IFNULL(lp.current_rating, ${defaultRating}) as current_rating
-      FROM Users u
-      LEFT JOIN AttendanceRecords ar ON u.id = ar.user_id AND ar.contest_id = ?
-      LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
-      WHERE u.status = 'active'
-    `;
-    const params = [contest.contest_id, contest.contest_id, contest.slug, contest.contest_id];
-
-    if (batch) {
-      sql += ` AND u.academic_batch = ?`;
-      params.push(batch);
-    }
-    if (department) {
-      sql += ` AND u.department = ?`;
-      params.push(department);
-    }
-    if (section) {
-      sql += ` AND u.section = ?`;
-      params.push(section);
-    }
-    sql += ` ORDER BY u.roll_no ASC`;
-
-    const list = await db.query(sql, params);
-    const now = new Date();
-
-    const eligibleList = list.filter(item => {
-      if (!item.academic_start_date || !item.academic_end_date) return false;
-      const cDate = parseDateOnly(contest.start_time);
-      const start = parseDateOnly(item.academic_start_date);
-      const end = parseDateOnly(item.academic_end_date);
-      end.setHours(23, 59, 59, 999);
-      return cDate >= start && cDate <= end;
-    });
-
-    const formatted = eligibleList.map(item => {
-      const cDateVal = new Date(contest.start_time);
-      const durationMs = (contest.duration || 5400) * 1000;
-      const endTime = new Date(cDateVal.getTime() + durationMs);
-      const isOngoing = cDateVal <= now && endTime > now;
-      const isUnrated = contest.contest_status && contest.contest_status.toLowerCase() === 'unrated';
-      const isRegistered = item.registration_time !== null;
-
-      // Determine final status and reason based on required Priority Order
-      let status = 'absent';
-      let reason = null;
-
-      if (isOngoing || now < cDateVal) {
-        status = 'contest in progress';
-      } else {
-        // Priority 1: Manual Override
-        if (item.attendance_source === 'MANUAL' && item.attendance_status) {
-          const hasAttended = item.attendance_status === 'PRESENT';
-          status = hasAttended ? 'present' : 'absent';
-          reason = hasAttended ? 'Manual Override (PRESENT)' : 'Manual Override (ABSENT)';
-        }
-        // Priority 2: Official Leaderboard (from ContestAttendance)
-        else if (item.sync_status === 'Present' || item.sync_status === 'Participating') {
-          status = 'present';
-          reason = 'Participated via official leaderboard';
-        }
-        // Priority 3: Contest Rank
-        else if (item.contest_rank !== null && item.contest_rank > 0) {
-          status = 'present';
-          reason = 'Participated via official leaderboard';
-        }
-        // Priority 4: Participation Log (join_time exists)
-        else if (item.join_time !== null) {
-          status = 'present';
-          reason = 'Participation Log';
-        }
-        // Priority 4b: Already marked PRESENT in database
-        else if (item.attendance_status === 'PRESENT') {
-          status = 'present';
-          reason = 'Participated via official leaderboard';
-        }
-        // Priority 5: Incomplete Leaderboard
-        else if (item.sync_status === 'Unknown') {
-          status = 'unknown';
-          reason = 'Leaderboard Sync Incomplete';
-        }
-        // Priority 6: Registered but missing
-        else if (isRegistered) {
-          status = 'absent';
-          reason = 'Registered but Did Not Participate';
-        }
-        // Priority 7: Not Registered
-        else {
-          status = 'absent';
-          reason = 'Not Registered';
-        }
-      }
-
-      // Print diagnostics block for every student as requested
-      const normalizedUsername = normalizeUsername(item.platform_username);
-      const isFoundInLeaderboard = item.sync_status === 'Present' || item.sync_status === 'Participating' || (item.contest_rank !== null && item.contest_rank > 0);
-      console.log(`[ATTENDANCE DECISION]\nStudent:\n${item.student_id}\n\nUsername:\n${item.platform_username || ''}\n\nNormalized:\n${normalizedUsername}\n\nRegistered:\n${isRegistered}\n\nLeaderboard:\n${isFoundInLeaderboard}\n\nContest Rank:\n${item.contest_rank}\n\nJoin Time:\n${item.join_time}\n\nContestAttendance:\n${item.sync_status || 'null'}\n\nAttendanceRecords:\n${item.attendance_status || 'null'}\n\nDecision:\n${status.toUpperCase()}\n\nReason:\n${reason || 'null'}\n====================================================`);
-
-      return {
-        student_id: item.student_id,
-        register_number: item.register_number,
-        name: item.name,
-        department: item.department,
-        section: item.section,
-        academic_year: item.academic_year,
-        platform_username: item.platform_username || '',
-        contest_date: contest.start_time,
-        contest_slug: contest.slug,
-        contest_status: contest.contest_status,
-        registration_time: item.registration_time,
-        join_time: item.join_time,
-        current_rating: item.current_rating,
-        status: status,
-        marked_by: item.attendance_source === 'MANUAL' ? 'faculty' : 'system',
-        remarks: item.remarks,
-        last_updated: item.last_updated,
-        contest_rank: item.contest_rank,
-        rating_change: item.rating_change || 0,
-        problems_solved: item.problems_solved !== null ? item.problems_solved : (status === 'present' ? 4 : 0),
-        total_problems: platform === 'leetcode' ? 4 : null,
-        reason: reason
-      };
-    });
-
-    const presentList = formatted.filter(s => s.status === 'present');
-    const absentList = formatted.filter(s => s.status === 'absent');
-
-    return res.json({ 
-      success: true, 
-      count: formatted.length, 
-      data: formatted,
-      attended: presentList,
-      missed: absentList
+    const result = await attendanceService.getContestParticipantsDetails(contestId, { batch, department, section });
+    res.set('Cache-Control', 'no-store'); // prevent browser from caching attendance data
+    return res.json({
+      success: true,
+      count: result.count,
+      data: result.data,
+      attended: result.attended,
+      missed: result.missed,
+      validationStatus: result.validationStatus,
+      validationIssues: result.validationIssues
     });
   } catch (error) {
     console.error('[Attendance API Log] Error fetching contest attendance:', error.stack || error);
     return res.status(500).json({ 
       success: false, 
-      message: 'Failed to retrieve attendance list.', 
+      message: error.message || 'Failed to retrieve attendance list.', 
       error: process.env.NODE_ENV !== 'production' ? error.stack || error.message : undefined 
     });
   }

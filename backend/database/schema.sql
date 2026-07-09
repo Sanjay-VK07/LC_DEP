@@ -64,6 +64,7 @@ CREATE TABLE Contests (
     contest_number INT NOT NULL,
     start_time DATETIME NOT NULL,
     duration INT,
+    total_problems INT DEFAULT 4,
     contest_status ENUM('Rated','Unrated') DEFAULT 'Rated',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_start_time (start_time)
@@ -104,6 +105,7 @@ CREATE TABLE Contest_Attendance (
     evidence_entrahub_verified BOOLEAN DEFAULT FALSE,
     `rank` INT DEFAULT NULL,
     score DECIMAL(10,2) DEFAULT NULL,
+    problems_solved INT DEFAULT 0,
     rating_before DECIMAL(8,3) DEFAULT NULL,
     rating_after DECIMAL(8,3) DEFAULT NULL,
     rating_change DECIMAL(8,3) DEFAULT NULL,
@@ -186,6 +188,7 @@ CREATE TABLE IF NOT EXISTS ContestParticipants (
     username VARCHAR(100) NOT NULL,
     `rank` INT NOT NULL,
     score DECIMAL(10,2) NOT NULL,
+    problems_solved INT DEFAULT 0,
     finish_time INT NOT NULL,
     avatar VARCHAR(255) DEFAULT NULL,
     country VARCHAR(100) DEFAULT NULL,

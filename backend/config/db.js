@@ -163,6 +163,30 @@ async function initializeDatabase() {
           FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB
       `);
+      // Add problems_solved column to ContestParticipants if missing
+      try {
+        await pool.query("ALTER TABLE ContestParticipants ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+        console.log("[DB] Added problems_solved column to ContestParticipants table.");
+      } catch (err) {
+        if (err.code !== 'ER_DUP_FIELDNAME') console.error("[DB] Failed to alter ContestParticipants:", err.message);
+      }
+
+      // Add problems_solved column to AttendanceRecords if missing
+      try {
+        await pool.query("ALTER TABLE AttendanceRecords ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+        console.log("[DB] Added problems_solved column to AttendanceRecords table.");
+      } catch (err) {
+        if (err.code !== 'ER_DUP_FIELDNAME') console.error("[DB] Failed to alter AttendanceRecords:", err.message);
+      }
+
+      // Add total_problems column to Contests if missing
+      try {
+        await pool.query("ALTER TABLE Contests ADD COLUMN total_problems INT DEFAULT 4 AFTER duration");
+        console.log("[DB] Added total_problems column to Contests table.");
+      } catch (err) {
+        if (err.code !== 'ER_DUP_FIELDNAME') console.error("[DB] Failed to alter Contests:", err.message);
+      }
+
     } else {
       console.log('[DB] Users table not yet available (pending migration). Skipping dependent table creation.');
     }

@@ -186,7 +186,7 @@ class LeetCodeProvider extends ContestProvider {
             username: item.username,
             userSlug: item.username,
             rank: item.rank,
-            solved: item.solved || (item.score ? Math.floor(item.score / 3) : 0),
+            solved: item.problemsSolved ?? 0,
             score: item.score ? parseFloat(item.score) : 0.00,
             penalty: item.finishTime || 0,
             ratingBefore: null
@@ -214,7 +214,7 @@ class LeetCodeProvider extends ContestProvider {
     // 1. Try to load from database first
     try {
       const rows = await db.query(
-        "SELECT username, `rank`, score, finish_time FROM ContestParticipants WHERE contest_slug = ?",
+        "SELECT username, `rank`, score, problems_solved, finish_time FROM ContestParticipants WHERE contest_slug = ?",
         [contestSlug]
       );
       if (rows.length > 0) {
@@ -226,7 +226,7 @@ class LeetCodeProvider extends ContestProvider {
             username: r.username,
             userSlug: r.username,
             rank: r.rank,
-            solved: r.score ? Math.floor(r.score / 3) : 0,
+            solved: r.problems_solved ?? 0,
             score: parseFloat(r.score || 0),
             penalty: r.finish_time,
             ratingBefore: null

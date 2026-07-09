@@ -401,6 +401,7 @@ function Contests() {
   useEffect(() => {
     setCurrentPage(1);
     setExpandedContestId(null);
+    setContestParticipants({});  // clear stale expanded data when filters change
   }, [selectedStudentId, selectedBatch, filterType, filterStatus, activePlatform]);
 
   /* ── derived date limits for frontend filtering (fallback) ── */
@@ -594,17 +595,24 @@ function Contests() {
   };
 
   const fetchParticipants = async (contestId) => {
-    if (contestParticipants[contestId]) return;
+    // Always re-fetch when called — filters may have changed since last fetch.
     setLoadingParticipants(p => ({ ...p, [contestId]: true }));
     try {
-      const res = await axios.get(`/api/attendance/contest/${contestId}`);
+      // Task 2 fix: propagate the same batch filter used by the summary endpoint.
+      const res = await axios.get(`/api/attendance/contest/${contestId}`, {
+        params: {
+          batch: selectedBatch || undefined
+        }
+      });
       if (res.data.success) {
         setContestParticipants(p => ({
           ...p,
           [contestId]: {
             attended: res.data.attended || [],
             missed: res.data.missed || [],
-            raw: res.data.data || []
+            raw: res.data.data || [],
+            validationStatus: res.data.validationStatus,
+            validationIssues: res.data.validationIssues
           }
         }));
       }
@@ -1476,6 +1484,13 @@ function Contests() {
                                 </span>
                               </div>
 
+                              {(contestParticipants[c.id]?.validationStatus === 'FAILED' || contestParticipants[c.id]?.validationStatus === 'INVALID_METRICS') && (
+                                <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-250 dark:border-amber-900/60 rounded-xl text-xs text-amber-750 dark:text-amber-400 font-bold flex items-center gap-2">
+                                  <AlertCircle className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                                  <span>⚠ Contest data partially invalid: {contestParticipants[c.id].validationIssues?.join(', ')}</span>
+                                </div>
+                              )}
+
                               {selectedStudentId === 'all' ? (
                                 <div className="space-y-6">
                                   {loadingParticipants[c.id] ? (
@@ -1520,7 +1535,9 @@ function Contests() {
                                                       </td>
                                                       {activePlatform === 'leetcode' && (
                                                         <td className="py-2.5 px-3 text-right font-bold text-slate-650 dark:text-slate-400">
-                                                          {p.problems_solved !== null ? `${p.problems_solved}/4` : '—'}
+                                                          {p.contest_rank != null
+                                                            ? `${p.problems_solved}/${p.total_problems || 4} (${p.contest_score || 0} pts)`
+                                                            : '—'}
                                                         </td>
                                                       )}
                                                       <td className="py-2.5 px-3 text-right font-extrabold">
@@ -1638,7 +1655,7 @@ function Contests() {
                                         {c.problems_solved !== null && (
                                           <div>
                                             <span className="text-[10px] text-slate-400 block font-bold">Solved</span>
-                                            <span className="font-extrabold text-slate-700 dark:text-slate-200">{c.problems_solved} / {c.total_problems || 4}</span>
+                                            <span className="font-extrabold text-slate-700 dark:text-slate-200">{c.problems_solved} / {c.total_problems || 4} ({c.contest_score || 0} pts)</span>
                                           </div>
                                         )}
                                       </div>
