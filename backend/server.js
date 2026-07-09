@@ -138,6 +138,12 @@ async function startServer() {
     await initializeDatabase();
     await validateDatabaseSchema();
 
+    // Non-blocking startup integrity audit for Contest Master
+    const ContestIntegrityValidator = require('./services/contestIntegrityValidator');
+    ContestIntegrityValidator.run().catch(err => {
+      console.error('[Server] Contest integrity validation encountered an error:', err.message);
+    });
+
     // Seed master contests in the background
     seedMasterContests().then(res => {
       console.log(`[Server] Background master contest seeding completed: ${res.count} contests processed.`);

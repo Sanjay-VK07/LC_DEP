@@ -1498,6 +1498,62 @@ async function run() {
       console.log('[Migration] Migration "solved_count_and_score_consistency" completed.');
     }
 
+    // ==========================================
+    // MIGRATION 16: contest_participants_integrity
+    // ==========================================
+    const rows16 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'contest_participants_integrity'"
+    );
+
+    if (rows16.length > 0) {
+      console.log('[Migration] Migration "contest_participants_integrity" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Applying Contest Participants Integrity (FK to Contests.slug)...');
+
+      // Step 1: Remove any orphaned ContestParticipants rows that have no matching Contests.slug.
+      // These are test/orphaned entries that would block the FK creation.
+      const orphanedCP = await db.query(`
+        SELECT COUNT(*) AS cnt
+        FROM ContestParticipants cp
+        LEFT JOIN Contests c ON cp.contest_slug = c.slug
+        WHERE c.slug IS NULL
+      `);
+      const orphanCount = orphanedCP[0]?.cnt || 0;
+      if (orphanCount > 0) {
+        console.log(`[Migration] Removing ${orphanCount} orphaned ContestParticipants rows before applying FK...`);
+        await db.query(`
+          DELETE cp FROM ContestParticipants cp
+          LEFT JOIN Contests c ON cp.contest_slug = c.slug
+          WHERE c.slug IS NULL
+        `);
+      }
+
+      // Step 2: Apply foreign key constraint
+      try {
+        await db.query(`
+          ALTER TABLE ContestParticipants
+          ADD CONSTRAINT fk_cp_contest_slug
+          FOREIGN KEY (contest_slug)
+          REFERENCES Contests(slug)
+          ON DELETE CASCADE
+        `);
+        console.log('[Migration] Successfully created constraint fk_cp_contest_slug on ContestParticipants.');
+      } catch (err) {
+        if (err.code === 'ER_DUP_KEYNAME' || err.message.includes('Duplicate') || err.message.includes('already exists')) {
+          console.log('[Migration] Constraint fk_cp_contest_slug already exists.');
+        } else {
+          console.warn('[Migration] WARNING: Could not apply fk_cp_contest_slug:', err.message);
+        }
+      }
+
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('contest_participants_integrity')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "contest_participants_integrity" completed.');
+    }
+
     process.exit(0);
   } catch (err) {
     console.error('[Migration] Migration failed:', err.message);

@@ -287,7 +287,9 @@ async function getContestAttendance(req, res) {
 
   try {
     const result = await attendanceService.getContestParticipantsDetails(contestId, { batch, department, section });
-    res.set('Cache-Control', 'no-store'); // prevent browser from caching attendance data
+    if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'no-store'); // prevent browser from caching attendance data
+    }
     return res.json({
       success: true,
       count: result.count,

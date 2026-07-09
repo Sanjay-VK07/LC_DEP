@@ -62,18 +62,40 @@ class ContestAttendanceSyncService {
       platform = contest.platform || 'LeetCode';
       slug = contest.slug;
     } else {
-      realContestId = liveContest.id;
+      // ── FIX: LiveContests row exists but Contests row is missing.
+      // We MUST create the Contests row first because AttendanceRecords.contest_id
+      // is a foreign key referencing Contests.contest_id — NOT LiveContests.id.
+      // Using liveContest.id as realContestId would produce orphaned AttendanceRecords.
       platform = liveContest.platform || 'LeetCode';
       slug = liveContest.contestSlug;
+      const duration = Math.round((new Date(liveContest.endTime) - new Date(liveContest.startTime)) / 1000);
+      const contestType = slug.includes('biweekly') ? 'Biweekly' : 'Weekly';
+      const matchNum = slug.match(/contest-(\d+)/);
+      const contestNumber = matchNum ? parseInt(matchNum[1], 10) : 0;
+
+      console.log(`[Sync Worker] [FIX] Contests row missing for slug "${slug}". Creating it now...`);
+      const insertResult = await db.query(`
+        INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
+        VALUES (?, ?, ?, ?, ?, ?, 'Rated', ?, 'SYNC')
+        ON DUPLICATE KEY UPDATE title = VALUES(title), start_time = VALUES(start_time)
+      `, [liveContest.contestName, slug, contestType, contestNumber, liveContest.startTime, duration, platform]);
+
+      // Re-fetch to get the correct contest_id
+      const refetch = await db.query(
+        'SELECT contest_id FROM Contests WHERE slug = ?', [slug]
+      );
+      realContestId = refetch[0]?.contest_id || insertResult.insertId;
+
       contest = {
-        contest_id: liveContest.id,
-        platform: liveContest.platform,
+        contest_id: realContestId,
+        platform,
         title: liveContest.contestName,
         start_time: liveContest.startTime,
-        slug: liveContest.contestSlug,
+        slug,
         contest_status: 'RATED',
-        duration: Math.round((new Date(liveContest.endTime) - new Date(liveContest.startTime)) / 1000)
+        duration
       };
+      console.log(`[Sync Worker] [FIX] Contests row created/resolved. contest_id=${realContestId}, slug="${slug}"`);
     }
 
     console.log(`[Sync Worker] [DIAGNOSTICS] ========== Attendance Sync Start ==========`);

@@ -81,7 +81,9 @@ async function getPlatformAnalytics(req, res) {
 
   try {
     const data = await attendanceService.getPlatformAnalytics(platform, studentId, { batch, type, status, startDate, endDate });
-    res.set('Cache-Control', 'no-store'); // prevent browser from caching dashboard data
+    if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'no-store'); // prevent browser from caching dashboard data
+    }
     return res.json({
       success: true,
       ...data
