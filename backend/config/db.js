@@ -141,6 +141,36 @@ async function initializeDatabase() {
       ) ENGINE=InnoDB
     `);
 
+    // Ensure ContestParticipants has problems_solved column
+    try {
+      await pool.query("ALTER TABLE ContestParticipants ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+      console.log("[DB] Added problems_solved column to ContestParticipants table.");
+    } catch (err) {
+      if (err.code !== 'ER_DUP_FIELDNAME') {
+        console.error("[DB] Failed to alter ContestParticipants table:", err.message);
+      }
+    }
+
+    // Ensure AttendanceRecords has problems_solved column
+    try {
+      await pool.query("ALTER TABLE AttendanceRecords ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+      console.log("[DB] Added problems_solved column to AttendanceRecords table.");
+    } catch (err) {
+      if (err.code !== 'ER_DUP_FIELDNAME') {
+        console.error("[DB] Failed to alter AttendanceRecords table:", err.message);
+      }
+    }
+
+    // Ensure Contests has total_problems column
+    try {
+      await pool.query("ALTER TABLE Contests ADD COLUMN total_problems INT DEFAULT 4 AFTER duration");
+      console.log("[DB] Added total_problems column to Contests table.");
+    } catch (err) {
+      if (err.code !== 'ER_DUP_FIELDNAME') {
+        console.error("[DB] Failed to alter Contests table:", err.message);
+      }
+    }
+
   } catch (error) {
     isConnecting = false;
     isConnected = false;

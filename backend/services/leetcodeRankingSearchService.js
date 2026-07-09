@@ -45,8 +45,6 @@ const LeetCodeRankingSearchService = {
         });
       } catch (err) {
         console.error(`[Ranking Search] Failed to fetch page 1 for ${slug}:`, err.message);
-        const errCodeStr = err.code ? `[${err.code}] ` : '';
-        err.message = `Contest '${slug}' ranking is inaccessible or does not exist: ${errCodeStr}${err.message}`;
         throw err;
       }
 
@@ -68,13 +66,22 @@ const LeetCodeRankingSearchService = {
 
       // Add page 1 data immediately
       if (page1Data.total_rank) {
-        page1Data.total_rank.forEach(item => {
+        page1Data.total_rank.forEach((item, index) => {
           const usernameKey = normalizeUsername(item.user_slug || item.username);
           if (usernameKey) {
+            let solved = 0;
+            if (item.submissions) {
+              solved = Object.keys(item.submissions).length;
+            } else {
+              const userSubmissions = page1Data.submissions?.[index] || {};
+              solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+            }
+            
             participantMap.set(usernameKey, {
               rank: item.rank,
               score: item.score,
-              finish_time: item.finish_time
+              finish_time: item.finish_time,
+              solved
             });
           }
         });
@@ -173,13 +180,22 @@ const LeetCodeRankingSearchService = {
         if (fetchedPagesData.has(p)) {
           const pageData = fetchedPagesData.get(p);
           if (pageData && pageData.total_rank) {
-            pageData.total_rank.forEach(item => {
+            pageData.total_rank.forEach((item, index) => {
               const usernameKey = normalizeUsername(item.user_slug || item.username);
               if (usernameKey) {
+                let solved = 0;
+                if (item.submissions) {
+                  solved = Object.keys(item.submissions).length;
+                } else {
+                  const userSubmissions = pageData.submissions?.[index] || {};
+                  solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+                }
+                
                 participantMap.set(usernameKey, {
                   rank: item.rank,
                   score: item.score,
-                  finish_time: item.finish_time
+                  finish_time: item.finish_time,
+                  solved
                 });
               }
             });
@@ -214,15 +230,19 @@ const LeetCodeRankingSearchService = {
       if (contestCheck.length > 0) {
         contestId = contestCheck[0].contest_id;
         contestDate = new Date(contestCheck[0].start_time);
+        
+        const totalProblems = page1Data?.questions?.length || 4;
+        await db.query("UPDATE Contests SET total_problems = ? WHERE contest_id = ?", [totalProblems, contestId]);
       } else {
         const contestType = slug.includes('biweekly') ? 'Biweekly' : 'Weekly';
         const match = slug.match(/contest-(\d+)/);
         const contestNumber = match ? parseInt(match[1], 10) : 0;
         const contestTitle = contestType + ' Contest ' + contestNumber;
+        const totalProblems = page1Data?.questions?.length || 4;
         
         const insertRes = await db.query(
-          "INSERT INTO Contests (title, slug, contest_type, contest_number, start_time) VALUES (?, ?, ?, ?, NOW())",
-          [contestTitle, slug, contestType, contestNumber]
+          "INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, total_problems) VALUES (?, ?, ?, ?, NOW(), ?)",
+          [contestTitle, slug, contestType, contestNumber, totalProblems]
         );
         contestId = insertRes.insertId;
       }
@@ -353,11 +373,13 @@ const LeetCodeRankingSearchService = {
             let score = null;
             let finishTime = null;
 
+            let solved = 0;
             if (matchResult) {
               attendanceStatus = 'Present';
               rank = matchResult.rank;
               score = matchResult.score;
               finishTime = matchResult.finish_time;
+              solved = matchResult.solved || 0;
               presentCount++;
             } else if (isIncomplete) {
               // Task 2: If fetch is incomplete, mark missing students as Unknown instead of Absent
@@ -382,7 +404,7 @@ const LeetCodeRankingSearchService = {
             // Task 6: Safe numeric parsing — avoid `||` coercing 0 to falsy
             const safeRank = Number.isFinite(rank) ? rank : null;
             const safeScore = Number.isFinite(score) ? score : 0;
-            const safeSolved = Number.isFinite(score) ? Math.round(score) : 0;
+            const safeSolved = matchResult ? matchResult.solved : 0;
             const safeFinishTime = Number.isFinite(finishTime) ? finishTime : null;
 
             // A. Update custom ContestAttendance table
@@ -428,15 +450,13 @@ const LeetCodeRankingSearchService = {
             }
 
             await connection.query(`
-              INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, \`rank\`, score, remarks)
-              VALUES (?, ?, ?, 'AUTO', ?, ?, ?)
+              INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, remarks)
+              VALUES (?, ?, ?, 'AUTO', ?)
               ON DUPLICATE KEY UPDATE
                 attendance_status = VALUES(attendance_status),
                 attendance_source = 'AUTO',
-                \`rank\` = VALUES(\`rank\`),
-                score = VALUES(score),
                 remarks = VALUES(remarks)
-            `, [student.id, contestId, legacyStatus, safeRank, safeScore, finishTime ? JSON.stringify({ finish_time: finishTime }) : null]);
+            `, [student.id, contestId, legacyStatus, finishTime ? JSON.stringify({ finish_time: finishTime }) : null]);
           }
 
           await connection.commit();

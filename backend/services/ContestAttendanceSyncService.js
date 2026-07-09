@@ -179,6 +179,7 @@ class ContestAttendanceSyncService {
         let rank = null;
         let score = 0.00;
         let penalty = 0;
+        let solved = 0;
         let ratingBefore = null;
 
         if (!handle || !handle.trim()) {
@@ -198,6 +199,7 @@ class ContestAttendanceSyncService {
             rank = match.rank;
             score = match.score || 0.00;
             penalty = match.finishTime || 0;
+            solved = match.problemsSolved || 0;
             matchedCount++;
           } else {
             status = 'Absent';
@@ -273,7 +275,7 @@ class ContestAttendanceSyncService {
           handle || '',
           status,
           rank,
-          status === 'Present' ? Math.round(score) : 0,
+          status === 'Present' ? solved : 0,
           score,
           penalty,
           ratingBefore,
@@ -302,14 +304,15 @@ class ContestAttendanceSyncService {
           await connection.query(`
             INSERT INTO AttendanceRecords (
               user_id, contest_id, contest_name, contest_slug, contest_date, contest_status,
-              attendance_status, attendance_source, remarks, \`rank\`, score
+              attendance_status, attendance_source, remarks, \`rank\`, score, problems_solved
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
               attendance_status = VALUES(attendance_status),
               remarks = VALUES(remarks),
               \`rank\` = VALUES(\`rank\`),
               score = VALUES(score),
+              problems_solved = VALUES(problems_solved),
               last_updated = CURRENT_TIMESTAMP
           `, [
             student.id,
@@ -320,8 +323,9 @@ class ContestAttendanceSyncService {
             contest.contest_status || 'RATED',
             legacyStatus,
             remarks,
-            rank,
-            score
+            status === 'Present' ? rank : null,
+            status === 'Present' ? score : null,
+            status === 'Present' ? solved : 0
           ]);
         }
       }

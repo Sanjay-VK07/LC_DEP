@@ -147,7 +147,7 @@ class LeetCodeAdapter extends BaseAdapter {
    */
   async _checkCache(slug) {
     const dbParticipants = await db.query(
-      "SELECT username, `rank`, score, finish_time, updated_at FROM ContestParticipants WHERE contest_slug = ? ORDER BY `rank` ASC",
+      "SELECT username, `rank`, score, problems_solved, finish_time, updated_at FROM ContestParticipants WHERE contest_slug = ? ORDER BY `rank` ASC",
       [slug]
     );
 
@@ -178,6 +178,7 @@ class LeetCodeAdapter extends BaseAdapter {
         username: normalizeUsername(p.username),
         rank: p.rank,
         score: Number.isFinite(parsedScore) ? parsedScore : 0.00,
+        problemsSolved: p.problems_solved || 0,
         finishTime: p.finish_time
       };
     });
@@ -211,7 +212,7 @@ class LeetCodeAdapter extends BaseAdapter {
     const participantMap = new Map();
 
     // Process page 1 immediately
-    this._mergePageIntoMap(participantMap, page1Data.total_rank, activeHandles, matchedHandles);
+    this._mergePageIntoMap(participantMap, page1Data.total_rank, page1Data.submissions || [], activeHandles, matchedHandles);
 
     // Check if we already matched everyone on page 1
     if (activeHandles.size > 0 && matchedHandles.size >= activeHandles.size) {
@@ -362,7 +363,7 @@ class LeetCodeAdapter extends BaseAdapter {
 
       const pageData = fetchedPagesData.get(p);
       if (pageData && pageData.total_rank && pageData.total_rank.length > 0) {
-        this._mergePageIntoMap(participantMap, pageData.total_rank, activeHandles, matchedHandles);
+        this._mergePageIntoMap(participantMap, pageData.total_rank, pageData.submissions || [], activeHandles, matchedHandles);
         consecutiveEmptyPages = 0;
       } else {
         consecutiveEmptyPages++;
@@ -389,8 +390,9 @@ class LeetCodeAdapter extends BaseAdapter {
    * Deduplicates by normalized username — later pages don't overwrite earlier (higher-ranked) entries.
    * @private
    */
-  _mergePageIntoMap(map, rankEntries, activeHandles = null, matchedHandles = null) {
-    for (const entry of rankEntries) {
+  _mergePageIntoMap(map, rankEntries, submissionEntries = [], activeHandles = null, matchedHandles = null) {
+    for (let i = 0; i < rankEntries.length; i++) {
+      const entry = rankEntries[i];
       const rawUsername = entry.user_slug || entry.username || '';
       const normUsername = normalizeUsername(rawUsername);
 
@@ -405,11 +407,17 @@ class LeetCodeAdapter extends BaseAdapter {
         const parsedRank = Number.parseInt(entry.rank, 10);
         const parsedScore = Number.parseFloat(entry.score);
         const parsedFinishTime = Number.parseInt(entry.finish_time, 10);
+
+        // Calculate solved count from submissions
+        const userSubmissions = submissionEntries[i] || {};
+        const solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+
         map.set(normUsername, {
           username: normUsername,
           rank: Number.isFinite(parsedRank) ? parsedRank : null,
           score: Number.isFinite(parsedScore) ? parsedScore : 0.00,
-          finishTime: Number.isFinite(parsedFinishTime) ? parsedFinishTime : 0
+          finishTime: Number.isFinite(parsedFinishTime) ? parsedFinishTime : 0,
+          problemsSolved: solved
         });
       }
     }
@@ -446,6 +454,7 @@ class LeetCodeAdapter extends BaseAdapter {
           p.username,
           p.rank ?? 0,
           Number.isFinite(p.score) ? p.score : 0.00,
+          p.problemsSolved ?? 0,
           Number.isFinite(p.finishTime) ? p.finishTime : 0,
           null,  // avatar
           null,  // country
@@ -453,7 +462,7 @@ class LeetCodeAdapter extends BaseAdapter {
         ]);
 
         await connection.query(
-          `INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, finish_time, avatar, country, page_number)
+          `INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, problems_solved, finish_time, avatar, country, page_number)
            VALUES ?`,
           [values]
         );

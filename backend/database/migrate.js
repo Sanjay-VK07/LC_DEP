@@ -1265,6 +1265,7 @@ async function run() {
           username VARCHAR(100) NOT NULL,
           \`rank\` INT NOT NULL,
           score DECIMAL(10,2) NOT NULL,
+          problems_solved INT DEFAULT 0,
           finish_time INT NOT NULL,
           avatar VARCHAR(255) DEFAULT NULL,
           country VARCHAR(100) DEFAULT NULL,
@@ -1454,6 +1455,47 @@ async function run() {
         ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
       `);
       console.log('[Migration] Migration "codechef_provisional_support" completed.');
+    }
+
+    // ==========================================
+    // MIGRATION 15: solved_count_and_score_consistency
+    // ==========================================
+    const rows15 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'solved_count_and_score_consistency'"
+    );
+
+    if (rows15.length > 0) {
+      console.log('[Migration] Migration "solved_count_and_score_consistency" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Applying Solved Count & Score Consistency modifications...');
+      
+      const cpCols = await db.query("SHOW COLUMNS FROM ContestParticipants");
+      const cpColNames = cpCols.map(c => c.Field);
+      if (!cpColNames.includes('problems_solved')) {
+        await db.query("ALTER TABLE ContestParticipants ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+        console.log('[Migration] Added problems_solved to ContestParticipants.');
+      }
+      
+      const arCols = await db.query("SHOW COLUMNS FROM AttendanceRecords");
+      const arColNames = arCols.map(c => c.Field);
+      if (!arColNames.includes('problems_solved')) {
+        await db.query("ALTER TABLE AttendanceRecords ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");
+        console.log('[Migration] Added problems_solved to AttendanceRecords.');
+      }
+      
+      const cCols = await db.query("SHOW COLUMNS FROM Contests");
+      const cColNames = cCols.map(c => c.Field);
+      if (!cColNames.includes('total_problems')) {
+        await db.query("ALTER TABLE Contests ADD COLUMN total_problems INT DEFAULT 4 AFTER duration");
+        console.log('[Migration] Added total_problems to Contests.');
+      }
+      
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('solved_count_and_score_consistency')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "solved_count_and_score_consistency" completed.');
     }
 
     process.exit(0);

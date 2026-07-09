@@ -11,6 +11,7 @@ const db = require('../config/db');
 const leetcode = require('../utils/leetcode');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const NetworkService = require('../utils/networkService');
+const AuditLogger = require('./AuditLogger');
 
 // Sync lock registry (in-memory, global symbol for multi-service safety)
 const lockKey = Symbol.for('leetcode-sync-locks');
@@ -784,10 +785,11 @@ Stop Reason: ${stopReason}
         }
       }
 
+      const totalProblems = firstPageData?.questions?.length || 4;
       const insertResult = await db.query(`
-        INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'LeetCode', 'SYNC')
-      `, [title, contestSlug, contestType, contestNumber, startTime, duration, contestStatus]);
+        INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, total_problems, contest_status, platform, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'LeetCode', 'SYNC')
+      `, [title, contestSlug, contestType, contestNumber, startTime, duration, totalProblems, contestStatus]);
 
       contestId = insertResult.insertId;
     } else {
@@ -795,6 +797,9 @@ Stop Reason: ${stopReason}
       title = contest[0].title;
       startTime = contest[0].start_time;
       contestStatus = contest[0].contest_status;
+
+      const totalProblems = firstPageData?.questions?.length || 4;
+      await db.query("UPDATE Contests SET total_problems = ? WHERE contest_id = ?", [totalProblems, contestId]);
     }
 
     // 2. Ensure in LiveContests table
@@ -843,15 +848,110 @@ Stop Reason: ${stopReason}
 
     // Store participants
     const participantsBatch = [];
-    for (const ranker of ranks) {
-      if (!ranker.username) continue; // Skip malformed entries
+    const totalProblems = pageData?.questions?.length || 4;
+    const seenUsernames = new Set();
+
+    for (let i = 0; i < ranks.length; i++) {
+      const ranker = ranks[i];
       
+      // 1. Missing username -> ERROR
+      if (!ranker.username) {
+        AuditLogger.error({
+          contestSlug,
+          issue: 'Missing Username',
+          expected: 'Non-empty string username',
+          actual: ranker.username,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+
+      const username = ranker.username.toLowerCase().trim();
+
+      // 2. Duplicate participant in page standings -> ERROR
+      if (seenUsernames.has(username)) {
+        AuditLogger.error({
+          contestSlug,
+          username: ranker.username,
+          issue: 'Duplicate Participant',
+          expected: 'Unique username per page standings',
+          actual: ranker.username,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+      seenUsernames.add(username);
+
+      // 3. Invalid rank -> ERROR
+      const rankVal = parseInt(ranker.rank, 10);
+      if (isNaN(rankVal) || rankVal <= 0) {
+        AuditLogger.error({
+          contestSlug,
+          username: ranker.username,
+          issue: 'Invalid Rank',
+          expected: '> 0',
+          actual: ranker.rank,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+
+      // 4. Negative score -> ERROR
+      const scoreVal = parseFloat(ranker.score);
+      if (isNaN(scoreVal) || scoreVal < 0) {
+        AuditLogger.error({
+          contestSlug,
+          username: ranker.username,
+          issue: 'Negative Score',
+          expected: '>= 0',
+          actual: ranker.score,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+
+      // 5. Invalid finish time -> ERROR
+      const finishTimeVal = parseInt(ranker.finish_time, 10);
+      if (isNaN(finishTimeVal) || finishTimeVal < 0) {
+        AuditLogger.error({
+          contestSlug,
+          username: ranker.username,
+          issue: 'Invalid Finish Time',
+          expected: '>= 0',
+          actual: ranker.finish_time,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+
+      let solved = 0;
+      if (ranker.submissions) {
+        solved = Object.keys(ranker.submissions).length;
+      } else {
+        const rankerSubmissions = pageData?.submissions?.[i] || {};
+        solved = Object.values(rankerSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+      }
+
+      // 6. ProblemsSolved > TotalProblems -> ERROR
+      if (solved > totalProblems) {
+        AuditLogger.error({
+          contestSlug,
+          username: ranker.username,
+          issue: 'ProblemsSolved > TotalProblems',
+          expected: `<= ${totalProblems}`,
+          actual: solved,
+          action: 'Discard ONLY the corrupted participant'
+        });
+        continue;
+      }
+
       participantsBatch.push([
         contestSlug,
-        ranker.username,
-        parseInt(ranker.rank, 10),
-        parseFloat(ranker.score) || 0.00,
-        parseInt(ranker.finish_time, 10) || 0,
+        ranker.user_slug || ranker.username,
+        rankVal,
+        scoreVal || 0.00,
+        solved,
+        finishTimeVal || 0,
         ranker.avatar_url || null,
         ranker.country_name || null,
         page
@@ -860,11 +960,12 @@ Stop Reason: ${stopReason}
 
     if (participantsBatch.length > 0) {
       await db.getPool().query(`
-        INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, finish_time, avatar, country, page_number)
+        INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, problems_solved, finish_time, avatar, country, page_number)
         VALUES ?
         ON DUPLICATE KEY UPDATE
           \`rank\` = VALUES(\`rank\`),
           score = VALUES(score),
+          problems_solved = VALUES(problems_solved),
           finish_time = VALUES(finish_time),
           avatar = VALUES(avatar),
           country = VALUES(country),
