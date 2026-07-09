@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Environment files (keep .env.example if exists)
+.env
+backend/.env
+frontend/.env
+
+# Build outputs
+dist/
+build/
+frontend/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+backend/cache/
+frontend/node_modules/.vite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

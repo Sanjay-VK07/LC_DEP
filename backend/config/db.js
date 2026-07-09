@@ -85,61 +85,87 @@ async function initializeDatabase() {
 
     // 4. Run schema setup
     let schemaNeeded = false;
-    try {
-      const conn = await pool.getConnection();
+    // Skip schema if explicitly told to (e.g., during migration runs)
+    if (process.env.SKIP_SCHEMA_INIT === 'true') {
+      console.log('[DB] Skipping schema initialization (SKIP_SCHEMA_INIT=true).');
+    } else {
       try {
-        await conn.query("SELECT 1 FROM Users LIMIT 1");
+        const conn = await pool.getConnection();
+        try {
+          await conn.query("SELECT 1 FROM Users LIMIT 1");
+        } catch (err) {
+          schemaNeeded = true;
+        } finally {
+          conn.release();
+        }
       } catch (err) {
         schemaNeeded = true;
-      } finally {
-        conn.release();
       }
-    } catch (err) {
-      schemaNeeded = true;
+
+      if (schemaNeeded) {
+        await executeSchema(pool);
+      } else {
+        console.log('[DB] Database tables already exist. Skipping schema initialization.');
+      }
     }
 
-    if (schemaNeeded) {
-      await executeSchema(pool);
+    // Check if Users table exists (migration 3 renames students -> Users)
+    // Only create dependent tables if Users exists, otherwise skip until migration runs
+    let usersTableExists = false;
+    try {
+      const conn2 = await pool.getConnection();
+      try {
+        await conn2.query("SELECT 1 FROM Users LIMIT 1");
+        usersTableExists = true;
+      } catch (e) {
+        usersTableExists = false;
+      } finally {
+        conn2.release();
+      }
+    } catch (e) {
+      usersTableExists = false;
+    }
+
+    if (usersTableExists) {
+      // Ensure StudentPlatformSync table exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS StudentPlatformSync (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          platform VARCHAR(50) NOT NULL,
+          username VARCHAR(255) DEFAULT NULL,
+          sync_status VARCHAR(20) DEFAULT 'Never Synced',
+          last_successful_sync TIMESTAMP NULL DEFAULT NULL,
+          last_attempt TIMESTAMP NULL DEFAULT NULL,
+          retry_count INT DEFAULT 0,
+          failure_reason TEXT DEFAULT NULL,
+          failure_category VARCHAR(100) DEFAULT NULL,
+          data_completeness INT DEFAULT 0,
+          next_retry TIMESTAMP NULL DEFAULT NULL,
+          UNIQUE KEY idx_user_platform (user_id, platform),
+          FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB
+      `);
+
+      // Ensure contest_attendance table exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS contest_attendance (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          contest_slug VARCHAR(255) NOT NULL,
+          student_id INT NOT NULL,
+          leetcode_username VARCHAR(255) NOT NULL,
+          attendance ENUM('PRESENT', 'ABSENT') NOT NULL,
+          \`rank\` INT DEFAULT NULL,
+          score DECIMAL(10,2) DEFAULT NULL,
+          finish_time INT DEFAULT NULL,
+          synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_student_contest_slug_idx (student_id, contest_slug),
+          FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB
+      `);
     } else {
-      console.log('[DB] Database tables already exist. Skipping schema initialization.');
+      console.log('[DB] Users table not yet available (pending migration). Skipping dependent table creation.');
     }
-
-    // Ensure StudentPlatformSync table exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS StudentPlatformSync (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        platform VARCHAR(50) NOT NULL,
-        username VARCHAR(255) DEFAULT NULL,
-        sync_status VARCHAR(20) DEFAULT 'Never Synced',
-        last_successful_sync TIMESTAMP NULL DEFAULT NULL,
-        last_attempt TIMESTAMP NULL DEFAULT NULL,
-        retry_count INT DEFAULT 0,
-        failure_reason TEXT DEFAULT NULL,
-        failure_category VARCHAR(100) DEFAULT NULL,
-        data_completeness INT DEFAULT 0,
-        next_retry TIMESTAMP NULL DEFAULT NULL,
-        UNIQUE KEY idx_user_platform (user_id, platform),
-        FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB
-    `);
-
-    // Ensure contest_attendance table exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS contest_attendance (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        contest_slug VARCHAR(255) NOT NULL,
-        student_id INT NOT NULL,
-        leetcode_username VARCHAR(255) NOT NULL,
-        attendance ENUM('PRESENT', 'ABSENT') NOT NULL,
-        \`rank\` INT DEFAULT NULL,
-        score DECIMAL(10,2) DEFAULT NULL,
-        finish_time INT DEFAULT NULL,
-        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_student_contest_slug_idx (student_id, contest_slug),
-        FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB
-    `);
 
   } catch (error) {
     isConnecting = false;
