@@ -24,15 +24,12 @@ function Sidebar({ isOpen, toggleSidebar }) {
 
   const links = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/live-monitor', label: 'Live Contest Monitor', icon: Activity },
     { to: '/students', label: 'Student Directory', icon: Users },
     { to: '/contests', label: 'Contest Master', icon: Award },
     { to: '/attendance', label: 'Sync & Attendance', icon: CloudUpload },
     { to: '/notifications', label: 'Actionable Alerts', icon: Bell },
     { to: '/profile', label: 'Contest Participation Timeline', icon: TrendingUp },
     { to: '/analytics', label: 'Performance Analytics', icon: BarChart3 },
-    { to: '/placement', label: 'Placement Prep', icon: Briefcase },
-    { to: '/ai-insights', label: 'AI Coach & Insights', icon: Brain },
     { to: '/reports', label: 'Reports & Summary', icon: FileText },
     { to: '/archive', label: 'Graduation Archive', icon: Archive },
     { to: '/departments', label: 'Department Manager', icon: Building2 },
