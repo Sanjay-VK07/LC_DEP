@@ -153,69 +153,6 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
   }, 8 * 60 * 1000);
 }
 
-/**
- * Get department-level analytics with platform adoption percentages.
- */
-async function getDepartmentAnalytics() {
-  return cache.getOrCompute(cache.KEYS.DEPARTMENT_ANALYTICS, async () => {
-    const stats = await db.query(
-      `SELECT u.department,
-              COUNT(DISTINCT u.id) as total_students,
-              SUM(CASE WHEN u.leetcode_username IS NOT NULL THEN 1 ELSE 0 END) as lc_count,
-              SUM(CASE WHEN u.codechef_username IS NOT NULL THEN 1 ELSE 0 END) as cc_count,
-              SUM(CASE WHEN u.codeforces_username IS NOT NULL THEN 1 ELSE 0 END) as cf_count,
-              SUM(CASE WHEN u.hackerrank_username IS NOT NULL THEN 1 ELSE 0 END) as hr_count,
-              IFNULL(ROUND(AVG(lp.current_rating)), 0) as avg_lc_rating,
-              IFNULL(ROUND(MAX(lp.highest_rating)), 0) as peak_lc_rating,
-              IFNULL(ROUND(AVG(cp.current_rating)), 0) as avg_cc_rating,
-              IFNULL(ROUND(MAX(cp.highest_rating)), 0) as peak_cc_rating,
-              IFNULL(ROUND(AVG(cfp.current_rating)), 0) as avg_cf_rating,
-              IFNULL(ROUND(MAX(cfp.highest_rating)), 0) as peak_cf_rating,
-              (SELECT COUNT(*) FROM AttendanceRecords ar JOIN Users u2 ON ar.user_id = u2.id
-               WHERE u2.department = u.department AND u2.status = 'active') as total_records,
-              (SELECT COUNT(*) FROM AttendanceRecords ar JOIN Users u2 ON ar.user_id = u2.id
-               WHERE u2.department = u.department AND u2.status = 'active' AND ar.attendance_status = 'PRESENT') as present_count,
-              (SELECT IFNULL(ROUND(AVG(ar.score), 2), 0) FROM AttendanceRecords ar JOIN Users u2 ON ar.user_id = u2.id
-               WHERE u2.department = u.department AND u2.status = 'active' AND ar.attendance_status = 'PRESENT') as average_problems_solved
-       FROM Users u
-       LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
-       LEFT JOIN CodeChefProfiles cp ON u.id = cp.user_id
-       LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
-       WHERE u.status = 'active'
-       GROUP BY u.department`
-    );
-
-    return stats.map(s => {
-      const n = Number(s.total_students) || 1;
-      const total = Number(s.total_records);
-      const present = Number(s.present_count);
-
-      const ratings = [s.avg_lc_rating, s.avg_cc_rating, s.avg_cf_rating].map(Number).filter(r => r > 0);
-      const averageRating = ratings.length > 0 ? Math.round(ratings.reduce((sum, val) => sum + val, 0) / ratings.length) : 0;
-      const peakRating = Math.max(
-        Number(s.peak_lc_rating || 0),
-        Number(s.peak_cc_rating || 0),
-        Number(s.peak_cf_rating || 0)
-      );
-
-      return {
-        ...s,
-        total_students: Number(s.total_students),
-        attendance_percentage: total > 0 ? Math.round((present / total) * 100) : 0,
-        average_rating: averageRating,
-        peak_rating: peakRating,
-        average_problems_solved: Number(s.average_problems_solved || 0),
-        lc_adoption_pct: Math.round((Number(s.lc_count) / n) * 100),
-        cc_adoption_pct: Math.round((Number(s.cc_count) / n) * 100),
-        cf_adoption_pct: Math.round((Number(s.cf_count) / n) * 100),
-        hr_adoption_pct: Math.round((Number(s.hr_count) / n) * 100),
-        overall_adoption_pct: Math.round(
-          ((Number(s.lc_count) + Number(s.cc_count) + Number(s.cf_count) + Number(s.hr_count)) / (n * 4)) * 100
-        )
-      };
-    });
-  }, 10 * 60 * 1000);
-}
 
 /**
  * Get rating distribution histogram (all platforms combined).
@@ -408,6 +345,10 @@ async function getUnifiedStudentProfile(userId) {
       academic_batch: row.academic_batch,
       academic_start_date: row.academic_start_date,
       academic_end_date: row.academic_end_date,
+      leetcode_username: row.leetcode_username || null,
+      codechef_username: row.codechef_username || null,
+      codeforces_username: row.codeforces_username || null,
+      hackerrank_username: row.hackerrank_username || null,
       platforms: buildPlatformList(row)
     },
     profiles,
@@ -418,7 +359,6 @@ async function getUnifiedStudentProfile(userId) {
 
 module.exports = {
   getLeaderboards,
-  getDepartmentAnalytics,
   getRatingDistribution,
   getUnifiedStudentProfile,
   buildPlatformList

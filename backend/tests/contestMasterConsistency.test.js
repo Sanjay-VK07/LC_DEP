@@ -158,6 +158,10 @@ test('Contest Master Consistency - Partial attendance', async () => {
     INSERT INTO ParticipationLogs (user_id, contest_id, join_time, participation_status)
     VALUES (?, ?, '2026-01-10 14:15:00', 'JOINED')
   `, [students[1].id, contestId]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source)
+    VALUES (?, ?, 'Partial Attendance Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO')
+  `, [students[1].id, contestId, slug]);
 
   // Student 3: Absent (no logs)
 
@@ -234,6 +238,10 @@ test('Contest Master Consistency - 100% attendance', async () => {
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty, verified, syncPass)
     VALUES (?, ?, ?, 'Present', 10, 4, 4.00, 300, 1, 4)
   `, [liveContestId, students[1].id, students[1].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, '100% Attendance Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 10, 4.00, 4)
+  `, [students[1].id, contestId, slug]);
 
   try {
     // 1. Summary
@@ -302,6 +310,10 @@ test('Contest Master Consistency - Mixed attendance and manual overrides', async
     INSERT INTO ParticipationLogs (user_id, contest_id, join_time, participation_status)
     VALUES (?, ?, '2026-01-10 14:15:00', 'JOINED')
   `, [students[1].id, contestId]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source)
+    VALUES (?, ?, 'Mixed Attendance Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO')
+  `, [students[1].id, contestId, slug]);
 
   // Student 3: No records (Absent)
   // Student 4: No records (Absent)
@@ -447,8 +459,13 @@ test('Contest Master Canonical Redesign - Validations, Tie Ranks, and Severity H
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 100, 2, 7.00, 500)
   `, [liveContestId, students[0].id, students[0].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Canonical Redesign Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 100, 7.00, 2)
+  `, [students[0].id, contestId, slug]);
 
   // Student 2: Normal ABSENT student (no participation/standings)
+
   // Student 3: Corrupted - negative score (-5.00) -> Should be skipped!
   await db.query(`
     INSERT INTO ContestParticipants (contest_slug, username, \`rank\`, score, problems_solved, finish_time, page_number)
@@ -458,6 +475,10 @@ test('Contest Master Canonical Redesign - Validations, Tie Ranks, and Severity H
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 150, 1, -5.00, 600)
   `, [liveContestId, students[2].id, students[2].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Canonical Redesign Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 150, -5.00, 1)
+  `, [students[2].id, contestId, slug]);
 
   // Student 4: Corrupted - problems solved > total (5 > 4) -> Should be skipped!
   await db.query(`
@@ -468,6 +489,10 @@ test('Contest Master Canonical Redesign - Validations, Tie Ranks, and Severity H
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 200, 5, 12.00, 800)
   `, [liveContestId, students[3].id, students[3].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Canonical Redesign Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 200, 12.00, 5)
+  `, [students[3].id, contestId, slug]);
 
   // Student 5: Duplicate Rank Tie Rule Valid case (rank 100, score 7.00, finish_time 500) -> Allowed!
   await db.query(`
@@ -478,6 +503,10 @@ test('Contest Master Canonical Redesign - Validations, Tie Ranks, and Severity H
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 100, 2, 7.00, 500)
   `, [liveContestId, students[4].id, students[4].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Canonical Redesign Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 100, 7.00, 2)
+  `, [students[4].id, contestId, slug]);
 
   // Student 6: Duplicate Rank Tie Rule IN-VALID case (rank 100, score 8.00, finish_time 700) -> Should be skipped!
   await db.query(`
@@ -488,6 +517,10 @@ test('Contest Master Canonical Redesign - Validations, Tie Ranks, and Severity H
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 100, 3, 8.00, 700)
   `, [liveContestId, students[5].id, students[5].username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Canonical Redesign Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 100, 8.00, 3)
+  `, [students[5].id, contestId, slug]);
 
   try {
     // 1. Fetch via canonical resolver directly
@@ -578,8 +611,8 @@ test('Contest Master Canonical Redesign - 6-Problem Scaling', async () => {
   const username = `user_six_${Date.now()}`;
   const insertRes = await db.query(`
     INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, academic_batch, academic_start_date, academic_end_date, status)
-    VALUES ('Student Six', ?, 'CSE', 'A', '', ?, ?, '2025-07-01', '2029-06-30', 'active')
-  `, [regNo, username, batch]);
+    VALUES ('Student Six', ?, 'CSE', 'A', ?, ?, ?, '2025-07-01', '2029-06-30', 'active')
+  `, [regNo, `lc_${username}`, username, batch]);
   const studentId = insertRes.insertId || insertRes[0]?.insertId;
 
   // Set up mock LiveContests so ContestAttendance join works
@@ -599,6 +632,10 @@ test('Contest Master Canonical Redesign - 6-Problem Scaling', async () => {
     INSERT INTO ContestAttendance (contestId, studentId, username, attendanceStatus, \`rank\`, solved, score, penalty)
     VALUES (?, ?, ?, 'Present', 10, 5, 500, 400)
   `, [liveContestId, studentId, username]);
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'CodeChef 6 Problems Test', ?, '2026-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 10, 500.00, 5)
+  `, [studentId, contestId, slug]);
 
   try {
     const result = await attendanceService.resolveCanonicalContestParticipants(contestId, { batch });
@@ -614,6 +651,130 @@ test('Contest Master Canonical Redesign - 6-Problem Scaling', async () => {
     await db.query("DELETE FROM AttendanceRecords WHERE contest_id = ?", [contestId]);
     await db.query("DELETE FROM Contests WHERE contest_id = ?", [contestId]);
     await db.query(`DELETE FROM Users WHERE academic_batch = ?`, [batch]);
+  }
+});
+
+test('Contest Master Codeforces Dashboard Analytics and UI Logic', async () => {
+  await db.initializeDatabase();
+  await db.query("INSERT IGNORE INTO departments (name, code) VALUES ('Computer Science', 'CSE')");
+
+  const batch = `batch-cf-${Date.now()}`;
+  
+  // 1. Create a few students with future academic periods
+  const students = [];
+  for (let i = 1; i <= 3; i++) {
+    const regNo = `ROLL-CF-${i}-${Date.now()}`;
+    const username = `cf_user_${i}_${Date.now()}`;
+    const insertRes = await db.query(`
+      INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, academic_batch, academic_start_date, academic_end_date, status)
+      VALUES (?, ?, 'CSE', 'A', ?, ?, ?, ?, '2030-07-01', '2034-06-30', 'active')
+    `, [`CF Student ${i}`, regNo, `lc_${username}`, `cc_${username}`, username, batch]);
+    students.push({ id: insertRes.insertId || insertRes[0]?.insertId, username });
+  }
+
+  // 2. Validate classifyCodeforcesType helper
+  const { classifyCodeforcesType } = attendanceService;
+  assert.equal(classifyCodeforcesType('Codeforces Round 1085 (Div.1 + Div.2)'), 'div1+div2');
+  assert.equal(classifyCodeforcesType('Codeforces Round 100 (Div. 1)'), 'div1');
+  assert.equal(classifyCodeforcesType('Codeforces Round 200 (Div. 2)'), 'div2');
+  assert.equal(classifyCodeforcesType('Codeforces Round 300 (Div. 3)'), 'div3');
+  assert.equal(classifyCodeforcesType('Codeforces Round 400 (Div. 4)'), 'div4');
+  assert.equal(classifyCodeforcesType('Educational Codeforces Round 160'), 'educational');
+  assert.equal(classifyCodeforcesType('Codeforces Global Round 25'), 'global');
+
+  // 3. Test zero contests
+  const zeroAnalytics = await attendanceService.getPlatformAnalytics('codeforces', 'all', { batch });
+  assert.equal(zeroAnalytics.metrics.eligible, 0);
+  assert.equal(zeroAnalytics.metrics.attended, 0);
+  assert.equal(zeroAnalytics.metrics.rate, 0.0);
+
+  // 4. Seed contest: Div.1 + Div.2 in the future
+  const slug1 = `cf-slug-1-${Date.now()}`;
+  await db.query(`
+    INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, total_problems, contest_status, platform)
+    VALUES ('Codeforces Round 1085 (Div.1 + Div.2)', ?, 'Weekly', 1085, '2031-01-10 14:00:00', 7200, 6, 'RATED', 'Codeforces')
+  `, [slug1]);
+  const [cRow1] = await db.query("SELECT contest_id FROM Contests WHERE slug = ?", [slug1]);
+  const contestId1 = cRow1.contest_id;
+
+  // Student 1 attended, Student 2 & 3 did not
+  await db.query(`
+    INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved)
+    VALUES (?, ?, 'Codeforces Round 1085 (Div.1 + Div.2)', ?, '2031-01-10 14:00:00', 'RATED', 'PRESENT', 'AUTO', 50, 4.00, 4)
+  `, [students[0].id, contestId1, slug1]);
+
+  try {
+    const oneContestAnalytics = await attendanceService.getPlatformAnalytics('codeforces', 'all', { batch });
+    // Eligible = 1 contest. Attended rate = 1 / 3 = 33.3%
+    assert.equal(oneContestAnalytics.metrics.eligible, 1);
+    assert.equal(oneContestAnalytics.metrics.rate, 33.3);
+    assert.equal(oneContestAnalytics.metrics.attended, 0.33); // Average contests attended per student
+  } finally {
+    await db.query("DELETE FROM AttendanceRecords WHERE contest_id = ?", [contestId1]);
+    await db.query("DELETE FROM Contests WHERE contest_id = ?", [contestId1]);
+    await db.query(`DELETE FROM Users WHERE academic_batch = ?`, [batch]);
+  }
+});
+
+test('Contest Records Type Mapping and Single Source of Truth', async () => {
+  await db.initializeDatabase();
+
+  const slugDiv12 = `cf-slug-div12-${Date.now()}`;
+  const slugDiv1 = `cf-slug-div1-${Date.now()}`;
+  const slugDiv2 = `cf-slug-div2-${Date.now()}`;
+  const slugEdu = `cf-slug-edu-${Date.now()}`;
+  const slugGlobal = `cf-slug-global-${Date.now()}`;
+
+  // Insert contests of different types on Codeforces
+  await db.query(`
+    INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform)
+    VALUES 
+      ('Codeforces Round 1085 (Div.1 + Div.2)', ?, 'Weekly', 1085, '2026-01-10 14:00:00', 7200, 'RATED', 'Codeforces'),
+      ('Codeforces Round 100 (Div. 1)', ?, 'Weekly', 100, '2026-01-11 14:00:00', 7200, 'RATED', 'Codeforces'),
+      ('Codeforces Round 200 (Div. 2)', ?, 'Weekly', 200, '2026-01-12 14:00:00', 7200, 'RATED', 'Codeforces'),
+      ('Educational Codeforces Round 160', ?, 'Weekly', 160, '2026-01-13 14:00:00', 7200, 'RATED', 'Codeforces'),
+      ('Codeforces Global Round 25', ?, 'Weekly', 25, '2026-01-14 14:00:00', 7200, 'RATED', 'Codeforces')
+  `, [slugDiv12, slugDiv1, slugDiv2, slugEdu, slugGlobal]);
+
+  try {
+    const contestController = require('../controllers/contestController');
+    let responseData = null;
+    const mockReq = { query: {} };
+    const mockRes = {
+      json: (data) => {
+        responseData = data;
+        return mockRes;
+      },
+      status: (code) => mockRes
+    };
+
+    await contestController.getContests(mockReq, mockRes);
+    
+    assert.ok(responseData && responseData.success);
+    const list = responseData.data;
+
+    const div12Contest = list.find(c => c.contest_id === slugDiv12);
+    const div1Contest = list.find(c => c.contest_id === slugDiv1);
+    const div2Contest = list.find(c => c.contest_id === slugDiv2);
+    const eduContest = list.find(c => c.contest_id === slugEdu);
+    const globalContest = list.find(c => c.contest_id === slugGlobal);
+
+    assert.equal(div12Contest.type, 'div1+div2');
+    assert.equal(div1Contest.type, 'div1');
+    assert.equal(div2Contest.type, 'div2');
+    assert.equal(eduContest.type, 'educational');
+    assert.equal(globalContest.type, 'global');
+
+    // Verify consistency with analytics classification helper (single source of truth)
+    const { classifyCodeforcesType } = require('../services/attendanceService');
+    assert.equal(div12Contest.type, classifyCodeforcesType('Codeforces Round 1085 (Div.1 + Div.2)'));
+    assert.equal(div1Contest.type, classifyCodeforcesType('Codeforces Round 100 (Div. 1)'));
+    assert.equal(div2Contest.type, classifyCodeforcesType('Codeforces Round 200 (Div. 2)'));
+    assert.equal(eduContest.type, classifyCodeforcesType('Educational Codeforces Round 160'));
+    assert.equal(globalContest.type, classifyCodeforcesType('Codeforces Global Round 25'));
+
+  } finally {
+    await db.query("DELETE FROM Contests WHERE slug IN (?, ?, ?, ?, ?)", [slugDiv12, slugDiv1, slugDiv2, slugEdu, slugGlobal]);
   }
 });
 

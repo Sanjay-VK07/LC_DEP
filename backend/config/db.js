@@ -227,6 +227,34 @@ async function query(sql, params) {
     throw new Error(errorMsg);
   }
 
+  // Production Safety Firewall for Contests
+  const isTestOrDevEnv = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'dev';
+  if (!isTestOrDevEnv) {
+    const isContestInsert = /insert\s+into\s+contests/i.test(sql);
+    if (isContestInsert) {
+      const testPatterns = [
+        /\btest\b/i,
+        /\bfail\b/i,
+        /\bdummy\b/i,
+        /\bmock\b/i,
+        /\bsample\b/i,
+        /\bdemo\b/i,
+        /\bdebug\b/i,
+        /\bfake\b/i,
+        /\bseed\b/i,
+        /\btemporary\b/i
+      ];
+      for (const param of (params || [])) {
+        if (typeof param === 'string') {
+          const isMatch = testPatterns.some(pat => pat.test(param));
+          if (isMatch) {
+            throw new Error(`Production Database Safety Rule: Rejecting contest creation/modification with test-only keywords: "${param}"`);
+          }
+        }
+      }
+    }
+  }
+
   const placeholderCount = (sql.match(/\?/g) || []).length;
   const paramCount = (params || []).length;
 

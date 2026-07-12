@@ -14,6 +14,8 @@ import {
   CheckCircle2 
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { getLeetCodeProfileUrl } from '../utils/platformUrls';
+import { logger } from '../utils/logger';
 
 function Students() {
   const [students, setStudents] = useState([]);
@@ -82,6 +84,7 @@ function Students() {
       };
       const res = await axios.get('/api/students', { params });
       if (res.data.success) {
+        logger.debug('Received students list:', res.data.data);
         setStudents(res.data.data);
       }
     } catch (err) {
@@ -504,14 +507,18 @@ function Students() {
                     <td className="px-6 py-4 font-mono text-xs">{student.academic_start_date ? new Date(student.academic_start_date).toLocaleDateString(undefined, {dateStyle: 'medium'}) : '-'}</td>
                     <td className="px-6 py-4 font-mono text-xs">{student.academic_end_date ? new Date(student.academic_end_date).toLocaleDateString(undefined, {dateStyle: 'medium'}) : '-'}</td>
                     <td className="px-6 py-4">
-                      <a 
-                        href={`https://leetcode.com/${student.leetcode_username}`} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="text-primary-500 hover:underline font-semibold"
-                      >
-                        {student.leetcode_username}
-                      </a>
+                      {student.leetcode_username ? (
+                        <a 
+                          href={getLeetCodeProfileUrl(student.leetcode_username)} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="text-primary-550 hover:underline font-semibold"
+                        >
+                          {student.leetcode_username}
+                        </a>
+                      ) : (
+                        <span className="text-slate-400 italic">Not Registered</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-right space-x-1.5">
                       <button 

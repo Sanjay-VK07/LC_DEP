@@ -84,19 +84,6 @@ async function getLeaderboards(req, res) {
 }
 
 /**
- * Get department-level analytics with platform adoption.
- */
-async function getDepartmentAnalytics(req, res) {
-  try {
-    const departments = await platformAnalytics.getDepartmentAnalytics();
-    return res.json({ success: true, departments });
-  } catch (error) {
-    console.error('[AnalyticsController] Error fetching department analytics:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve department analytics' });
-  }
-}
-
-/**
  * Get portal-wide summary statistics.
  */
 async function getPortalSummary(req, res) {
@@ -158,7 +145,6 @@ async function getStudentContestHistory(req, res) {
 module.exports = {
   getStudentAnalytics,
   getLeaderboards,
-  getDepartmentAnalytics,
   getPortalSummary,
   getRatingDistribution,
   getStudentRatingHistory,

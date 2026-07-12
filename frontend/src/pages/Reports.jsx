@@ -56,6 +56,7 @@ function Reports() {
   const [studentYear, setStudentYear] = useState('');
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
+  const [selectedPlatform, setSelectedPlatform] = useState('all');
 
   // Contest report filters
   const [contestBatch, setContestBatch] = useState('');
@@ -127,7 +128,8 @@ function Reports() {
             section: studentSec,
             academicYear: studentYear,
             startDate: filterStartDate,
-            endDate: filterEndDate
+            endDate: filterEndDate,
+            platform: selectedPlatform
           };
         } else if (activeTab === 'contests') {
           params = {
@@ -149,7 +151,7 @@ function Reports() {
 
   useEffect(() => {
     fetchReportData();
-  }, [activeTab, studentDept, studentSec, studentYear, filterStartDate, filterEndDate, contestBatch]);
+  }, [activeTab, studentDept, studentSec, studentYear, filterStartDate, filterEndDate, contestBatch, selectedPlatform]);
 
   // Export to Excel handler
   const handleExportExcel = () => {
@@ -183,20 +185,66 @@ function Reports() {
       }));
       fileName = contestBatch ? `${contestBatch}_contests_attendance_report` : 'contests_attendance_report';
     } else if (activeTab === 'students') {
-      exportData = filteredStudentsReport.map(s => ({
-        'Roll Number': s.register_number,
-        'Student Name': s.name,
-        'Department': s.department,
-        'Year': s.academic_year,
-        'LeetCode Username': s.leetcode_username,
-        'Rated Contests': s.rated_contests,
-        'Unrated Contests': s.unrated_contests,
-        'Participation Count': s.present_count,
-        'Attendance Percentage': `${s.attendance_percentage}%`,
-        'Current Rating': s.current_rating,
-        'Best Rating': s.best_rating,
-        'Rank History': s.rank_history
-      }));
+      const mapStudentRowForExport = (s) => {
+        if (selectedPlatform === 'leetcode') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'LeetCode Username': s.username,
+            'Rated Contests': s.rated_contests,
+            'Unrated Contests': s.unrated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Best Rating': s.best_rating,
+            'Rank History': s.rank_history
+          };
+        } else if (selectedPlatform === 'codeforces') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'Codeforces Handle': s.username,
+            'Rated Contests': s.rated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Max Rating': s.best_rating,
+            'Current Rank': s.cf_rank,
+            'Max Rank': s.cf_max_rank
+          };
+        } else if (selectedPlatform === 'codechef') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'CodeChef Username': s.username,
+            'Rated Contests': s.rated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Highest Rating': s.best_rating,
+            'Stars': s.cc_stars
+          };
+        } else {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'Platform': s.platform?.toUpperCase(),
+            'Username / Handle': s.username,
+            'Contests': s.rated_contests,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating
+          };
+        }
+      };
+      exportData = filteredStudentsReport.map(mapStudentRowForExport);
       fileName = 'student_performance_report';
     } else if (activeTab === 'attendance-log') {
       exportData = data.map(item => ({
@@ -251,20 +299,66 @@ function Reports() {
       }));
       fileName = contestBatch ? `${contestBatch}_contests_attendance_report` : 'contests_attendance_report';
     } else if (activeTab === 'students') {
-      exportData = filteredStudentsReport.map(s => ({
-        'Roll Number': s.register_number,
-        'Student Name': s.name,
-        'Department': s.department,
-        'Year': s.academic_year,
-        'LeetCode Username': s.leetcode_username,
-        'Rated Contests': s.rated_contests,
-        'Unrated Contests': s.unrated_contests,
-        'Participation Count': s.present_count,
-        'Attendance Percentage': `${s.attendance_percentage}%`,
-        'Current Rating': s.current_rating,
-        'Best Rating': s.best_rating,
-        'Rank History': s.rank_history
-      }));
+      const mapStudentRowForExport = (s) => {
+        if (selectedPlatform === 'leetcode') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'LeetCode Username': s.username,
+            'Rated Contests': s.rated_contests,
+            'Unrated Contests': s.unrated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Best Rating': s.best_rating,
+            'Rank History': s.rank_history
+          };
+        } else if (selectedPlatform === 'codeforces') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'Codeforces Handle': s.username,
+            'Rated Contests': s.rated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Max Rating': s.best_rating,
+            'Current Rank': s.cf_rank,
+            'Max Rank': s.cf_max_rank
+          };
+        } else if (selectedPlatform === 'codechef') {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'CodeChef Username': s.username,
+            'Rated Contests': s.rated_contests,
+            'Participation Count': s.present_count,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating,
+            'Highest Rating': s.best_rating,
+            'Stars': s.cc_stars
+          };
+        } else {
+          return {
+            'Roll Number': s.register_number,
+            'Student Name': s.name,
+            'Department': s.department,
+            'Year': s.academic_year,
+            'Platform': s.platform?.toUpperCase(),
+            'Username / Handle': s.username,
+            'Contests': s.rated_contests,
+            'Attendance Percentage': `${s.attendance_percentage}%`,
+            'Current Rating': s.current_rating
+          };
+        }
+      };
+      exportData = filteredStudentsReport.map(mapStudentRowForExport);
       fileName = 'student_performance_report';
     } else if (activeTab === 'attendance-log') {
       exportData = data.map(item => ({
@@ -313,23 +407,69 @@ function Reports() {
         `${c.attendance_percentage}%`
       ]);
     } else if (activeTab === 'students') {
-      title = 'Student Attendance & LeetCode Performance Report';
+      title = `Student Attendance & ${selectedPlatform === 'all' ? 'Multi-Platform' : selectedPlatform.charAt(0).toUpperCase() + selectedPlatform.slice(1)} Performance Report`;
       fileName = 'student_performance_report';
-      headers = ['Roll Number', 'Student Name', 'Dept', 'Year', 'LeetCode Username', 'Rated', 'Unrated', 'Present', 'Attendance %', 'Rating', 'Best Rating', 'Rank History'];
-      rows = filteredStudentsReport.map(s => [
-        s.register_number,
-        s.name,
-        s.department,
-        s.academic_year,
-        s.leetcode_username,
-        s.rated_contests,
-        s.unrated_contests,
-        s.present_count,
-        `${s.attendance_percentage}%`,
-        s.current_rating,
-        s.best_rating,
-        s.rank_history
-      ]);
+      if (selectedPlatform === 'leetcode') {
+        headers = ['Roll Number', 'Student Name', 'Dept', 'Year', 'LeetCode Username', 'Rated', 'Unrated', 'Present', 'Attendance %', 'Rating', 'Best Rating', 'Rank History'];
+        rows = filteredStudentsReport.map(s => [
+          s.register_number,
+          s.name,
+          s.department,
+          s.academic_year,
+          s.username,
+          s.rated_contests,
+          s.unrated_contests,
+          s.present_count,
+          `${s.attendance_percentage}%`,
+          s.current_rating,
+          s.best_rating,
+          s.rank_history
+        ]);
+      } else if (selectedPlatform === 'codeforces') {
+        headers = ['Roll Number', 'Student Name', 'Dept', 'Year', 'Codeforces Handle', 'Rated', 'Present', 'Attendance %', 'Rating', 'Max Rating', 'Current Rank', 'Max Rank'];
+        rows = filteredStudentsReport.map(s => [
+          s.register_number,
+          s.name,
+          s.department,
+          s.academic_year,
+          s.username,
+          s.rated_contests,
+          s.present_count,
+          `${s.attendance_percentage}%`,
+          s.current_rating,
+          s.best_rating,
+          s.cf_rank || 'N/A',
+          s.cf_max_rank || 'N/A'
+        ]);
+      } else if (selectedPlatform === 'codechef') {
+        headers = ['Roll Number', 'Student Name', 'Dept', 'Year', 'CodeChef Username', 'Rated', 'Present', 'Attendance %', 'Rating', 'Highest Rating', 'Stars'];
+        rows = filteredStudentsReport.map(s => [
+          s.register_number,
+          s.name,
+          s.department,
+          s.academic_year,
+          s.username,
+          s.rated_contests,
+          s.present_count,
+          `${s.attendance_percentage}%`,
+          s.current_rating,
+          s.best_rating,
+          s.cc_stars || '0★'
+        ]);
+      } else {
+        headers = ['Roll Number', 'Student Name', 'Dept', 'Year', 'Platform', 'Username / Handle', 'Contests', 'Attendance %', 'Rating'];
+        rows = filteredStudentsReport.map(s => [
+          s.register_number,
+          s.name,
+          s.department,
+          s.academic_year,
+          s.platform?.toUpperCase(),
+          s.username,
+          s.rated_contests,
+          `${s.attendance_percentage}%`,
+          s.current_rating
+        ]);
+      }
     } else if (activeTab === 'departments') {
       title = 'Department Attendance Summary';
       fileName = 'department_attendance_report';
@@ -397,7 +537,7 @@ function Reports() {
     ? data.filter(s => 
         (s.name?.toLowerCase().includes(studentSearch.toLowerCase())) || 
         (s.register_number?.includes(studentSearch)) || 
-        (s.leetcode_username?.toLowerCase().includes(studentSearch.toLowerCase()))
+        (s.username?.toLowerCase().includes(studentSearch.toLowerCase()))
       )
     : [];
 
@@ -600,7 +740,7 @@ function Reports() {
             {activeTab === 'students' && (
               <div className="space-y-4 animate-fade-in">
                 {/* Search & Filter row inside Tab */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 bg-slate-50/40 dark:bg-slate-800/10 border-b border-slate-100 dark:border-slate-800">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 p-4 bg-slate-50/40 dark:bg-slate-800/10 border-b border-slate-100 dark:border-slate-800">
                   <div className="relative">
                     <Search className="absolute inset-y-0 left-2.5 my-auto h-3.5 w-3.5 text-slate-400" />
                     <input
@@ -611,6 +751,16 @@ function Reports() {
                       className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 py-2 pl-8 pr-3 text-xs outline-none focus:border-primary-500 dark:text-white"
                     />
                   </div>
+                  <select
+                    value={selectedPlatform}
+                    onChange={(e) => setSelectedPlatform(e.target.value)}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 dark:text-slate-200"
+                  >
+                    <option value="all">All Platforms</option>
+                    <option value="leetcode">LeetCode</option>
+                    <option value="codeforces">Codeforces</option>
+                    <option value="codechef">CodeChef</option>
+                  </select>
                   <select
                     value={studentDept}
                     onChange={(e) => setStudentDept(e.target.value)}
@@ -664,50 +814,158 @@ function Reports() {
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
+                  <table className="w-full text-left border-collapse">                    <thead>
                       <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                         <th className="px-6 py-4">Roll Number</th>
                         <th className="px-6 py-4">Name</th>
                         <th className="px-6 py-4">Dept / Sec</th>
                         <th className="px-6 py-4">Batch</th>
-                        <th className="px-6 py-4">LeetCode Username</th>
-                        <th className="px-6 py-4">Rated Contests</th>
-                        <th className="px-6 py-4">Unrated Contests</th>
-                        <th className="px-6 py-4">Present</th>
-                        <th className="px-6 py-4">Attendance %</th>
-                        <th className="px-6 py-4">Rating</th>
-                        <th className="px-6 py-4">Best Rating</th>
-                        <th className="px-6 py-4">Rank History</th>
+                        {selectedPlatform === 'all' && (
+                          <>
+                            <th className="px-6 py-4">Platform</th>
+                            <th className="px-6 py-4">Username / Handle</th>
+                            <th className="px-6 py-4">Contests</th>
+                            <th className="px-6 py-4">Attendance %</th>
+                            <th className="px-6 py-4">Current Rating</th>
+                          </>
+                        )}
+                        {selectedPlatform === 'leetcode' && (
+                          <>
+                            <th className="px-6 py-4">LeetCode Username</th>
+                            <th className="px-6 py-4">Rated Contests</th>
+                            <th className="px-6 py-4">Unrated Contests</th>
+                            <th className="px-6 py-4">Present</th>
+                            <th className="px-6 py-4">Attendance %</th>
+                            <th className="px-6 py-4">Current Rating</th>
+                            <th className="px-6 py-4">Best Rating</th>
+                            <th className="px-6 py-4">Rank History</th>
+                          </>
+                        )}
+                        {selectedPlatform === 'codeforces' && (
+                          <>
+                            <th className="px-6 py-4">Codeforces Handle</th>
+                            <th className="px-6 py-4">Rated Contests</th>
+                            <th className="px-6 py-4">Present</th>
+                            <th className="px-6 py-4">Attendance %</th>
+                            <th className="px-6 py-4">Current Rating</th>
+                            <th className="px-6 py-4">Max Rating</th>
+                            <th className="px-6 py-4">Current Rank</th>
+                            <th className="px-6 py-4">Max Rank</th>
+                          </>
+                        )}
+                        {selectedPlatform === 'codechef' && (
+                          <>
+                            <th className="px-6 py-4">CodeChef Username</th>
+                            <th className="px-6 py-4">Rated Contests</th>
+                            <th className="px-6 py-4">Present</th>
+                            <th className="px-6 py-4">Attendance %</th>
+                            <th className="px-6 py-4">Current Rating</th>
+                            <th className="px-6 py-4">Highest Rating</th>
+                            <th className="px-6 py-4">Stars</th>
+                          </>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs text-slate-600 dark:text-slate-300">
                       {filteredStudentsReport.length === 0 ? (
-                        <tr><td colSpan="12" className="text-center py-12 text-slate-400">No student performance records found.</td></tr>
+                        <tr>
+                          <td colSpan={selectedPlatform === 'all' ? 9 : (selectedPlatform === 'codechef' ? 11 : 12)} className="text-center py-12 text-slate-400">
+                            <div className="flex flex-col items-center gap-2">
+                              <p className="text-sm font-bold text-slate-500 dark:text-slate-400">
+                                No student performance records match the selected filters.
+                              </p>
+                              <p className="text-xs text-slate-450 dark:text-slate-500">
+                                Try changing the platform, department, section, academic year, or date range.
+                              </p>
+                            </div>
+                          </td>
+                        </tr>
                       ) : (
                         filteredStudentsReport.map((s) => (
-                          <tr key={s.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                          <tr key={`${s.register_number}_${s.platform}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
                             <td className="px-6 py-4 font-bold text-slate-800 dark:text-slate-200">{s.register_number}</td>
                             <td className="px-6 py-4 font-semibold">{s.name}</td>
                             <td className="px-6 py-4">{s.department} • Sec {s.section}</td>
                             <td className="px-6 py-4">{s.academic_year}</td>
-                            <td className="px-6 py-4 font-mono font-bold text-slate-500">{s.leetcode_username}</td>
-                            <td className="px-6 py-4 font-bold">{s.rated_contests}</td>
-                            <td className="px-6 py-4 font-bold">{s.unrated_contests}</td>
-                            <td className="px-6 py-4 text-emerald-600 font-bold">{s.present_count}</td>
-                            <td className="px-6 py-4">
-                              <span className={`font-extrabold ${s.attendance_percentage < 75 ? 'text-rose-500' : 'text-slate-800 dark:text-slate-200'}`}>
-                                {s.attendance_percentage}%
-                              </span>
-                              {s.attendance_percentage < 75 && (
-                                <span className="ml-2 inline-flex items-center rounded-md bg-rose-50 dark:bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-500 uppercase tracking-wide">
-                                  Low
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4 font-extrabold text-primary-600 dark:text-primary-400">{s.current_rating}</td>
-                            <td className="px-6 py-4 font-semibold text-slate-500">{s.best_rating}</td>
-                            <td className="px-6 py-4 max-w-[150px] truncate" title={s.rank_history}>{s.rank_history}</td>
+                            
+                            {selectedPlatform === 'all' && (
+                              <>
+                                <td className="px-6 py-4 font-semibold uppercase text-slate-500">{s.platform || 'N/A'}</td>
+                                <td className="px-6 py-4 font-mono font-bold text-slate-500">{s.username || 'N/A'}</td>
+                                <td className="px-6 py-4 font-bold">{s.rated_contests || 0}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`font-extrabold ${s.attendance_percentage < 75 ? 'text-rose-500' : 'text-slate-800 dark:text-slate-200'}`}>
+                                    {s.attendance_percentage}%
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 font-extrabold text-primary-600 dark:text-primary-400">{s.current_rating || 0}</td>
+                              </>
+                            )}
+
+                            {selectedPlatform === 'leetcode' && (
+                              <>
+                                <td className="px-6 py-4 font-mono font-bold text-slate-505">{s.username}</td>
+                                <td className="px-6 py-4 font-bold">{s.rated_contests}</td>
+                                <td className="px-6 py-4 font-bold">{s.unrated_contests}</td>
+                                <td className="px-6 py-4 text-emerald-600 font-bold">{s.present_count}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`font-extrabold ${s.attendance_percentage < 75 ? 'text-rose-500' : 'text-slate-800 dark:text-slate-200'}`}>
+                                    {s.attendance_percentage}%
+                                  </span>
+                                  {s.attendance_percentage < 75 && (
+                                    <span className="ml-2 inline-flex items-center rounded-md bg-rose-50 dark:bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-500 uppercase tracking-wide">
+                                      Low
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 font-extrabold text-primary-600 dark:text-primary-400">{s.current_rating}</td>
+                                <td className="px-6 py-4 font-semibold text-slate-500">{s.best_rating}</td>
+                                <td className="px-6 py-4 max-w-[150px] truncate" title={s.rank_history}>{s.rank_history}</td>
+                              </>
+                            )}
+
+                            {selectedPlatform === 'codeforces' && (
+                              <>
+                                <td className="px-6 py-4 font-mono font-bold text-slate-505">{s.username}</td>
+                                <td className="px-6 py-4 font-bold">{s.rated_contests}</td>
+                                <td className="px-6 py-4 text-emerald-600 font-bold">{s.present_count}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`font-extrabold ${s.attendance_percentage < 75 ? 'text-rose-500' : 'text-slate-800 dark:text-slate-200'}`}>
+                                    {s.attendance_percentage}%
+                                  </span>
+                                  {s.attendance_percentage < 75 && (
+                                    <span className="ml-2 inline-flex items-center rounded-md bg-rose-50 dark:bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-500 uppercase tracking-wide">
+                                      Low
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 font-extrabold text-primary-600 dark:text-primary-400">{s.current_rating}</td>
+                                <td className="px-6 py-4 font-semibold text-slate-500">{s.best_rating}</td>
+                                <td className="px-6 py-4 font-semibold">{s.cf_rank || 'N/A'}</td>
+                                <td className="px-6 py-4 font-semibold">{s.cf_max_rank || 'N/A'}</td>
+                              </>
+                            )}
+
+                            {selectedPlatform === 'codechef' && (
+                              <>
+                                <td className="px-6 py-4 font-mono font-bold text-slate-505">{s.username}</td>
+                                <td className="px-6 py-4 font-bold">{s.rated_contests}</td>
+                                <td className="px-6 py-4 text-emerald-600 font-bold">{s.present_count}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`font-extrabold ${s.attendance_percentage < 75 ? 'text-rose-500' : 'text-slate-800 dark:text-slate-200'}`}>
+                                    {s.attendance_percentage}%
+                                  </span>
+                                  {s.attendance_percentage < 75 && (
+                                    <span className="ml-2 inline-flex items-center rounded-md bg-rose-50 dark:bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-500 uppercase tracking-wide">
+                                      Low
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 font-extrabold text-primary-600 dark:text-primary-400">{s.current_rating}</td>
+                                <td className="px-6 py-4 font-semibold text-slate-500">{s.best_rating}</td>
+                                <td className="px-6 py-4 font-bold text-amber-600">{s.cc_stars || '0★'}</td>
+                              </>
+                            )}
                           </tr>
                         ))
                       )}

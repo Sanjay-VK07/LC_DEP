@@ -20,6 +20,8 @@ import {
   BookOpen,
   RefreshCw
 } from 'lucide-react';
+import { getLeetCodeProfileUrl } from '../utils/platformUrls';
+import { logger } from '../utils/logger';
 
 function Attendance() {
   const [activeTab, setActiveTab] = useState('sheet');
@@ -241,6 +243,7 @@ function Attendance() {
       if (selectedSection) params.section = selectedSection;
       const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, { params });
       if (res.data.success) {
+        logger.debug('Received contest attendance students:', res.data.data);
         setStudents(res.data.data);
       }
     } catch (err) {
@@ -333,6 +336,7 @@ function Attendance() {
         }
       });
       if (res.data.success) {
+        logger.debug('Received LeetCode contest records:', res.data.records);
         setLcStats(res.data.stats);
         setLcRecords(res.data.records);
       }
@@ -395,7 +399,7 @@ function Attendance() {
   const filteredStudents = students.filter(s => {
     const matchesSearch = s.name.toLowerCase().includes(search.toLowerCase()) || 
                           s.register_number.includes(search) ||
-                          s.leetcode_username.toLowerCase().includes(search.toLowerCase());
+                          ((s.leetcode_username || '').toLowerCase().includes(search.toLowerCase()));
     
     let matchesStatus = true;
     if (filterStatus) {
@@ -675,14 +679,18 @@ function Attendance() {
                               <span className="text-[10px] text-slate-450 block">Section {s.section}</span>
                             </td>
                             <td className="px-6 py-3.5">
-                              <a 
-                                href={`https://leetcode.com/${s.leetcode_username}`} 
-                                target="_blank" 
-                                rel="noreferrer" 
-                                className="text-primary-555 hover:underline font-semibold flex items-center gap-1"
-                              >
-                                {s.leetcode_username} <ExternalLink className="h-3 w-3 inline" />
-                              </a>
+                              {s.leetcode_username ? (
+                                <a 
+                                  href={getLeetCodeProfileUrl(s.leetcode_username)} 
+                                  target="_blank" 
+                                  rel="noreferrer" 
+                                  className="text-primary-555 hover:underline font-semibold flex items-center gap-1"
+                                >
+                                  {s.leetcode_username} <ExternalLink className="h-3 w-3 inline" />
+                                </a>
+                              ) : (
+                                <span className="text-slate-450 italic">Not Registered</span>
+                              )}
                             </td>
                             <td className="px-6 py-3.5">
                               {s.registration_time ? (
@@ -1396,7 +1404,7 @@ function Attendance() {
                     const text = lcSearchText.toLowerCase();
                     return r.student_name.toLowerCase().includes(text) ||
                            r.roll_no.toLowerCase().includes(text) ||
-                           r.leetcode_username.toLowerCase().includes(text);
+                           ((r.leetcode_username || '').toLowerCase().includes(text));
                   }).length === 0 ? (
                     <tr>
                       <td colSpan="9" className="text-center py-10 text-slate-400 font-medium">
@@ -1410,7 +1418,7 @@ function Attendance() {
                         const text = lcSearchText.toLowerCase();
                         return r.student_name.toLowerCase().includes(text) ||
                                r.roll_no.toLowerCase().includes(text) ||
-                               r.leetcode_username.toLowerCase().includes(text);
+                               ((r.leetcode_username || '').toLowerCase().includes(text));
                       })
                       .map((record) => (
                         <tr key={record.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/20">

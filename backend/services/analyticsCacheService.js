@@ -140,7 +140,6 @@ const KEYS = {
   DASHBOARD_STATS: 'dashboard:stats',
   PORTAL_SUMMARY: 'analytics:portal_summary',
   LEADERBOARDS: (filter) => `analytics:leaderboards:${filter || 'all'}`,
-  DEPARTMENT_ANALYTICS: 'analytics:departments',
   RATING_DISTRIBUTION: 'analytics:rating_distribution',
   PLATFORM_STATS: 'analytics:platform_stats',
   CONTEST_SUMMARIES: 'contests:summaries',

@@ -204,14 +204,22 @@ async function getContestsReport(req, res) {
 
 // 3. Get All Students Report with Attendance
 async function getStudentsReport(req, res) {
-  const { department, section, academicBatch, minAttendance, maxAttendance } = req.query;
+  const { department, section, academicBatch, academicYear, minAttendance, maxAttendance, platform, startDate, endDate } = req.query;
   try {
-    let data = await attendanceService.getBatchAttendanceSummary({ department, section, academicBatch });
+    const targetBatch = academicBatch || academicYear;
+    let data = await attendanceService.getBatchAttendanceSummary({ 
+      department: department || undefined, 
+      section: section || undefined, 
+      academicBatch: targetBatch || undefined, 
+      platform: platform || undefined, 
+      startDate: startDate || undefined, 
+      endDate: endDate || undefined 
+    });
     if (minAttendance !== undefined) data = data.filter(s => s.attendance_percentage >= Number(minAttendance));
     if (maxAttendance !== undefined) data = data.filter(s => s.attendance_percentage <= Number(maxAttendance));
     return res.json({ success: true, count: data.length, data });
   } catch (error) {
-    console.error('[ReportController] Error fetching students report:', error);
+    console.error('[ReportController] Error fetching students report:', error.message || error);
     return res.status(500).json({ success: false, message: 'Failed to retrieve students report' });
   }
 }

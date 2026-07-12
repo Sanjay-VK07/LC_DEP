@@ -12,6 +12,7 @@ const leetcode = require('../utils/leetcode');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const NetworkService = require('../utils/networkService');
 const AuditLogger = require('./AuditLogger');
+const cache = require('./analyticsCacheService');
 
 // Sync lock registry (in-memory, global symbol for multi-service safety)
 const lockKey = Symbol.for('leetcode-sync-locks');
@@ -503,6 +504,7 @@ Stop Reason: ${stopReason}
 
         await connection.commit();
         console.log(`Attendance updated.`);
+        cache.invalidateAll();
         console.log(`Sync completed successfully.\n`);
       } catch (transactionError) {
         console.error('[Sync] Transaction error, rolling back...', transactionError);

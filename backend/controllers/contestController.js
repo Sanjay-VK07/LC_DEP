@@ -2,6 +2,7 @@ const db = require('../config/db');
 const jobQueue = require('../services/jobQueueService');
 const cache = require('../services/analyticsCacheService');
 const auditLog = require('../services/auditLogService');
+const { classifyCodeforcesType } = require('../services/attendanceService');
 
 // Helper to determine contest status dynamically
 function getContestStatus(slug) {
@@ -46,6 +47,7 @@ async function getContests(req, res) {
         c.start_time AS date, 
         c.contest_status,
         c.contest_type,
+        c.platform,
         (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) AS registration_count,
         (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) AS attendance_count
     `;
@@ -59,7 +61,12 @@ async function getContests(req, res) {
     }
     
     query += ` FROM Contests c`;
-    const conditions = [];
+    const conditions = [
+      `c.slug NOT LIKE 'upcoming-live-%'`,
+      `c.slug NOT LIKE 'starting-%'`,
+      `c.slug NOT LIKE 'temporary-%'`,
+      `c.slug NOT LIKE 'placeholder-%'`
+    ];
 
     if (type) {
       conditions.push(`c.contest_type = ?`);
@@ -84,7 +91,21 @@ async function getContests(req, res) {
 
     // Enrich with type and status
     const enriched = contests.map((c) => {
-      const contestType = c.contest_type ? c.contest_type.toLowerCase() : (c.name.toLowerCase().includes('biweekly') ? 'biweekly' : 'weekly');
+      let contestType = c.contest_type ? c.contest_type.toLowerCase() : 'weekly';
+      const platformLower = c.platform ? c.platform.toLowerCase() : '';
+      if (platformLower === 'codeforces') {
+        contestType = classifyCodeforcesType(c.name);
+      } else if (platformLower === 'codechef') {
+        contestType = 'starters';
+        const nameLower = c.name.toLowerCase();
+        if (nameLower.includes('cook-off') || nameLower.includes('cook')) contestType = 'cook-off';
+        else if (nameLower.includes('lunchtime')) contestType = 'lunchtime';
+        else if (nameLower.includes('long challenge') || nameLower.includes('long')) contestType = 'long challenge';
+      } else {
+        if (c.name.toLowerCase().includes('biweekly')) {
+          contestType = 'biweekly';
+        }
+      }
       const status = c.contest_status ? c.contest_status.toUpperCase() : 'RATED';
       return {
         id: c.contest_id,
@@ -113,6 +134,29 @@ async function addContest(req, res) {
   if (!contestId || !name || !date) {
     return res.status(400).json({ success: false, message: 'Contest ID (slug), Name, and Date are required.' });
   }
+
+  const isTestOrDevEnv = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'dev';
+  if (!isTestOrDevEnv) {
+    const testPatterns = [
+      /\btest\b/i,
+      /\bfail\b/i,
+      /\bdummy\b/i,
+      /\bmock\b/i,
+      /\bsample\b/i,
+      /\bdemo\b/i,
+      /\bdebug\b/i,
+      /\bfake\b/i,
+      /\bseed\b/i,
+      /\btemporary\b/i
+    ];
+    if (testPatterns.some(pat => pat.test(name) || pat.test(contestId))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Production Safety Rule: Contest name or ID contains testing/mock keywords. Insert rejected.'
+      });
+    }
+  }
+
   try {
     const slug = contestId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const contestType = type.toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';
@@ -153,6 +197,29 @@ async function editContest(req, res) {
   if (!contestId || !name || !date) {
     return res.status(400).json({ success: false, message: 'Contest ID (slug), Name, and Date are required.' });
   }
+
+  const isTestOrDevEnv = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'dev';
+  if (!isTestOrDevEnv) {
+    const testPatterns = [
+      /\btest\b/i,
+      /\bfail\b/i,
+      /\bdummy\b/i,
+      /\bmock\b/i,
+      /\bsample\b/i,
+      /\bdemo\b/i,
+      /\bdebug\b/i,
+      /\bfake\b/i,
+      /\bseed\b/i,
+      /\btemporary\b/i
+    ];
+    if (testPatterns.some(pat => pat.test(name) || pat.test(contestId))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Production Safety Rule: Contest name or ID contains testing/mock keywords. Rename rejected.'
+      });
+    }
+  }
+
   try {
     const slug = contestId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const contestType = type.toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';

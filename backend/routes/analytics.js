@@ -6,7 +6,6 @@ router.get('/student/:studentId', analyticsController.getStudentAnalytics);
 router.get('/student/:studentId/rating-history', analyticsController.getStudentRatingHistory);
 router.get('/student/:studentId/contest-history', analyticsController.getStudentContestHistory);
 router.get('/leaderboards', analyticsController.getLeaderboards);
-router.get('/departments', analyticsController.getDepartmentAnalytics);
 router.get('/portal-summary', analyticsController.getPortalSummary);
 router.get('/rating-distribution', analyticsController.getRatingDistribution);
 

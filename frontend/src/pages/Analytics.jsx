@@ -1,34 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  TrendingUp, 
-  Award, 
   Flame, 
   Calendar, 
-  Building2, 
   Trophy, 
-  Sparkles,
   ArrowUpRight
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip as RechartsTooltip,
-  Legend as RechartsLegend,
-  LineChart,
-  Line,
-  Cell
-} from 'recharts';
 
 function Analytics() {
   const [loading, setLoading] = useState(true);
   const [leaderboardData, setLeaderboardData] = useState(null);
-  const [departmentData, setDepartmentData] = useState(null);
-  const [activeTab, setActiveTab] = useState('leaderboard');
   const [error, setError] = useState('');
 
   // Filters state
@@ -84,7 +65,7 @@ function Analytics() {
     fetchAvailableSections();
   }, [filterDept, filterBatch]);
 
-  // Fetch analytics data when active tab or filters change
+  // Fetch analytics data when filters change
   useEffect(() => {
     const fetchAnalyticsData = async () => {
       setLoading(true);
@@ -94,14 +75,10 @@ function Analytics() {
         if (filterSec) lbParams.section = filterSec;
         if (filterBatch) lbParams.academicBatch = filterBatch;
 
-        const [lbRes, deptRes] = await Promise.all([
-          axios.get('/api/analytics/leaderboards', { params: lbParams }),
-          axios.get('/api/analytics/departments')
-        ]);
+        const lbRes = await axios.get('/api/analytics/leaderboards', { params: lbParams });
 
-        if (lbRes.data.success && deptRes.data.success) {
+        if (lbRes.data.success) {
           setLeaderboardData(lbRes.data);
-          setDepartmentData(deptRes.data.departments);
           setError('');
         } else {
           setError('Failed to load analytical metrics.');
@@ -114,7 +91,7 @@ function Analytics() {
       }
     };
     fetchAnalyticsData();
-  }, [activeTab, filterDept, filterSec, filterBatch]);
+  }, [filterDept, filterSec, filterBatch]);
 
   if (loading) {
     return (
@@ -124,7 +101,7 @@ function Analytics() {
     );
   }
 
-  if (error || !leaderboardData || !departmentData) {
+  if (error || !leaderboardData) {
     return (
       <div className="rounded-2xl border border-rose-100 bg-rose-50 dark:bg-rose-950/20 dark:border-rose-950/40 p-6 text-rose-600 dark:text-rose-400">
         <p className="font-semibold">Analytics system offline</p>
@@ -159,9 +136,6 @@ function Analytics() {
     }
   };
 
-  // Chart Cell Colors for Departments
-  const COLORS = ['#4f73ff', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'];
-
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -170,32 +144,7 @@ function Analytics() {
         <p className="text-sm text-slate-400">In-depth statistical insights and performance charts.</p>
       </div>
 
-      {/* Tabs Selector */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 gap-6">
-        <button 
-          onClick={() => setActiveTab('leaderboard')}
-          className={`pb-3 text-sm font-semibold transition-all ${
-            activeTab === 'leaderboard' 
-              ? 'border-b-2 border-primary-500 text-primary-600 dark:text-primary-400' 
-              : 'text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          Leaderboards & Consistency
-        </button>
-        <button 
-          onClick={() => setActiveTab('departments')}
-          className={`pb-3 text-sm font-semibold transition-all ${
-            activeTab === 'departments' 
-              ? 'border-b-2 border-primary-500 text-primary-600 dark:text-primary-400' 
-              : 'text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          Department Performance Comparisons
-        </button>
-      </div>
-
-      {activeTab === 'leaderboard' ? (
-        <div className="space-y-6">
+      <div className="space-y-6">
           {/* Filters Bar */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 p-4 shadow-sm">
             {/* Search */}
@@ -397,93 +346,6 @@ function Analytics() {
           </div>
         </div>
       </div>
-      ) : (
-        <div className="space-y-6 animate-fade-in">
-          {/* Charts Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Average Ratings Chart */}
-            <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-1.5">
-                <Building2 className="h-4.5 w-4.5 text-primary-500" /> Average Competitive Programming Rating by Department
-              </h3>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={departmentData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(200, 200, 200, 0.15)" />
-                    <XAxis dataKey="department" tick={{ fontSize: 9 }} stroke="rgba(150, 150, 150, 0.7)" />
-                    <YAxis domain={[1000, 'auto']} tick={{ fontSize: 10 }} stroke="rgba(150, 150, 150, 0.7)" />
-                    <RechartsTooltip />
-                    <Bar dataKey="average_rating" name="Avg Rating" radius={[6, 6, 0, 0]}>
-                      {departmentData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Problems Solved Chart */}
-            <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 p-5 shadow-sm">
-              <h3 className="font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-1.5">
-                <Sparkles className="h-4.5 w-4.5 text-indigo-500" /> Average Problems Solved Per Contest
-              </h3>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={departmentData} margin={{ top: 10, right: 10, left: -30, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(200, 200, 200, 0.15)" />
-                    <XAxis dataKey="department" tick={{ fontSize: 9 }} stroke="rgba(150, 150, 150, 0.7)" />
-                    <YAxis domain={[0, 4]} ticks={[0, 1, 2, 3, 4]} tick={{ fontSize: 10 }} stroke="rgba(150, 150, 150, 0.7)" />
-                    <RechartsTooltip />
-                    <Bar dataKey="average_problems_solved" name="Avg Problems Solved" radius={[6, 6, 0, 0]}>
-                      {departmentData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          {/* Department Analytics Table */}
-          <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-            <h3 className="font-bold text-slate-800 dark:text-white pb-3 border-b border-slate-100 dark:border-slate-800">
-              Comparative Metrics Summary
-            </h3>
-            
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-semibold">
-                    <th className="py-2.5">Department</th>
-                    <th className="text-center">Total Students</th>
-                    <th className="text-center">Attendance %</th>
-                    <th className="text-right">Avg Rating</th>
-                    <th className="text-right">Peak Rating</th>
-                    <th className="text-right">Avg Problems Solved</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                  {departmentData.map((d, index) => (
-                    <tr key={d.department} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
-                      <td className="py-3.5 font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                        <span className="h-3 w-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></span>
-                        {d.department}
-                      </td>
-                      <td className="text-center font-medium text-slate-600 dark:text-slate-300">{d.total_students}</td>
-                      <td className="text-center font-bold text-primary-600 dark:text-primary-400">{d.attendance_percentage}%</td>
-                      <td className="text-right font-semibold text-slate-700 dark:text-slate-300">{d.average_rating}</td>
-                      <td className="text-right font-bold text-indigo-600 dark:text-indigo-400">{d.peak_rating}</td>
-                      <td className="text-right font-medium text-slate-600 dark:text-slate-300">{d.average_problems_solved} / 4</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

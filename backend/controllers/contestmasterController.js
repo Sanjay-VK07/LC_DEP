@@ -61,6 +61,10 @@ async function getPlatformAnalytics(req, res) {
       `SELECT contest_id, title 
        FROM Contests 
        WHERE platform = ? AND contest_status != 'Cancelled'
+         AND slug NOT LIKE 'upcoming-live-%'
+         AND slug NOT LIKE 'starting-%'
+         AND slug NOT LIKE 'temporary-%'
+         AND slug NOT LIKE 'placeholder-%'
          AND (
            last_synced_at IS NULL
            OR (start_time <= NOW() AND DATE_ADD(start_time, INTERVAL duration SECOND) > NOW() AND last_synced_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE))

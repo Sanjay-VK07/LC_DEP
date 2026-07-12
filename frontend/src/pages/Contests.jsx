@@ -32,6 +32,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { getLeetCodeProfileUrl } from '../utils/platformUrls';
+import { logger } from '../utils/logger';
 import {
   ResponsiveContainer,
   BarChart,
@@ -109,6 +111,13 @@ function TypeBadge({ type }) {
       </span>
     );
   }
+  if (t === 'div1+div2') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400 border border-rose-100 dark:border-rose-900/30">
+        <Zap className="h-3 w-3" /> DIV1 + DIV2
+      </span>
+    );
+  }
   if (t.includes('div')) {
     const formatted = type.toUpperCase().replace('ROUND', '').trim();
     return (
@@ -120,14 +129,14 @@ function TypeBadge({ type }) {
   if (t === 'educational' || t.includes('edu')) {
     return (
       <span className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-400 border border-sky-100 dark:border-sky-900/30">
-        <Calendar className="h-3 w-3" /> Educational
+        <Calendar className="h-3 w-3" /> EDUCATIONAL
       </span>
     );
   }
   if (t === 'global') {
     return (
       <span className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide bg-teal-50 text-teal-700 dark:bg-teal-950/30 dark:text-teal-400 border border-teal-100 dark:border-teal-900/30">
-        <Zap className="h-3 w-3" /> Global
+        <Zap className="h-3 w-3" /> GLOBAL
       </span>
     );
   }
@@ -470,7 +479,7 @@ function Contests() {
         attended = Math.round(totalAttended / batchStudentsCount);
       }
       const missed = Math.max(0, eligible - attended);
-      const rate = eligible > 0 ? parseFloat(((attended / eligible) * 100).toFixed(1)) : 100.0;
+      const rate = eligible > 0 ? parseFloat(((attended / eligible) * 100).toFixed(1)) : null;
       return { label, eligible, attended, missed, rate };
     };
 
@@ -488,8 +497,8 @@ function Contests() {
       ];
     } else if (activePlatform === 'codeforces') {
       return [
-        computeBreakdown(c => c.type === 'div1', 'Div 1 Rounds'),
-        computeBreakdown(c => c.type === 'div2', 'Div 2 Rounds'),
+        computeBreakdown(c => c.type === 'div1' || c.type === 'div1+div2', 'Div 1 Rounds'),
+        computeBreakdown(c => c.type === 'div2' || c.type === 'div1+div2', 'Div 2 Rounds'),
         computeBreakdown(c => c.type === 'div3', 'Div 3 Rounds'),
         computeBreakdown(c => c.type === 'div4', 'Div 4 Rounds'),
         computeBreakdown(c => c.type === 'educational', 'Educational Rounds'),
@@ -598,13 +607,13 @@ function Contests() {
     // Always re-fetch when called — filters may have changed since last fetch.
     setLoadingParticipants(p => ({ ...p, [contestId]: true }));
     try {
-      // Task 2 fix: propagate the same batch filter used by the summary endpoint.
       const res = await axios.get(`/api/attendance/contest/${contestId}`, {
         params: {
           batch: selectedBatch || undefined
         }
       });
       if (res.data.success) {
+        logger.debug('Received contest participants:', res.data.data);
         setContestParticipants(p => ({
           ...p,
           [contestId]: {
@@ -763,7 +772,7 @@ function Contests() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <StatCard
             icon={ClipboardList}
-            label="Eligible Rated"
+            label="Eligible Contests"
             value={metrics.eligible}
             sub={selectedBatch || 'All batches'}
             colorClass="text-slate-600 dark:text-slate-300"
@@ -771,7 +780,7 @@ function Contests() {
           />
           <StatCard
             icon={CheckCircle2}
-            label={selectedStudentId === 'all' ? 'Avg Attended' : 'Attended'}
+            label={selectedStudentId === 'all' ? 'Average Contests Attended' : 'Contests Attended'}
             value={metrics.attended}
             sub="Past contests"
             colorClass="text-emerald-600 dark:text-emerald-450"
@@ -779,7 +788,7 @@ function Contests() {
           />
           <StatCard
             icon={AlertCircle}
-            label={selectedStudentId === 'all' ? 'Avg Missed' : 'Missed'}
+            label={selectedStudentId === 'all' ? 'Average Contests Missed' : 'Contests Missed'}
             value={metrics.missed}
             sub="Past contests"
             colorClass="text-rose-600 dark:text-rose-400"
@@ -787,8 +796,8 @@ function Contests() {
           />
           <StatCard
             icon={Target}
-            label="Attendance Rate"
-            value={`${metrics.rate}%`}
+            label={selectedStudentId === 'all' ? 'Student Attendance Rate' : 'Attendance Rate'}
+            value={metrics.eligible > 0 ? `${metrics.rate}%` : 'N/A'}
             sub="Average %"
             colorClass={style.text}
             bgClass={style.bgMuted}
@@ -991,8 +1000,12 @@ function Contests() {
                     <span className="text-[10px] text-slate-400 font-semibold italic">Showing last {monthlyTrendData.length} months</span>
                   </div>
                   <div className="h-60 w-full bg-slate-50/20 dark:bg-slate-900/10 rounded-xl border border-slate-150 dark:border-slate-800 p-2">
-                    {monthlyTrendData.length === 0 ? (
-                      <div className="h-full flex items-center justify-center text-xs text-slate-450 italic">No historical trend data available.</div>
+                    {metrics.eligible === 0 || monthlyTrendData.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 dark:text-slate-500">
+                        <BarChart3 className="h-8 w-8 mb-2 text-slate-350 dark:text-slate-600" />
+                        <p className="text-sm font-bold">No analytics available yet.</p>
+                        <p className="text-[11px] mt-0.5">Analytics will appear after more contests are completed.</p>
+                      </div>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={monthlyTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -1021,8 +1034,12 @@ function Contests() {
                     <span className="text-[10px] text-slate-400 font-semibold italic">8-Semester tracking matrix</span>
                   </div>
                   <div className="h-60 w-full bg-slate-50/20 dark:bg-slate-900/10 rounded-xl border border-slate-150 dark:border-slate-800 p-2">
-                    {semesterAnalyticsData.length === 0 ? (
-                      <div className="h-full flex items-center justify-center text-xs text-slate-450 italic">No semester records available.</div>
+                    {metrics.eligible === 0 || semesterAnalyticsData.filter(s => s.total > 0).length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 dark:text-slate-500">
+                        <BarChart3 className="h-8 w-8 mb-2 text-slate-350 dark:text-slate-600" />
+                        <p className="text-sm font-bold">No analytics available yet.</p>
+                        <p className="text-[11px] mt-0.5">Analytics will appear after more contests are completed.</p>
+                      </div>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={semesterAnalyticsData} margin={{ top: 10, right: 5, left: -25, bottom: 0 }} barSize={16}>
@@ -1048,59 +1065,67 @@ function Contests() {
                     <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Comparative Batch Metrics</span>
                     <span className="text-[10px] text-slate-400 font-semibold italic">Cohort analysis</span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {/* Bar Chart comparing attendance */}
-                    <div className="h-44 bg-slate-50/20 dark:bg-slate-900/10 rounded-xl border border-slate-150 dark:border-slate-800 p-2">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={batchComparisonData} margin={{ top: 10, right: 5, left: -20, bottom: 0 }} barSize={32}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" className="dark:stroke-slate-800/60" />
-                          <XAxis dataKey="name" stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                          <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} domain={[0, 100]} />
-                          <RechartsTooltip content={<CustomTooltip />} />
-                          <Bar dataKey="attendance" fill={style.chartColor} radius={[4, 4, 0, 0]} name="Avg Attendance" />
-                        </BarChart>
-                      </ResponsiveContainer>
+                  {metrics.eligible === 0 || batchComparisonData.length === 0 ? (
+                    <div className="h-44 w-full bg-slate-50/20 dark:bg-slate-900/10 rounded-xl border border-slate-150 dark:border-slate-800 p-2 flex flex-col items-center justify-center text-center text-slate-400 dark:text-slate-500">
+                      <BarChart3 className="h-8 w-8 mb-2 text-slate-350 dark:text-slate-600" />
+                      <p className="text-sm font-bold">No analytics available yet.</p>
+                      <p className="text-[11px] mt-0.5">Analytics will appear after more contests are completed.</p>
                     </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Bar Chart comparing attendance */}
+                      <div className="h-44 bg-slate-50/20 dark:bg-slate-900/10 rounded-xl border border-slate-150 dark:border-slate-800 p-2">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={batchComparisonData} margin={{ top: 10, right: 5, left: -20, bottom: 0 }} barSize={32}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" className="dark:stroke-slate-800/60" />
+                            <XAxis dataKey="name" stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} domain={[0, 100]} />
+                            <RechartsTooltip content={<CustomTooltip />} />
+                            <Bar dataKey="attendance" fill={style.chartColor} radius={[4, 4, 0, 0]} name="Avg Attendance" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
 
-                    {/* Table overview */}
-                    <div className="border border-slate-150 dark:border-slate-800 rounded-xl overflow-hidden text-xs bg-slate-50/10 dark:bg-slate-900/5">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-850 font-bold text-slate-550">
-                            <th className="py-2.5 px-3">Batch</th>
-                            <th className="py-2.5 px-3 text-right">Participants</th>
-                            <th className="py-2.5 px-3 text-right">Avg Rating</th>
-                            <th className="py-2.5 px-3 text-right">Avg Attendance</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50 dark:divide-slate-850/50">
-                          {batchComparisonData.map(b => (
-                            <tr key={b.name} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
-                              <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-300">{b.name}</td>
-                              <td className="py-2.5 px-3 text-right font-medium text-slate-505">{b.participants}</td>
-                              <td className="py-2.5 px-3 text-right font-bold text-indigo-650 dark:text-indigo-400">{b.rating}</td>
-                              <td className="py-2.5 px-3 text-right font-extrabold text-cyan-600 dark:text-cyan-400">{b.attendance}%</td>
+                      {/* Table overview */}
+                      <div className="border border-slate-150 dark:border-slate-800 rounded-xl overflow-hidden text-xs bg-slate-50/10 dark:bg-slate-900/5">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-850 font-bold text-slate-550">
+                              <th className="py-2.5 px-3">Batch</th>
+                              <th className="py-2.5 px-3 text-right">Participants</th>
+                              <th className="py-2.5 px-3 text-right">Avg Rating</th>
+                              <th className="py-2.5 px-3 text-right">Avg Attendance</th>
                             </tr>
-                          ))}
-                          {selectedStudentId !== 'all' && selectedStudentInfo && (
-                            <tr className={`bg-primary-50/20 dark:bg-primary-950/15 border-t ${style.borderMuted}`}>
-                              <td className={`py-2.5 px-3 font-extrabold ${style.text} flex items-center gap-1`}>
-                                <span className={`inline-block h-1.5 w-1.5 rounded-full ${style.bg} shrink-0`} />
-                                {selectedStudentInfo.name.split(' ')[0]} (You)
-                              </td>
-                              <td className="py-2.5 px-3 text-right text-slate-400 dark:text-slate-500 font-medium">—</td>
-                              <td className={`py-2.5 px-3 text-right font-extrabold ${style.text}`}>
-                                {studentSummaries.find(s => s.id === parseInt(selectedStudentId))?.current_rating || 0}
-                              </td>
-                              <td className={`py-2.5 px-3 text-right font-extrabold ${style.text}`}>
-                                {metrics.rate}%
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50 dark:divide-slate-850/50">
+                            {batchComparisonData.map(b => (
+                              <tr key={b.name} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                                <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-300">{b.name}</td>
+                                <td className="py-2.5 px-3 text-right font-medium text-slate-505">{b.participants}</td>
+                                <td className="py-2.5 px-3 text-right font-bold text-indigo-650 dark:text-indigo-400">{b.rating}</td>
+                                <td className="py-2.5 px-3 text-right font-extrabold text-cyan-600 dark:text-cyan-400">{b.attendance}%</td>
+                              </tr>
+                            ))}
+                            {selectedStudentId !== 'all' && selectedStudentInfo && (
+                              <tr className={`bg-primary-50/20 dark:bg-primary-950/15 border-t ${style.borderMuted}`}>
+                                <td className={`py-2.5 px-3 font-extrabold ${style.text} flex items-center gap-1`}>
+                                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${style.bg} shrink-0`} />
+                                  {selectedStudentInfo.name.split(' ')[0]} (You)
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-400 dark:text-slate-500 font-medium">—</td>
+                                <td className={`py-2.5 px-3 text-right font-extrabold ${style.text}`}>
+                                  {studentSummaries.find(s => s.id === parseInt(selectedStudentId))?.current_rating || 0}
+                                </td>
+                                <td className={`py-2.5 px-3 text-right font-extrabold ${style.text}`}>
+                                  {metrics.eligible > 0 ? `${metrics.rate}%` : '--'}
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -1181,10 +1206,10 @@ function Contests() {
                     <div key={item.label} className="space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-slate-700 dark:text-slate-300">{item.label}</span>
-                        <span className={`font-extrabold ${textColor}`}>{item.rate}%</span>
+                        <span className={`font-extrabold ${textColor}`}>{item.rate !== null ? `${item.rate}%` : 'N/A'}</span>
                       </div>
                       <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                        <div className={`h-full rounded-full transition-all duration-300 ${progressColor}`} style={{ width: `${item.rate}%` }} />
+                        <div className={`h-full rounded-full transition-all duration-300 ${progressColor}`} style={{ width: `${item.rate !== null ? item.rate : 0}%` }} />
                       </div>
                       <div className="grid grid-cols-3 gap-1 text-[10px] text-center font-bold mt-1 text-slate-400">
                         <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 py-1 rounded-lg">
@@ -1529,7 +1554,20 @@ function Contests() {
                                                         <span className="font-bold text-slate-800 dark:text-slate-200 block">{p.name}</span>
                                                         <span className="text-[9px] text-slate-400 font-mono">{p.register_number}</span>
                                                       </td>
-                                                      <td className="py-2.5 px-3 font-semibold text-slate-500 dark:text-slate-400">{p.platform_username || '—'}</td>
+                                                      <td className="py-2.5 px-3 font-semibold text-slate-500 dark:text-slate-400">
+                                                        {activePlatform === 'leetcode' && p.platform_username ? (
+                                                          <a 
+                                                            href={getLeetCodeProfileUrl(p.platform_username)}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="text-primary-500 hover:underline"
+                                                          >
+                                                            {p.platform_username}
+                                                          </a>
+                                                        ) : (
+                                                          p.platform_username || '—'
+                                                        )}
+                                                      </td>
                                                       <td className="py-2.5 px-3 text-right font-black text-slate-700 dark:text-slate-300">
                                                         {p.contest_rank ? `#${p.contest_rank}` : '—'}
                                                       </td>
@@ -1588,7 +1626,20 @@ function Contests() {
                                                         <span className="text-[9px] text-slate-400 font-mono">{p.register_number}</span>
                                                       </td>
                                                       <td className="py-2.5 px-3 font-semibold text-slate-500">{p.academic_year}</td>
-                                                      <td className="py-2.5 px-3 font-semibold text-slate-500 dark:text-slate-400">{p.platform_username || '—'}</td>
+                                                      <td className="py-2.5 px-3 font-semibold text-slate-500 dark:text-slate-400">
+                                                        {activePlatform === 'leetcode' && p.platform_username ? (
+                                                          <a 
+                                                            href={getLeetCodeProfileUrl(p.platform_username)}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="text-primary-500 hover:underline"
+                                                          >
+                                                            {p.platform_username}
+                                                          </a>
+                                                        ) : (
+                                                          p.platform_username || '—'
+                                                        )}
+                                                      </td>
                                                       <td className="py-2.5 px-3 text-right">
                                                         <span className={`inline-flex items-center rounded-lg px-2 py-0.5 text-[9px] font-extrabold border ${
                                                           p.reason === 'Username Not Linked'

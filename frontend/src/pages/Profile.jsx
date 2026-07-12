@@ -35,8 +35,11 @@ import {
   TrendingUp,
   Star
 } from 'lucide-react';
+import { getLeetCodeProfileUrl } from '../utils/platformUrls';
+import { logger } from '../utils/logger';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
+
 
 
 function Profile() {
@@ -126,7 +129,10 @@ function Profile() {
     if (!targetId) { setUnifiedProfile(null); return; }
     try {
       const res = await axios.get(`/api/students/${targetId}/unified-profile`);
-      if (res.data.success) setUnifiedProfile(res.data.data);
+      if (res.data.success) {
+        logger.debug('Received unified student profile data:', res.data.data);
+        setUnifiedProfile(res.data.data);
+      }
     } catch (err) {
       console.error('Failed to fetch unified student profile:', err.message);
     }
@@ -152,6 +158,7 @@ function Profile() {
       const url = `/api/attendance/student/${targetId}${forceRefresh ? '?refresh=true' : ''}`;
       const res = await axios.get(url);
       if (res.data.success) {
+        logger.debug('Received student timeline data:', res.data.data);
         setDbHistory(res.data.data || []);
       } else {
         setError('No contest participation records found.');
@@ -873,14 +880,18 @@ function Profile() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-white/60">LeetCode Profile:</span>
-                  <a 
-                    href={`https://leetcode.com/${selectedStudentInfo.leetcode_username}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-bold underline text-white hover:text-slate-200"
-                  >
-                    @{selectedStudentInfo.leetcode_username}
-                  </a>
+                  {selectedStudentInfo.leetcode_username ? (
+                    <a 
+                      href={getLeetCodeProfileUrl(selectedStudentInfo.leetcode_username)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-bold underline text-white hover:text-slate-200"
+                    >
+                      @{selectedStudentInfo.leetcode_username}
+                    </a>
+                  ) : (
+                    <span className="font-bold text-white/60 italic">Not Registered</span>
+                  )}
                 </div>
                 <div className="flex justify-between">
                   <span className="text-white/60">Academic Year:</span>

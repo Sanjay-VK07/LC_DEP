@@ -140,6 +140,12 @@ test('SSE Controller - getLiveStream broadcasts updates and handles cleanup', as
 });
 
 after(async () => {
+  try {
+    await db.query("DELETE FROM Contests WHERE slug LIKE 'upcoming-live-%'");
+    await db.query("DELETE FROM LiveContests WHERE contestSlug LIKE 'upcoming-live-%'");
+  } catch (err) {
+    console.error('Test cleanup failed:', err);
+  }
   const pool = db.getPool();
   if (pool) {
     await pool.end();
