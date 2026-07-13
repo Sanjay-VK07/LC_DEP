@@ -368,14 +368,14 @@ const LeetCodeRankingSearchService = {
             const cleanUsername = normalizeUsername(rawUsername);
             const matchResult = participantMap.get(cleanUsername);
 
-            let attendanceStatus = 'Absent';
+            let attendanceStatus = 'ABSENT';
             let rank = null;
             let score = null;
             let finishTime = null;
 
             let solved = 0;
             if (matchResult) {
-              attendanceStatus = 'Present';
+              attendanceStatus = 'PRESENT';
               rank = matchResult.rank;
               score = matchResult.score;
               finishTime = matchResult.finish_time;
@@ -393,7 +393,7 @@ const LeetCodeRankingSearchService = {
             // Task 1: Downgrade protection for ContestAttendance
             const existingCA = existingContestAttendance.get(student.id);
             if (existingCA) {
-              const existingIsPresent = existingCA.attendanceStatus === 'Present' || existingCA.attendanceStatus === 'Participating';
+              const existingIsPresent = existingCA.attendanceStatus === 'PRESENT' || existingCA.attendanceStatus === 'Present' || existingCA.attendanceStatus === 'Participating';
               const newIsDowngrade = attendanceStatus === 'Unknown';
               if (existingIsPresent && newIsDowngrade) {
                 skippedDowngradeCount++;
@@ -435,14 +435,14 @@ const LeetCodeRankingSearchService = {
                   score = VALUES(score),
                   finish_time = VALUES(finish_time),
                   synced_at = NOW()
-              `, [slug, student.id, rawUsername, attendanceStatus === 'Present' ? 'PRESENT' : 'ABSENT', safeRank, safeScore, safeFinishTime]);
+              `, [slug, student.id, rawUsername, attendanceStatus === 'PRESENT' ? 'PRESENT' : 'ABSENT', safeRank, safeScore, safeFinishTime]);
             }
 
             // B. Update legacy/primary AttendanceRecords table for backward compatibility
             const existingAR = existingAttendanceRecords.get(student.id);
             const hasManualOverride = existingAR && existingAR.attendance_source === 'MANUAL';
             const existingLegacyPresent = existingAR && existingAR.attendance_status === 'PRESENT';
-            const legacyStatus = attendanceStatus === 'Present' ? 'PRESENT' : 'ABSENT';
+            const legacyStatus = attendanceStatus === 'PRESENT' ? 'PRESENT' : 'ABSENT';
 
             // Skip if: manual override exists, Unknown status, OR (fetch is incomplete AND would downgrade PRESENT→ABSENT)
             if (hasManualOverride || attendanceStatus === 'Unknown' || (isIncomplete && existingLegacyPresent && legacyStatus === 'ABSENT')) {

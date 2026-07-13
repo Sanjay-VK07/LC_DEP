@@ -12,7 +12,7 @@ function Navbar({ toggleSidebar }) {
     // Fetch notifications
     const fetchAlerts = async () => {
       try {
-        const res = await axios.get('/api/reports/dashboard-stats');
+        const res = await axios.get('/api/analytics/dashboard-stats');
         if (res.data.success && res.data.alerts) {
           setAlerts(res.data.alerts);
         }

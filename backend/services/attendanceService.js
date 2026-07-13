@@ -20,6 +20,7 @@ const db = require('../config/db');
 const { normalizeUsername } = require('../utils/usernameNormalizer');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const AuditLogger = require('./AuditLogger');
+const { normalizeAttendanceStatus } = require('../utils/attendanceNormalizer');
 
 // Helper — parse date without timezone shift
 function parseDateOnly(dateInput) {
@@ -60,9 +61,32 @@ function resolveCanonicalStatus(student, contest, record = {}) {
       reason: hasAttended ? 'Manual Override (PRESENT)' : 'Manual Override (ABSENT)'
     };
   }
+
+  // Priority 1: ContestParticipants
+  if (record.exists_in_contest_participants) {
+    return { status: 'PRESENT', reason: 'Attended' };
+  }
+
+  // Priority 2: Rank
+  if (record.contest_rank !== null && record.contest_rank !== undefined) {
+    return { status: 'PRESENT', reason: 'Attended' };
+  }
+
+  // Priority 3: Score
+  if (record.score !== null && record.score !== undefined && record.score > 0) {
+    return { status: 'PRESENT', reason: 'Attended' };
+  }
+
+  // Priority 4: Finish Time
+  if (record.finish_time !== null && record.finish_time !== undefined) {
+    return { status: 'PRESENT', reason: 'Attended' };
+  }
+
+  // Priority 5: Stale/Derived status checks
   if (record.attendance_status === 'PRESENT' || record.sync_status === 'Present' || record.sync_status === 'Participating') {
     return { status: 'PRESENT', reason: 'Attended' };
   }
+
   return { status: 'ABSENT', reason: 'Absent' };
 }
 
@@ -142,11 +166,35 @@ async function getStudentAttendance(userId) {
             (SELECT registration_time FROM Registrations r WHERE r.contest_id = c.contest_id AND r.user_id = ?) as registration_time,
             (SELECT ca.attendanceStatus FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_status,
             (SELECT ca.solved FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_solved,
-            (SELECT ca.score FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_score
+            (SELECT ca.score FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_score,
+            (SELECT ca.rank FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_rank,
+            (SELECT ca.penalty FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_penalty,
+            (SELECT COUNT(*) FROM ContestParticipants cp 
+             WHERE cp.contest_slug = c.slug 
+               AND (
+                 (LOWER(c.platform) = 'leetcode' AND LOWER(cp.username) = LOWER(?)) OR
+                 (LOWER(c.platform) = 'codeforces' AND LOWER(cp.username) = LOWER(?)) OR
+                 (LOWER(c.platform) = 'codechef' AND LOWER(cp.username) = LOWER(?)) OR
+                 (LOWER(c.platform) = 'hackerrank' AND LOWER(cp.username) = LOWER(?))
+               )
+            ) as exists_in_contest_participants
      FROM Contests c
      LEFT JOIN AttendanceRecords ar ON c.contest_id = ar.contest_id AND ar.user_id = ?
      ORDER BY c.start_time ASC`,
-    [userId, userId, userId, userId, userId, userId]
+    [
+      userId,
+      userId,
+      userId,
+      userId,
+      userId,
+      userId,
+      userId,
+      student.leetcode_username || '',
+      student.codeforces_username || '',
+      student.codechef_username || '',
+      student.hackerrank_username || '',
+      userId
+    ]
   );
 
   const formattedHistory = history.map(h => {
@@ -160,10 +208,13 @@ async function getStudentAttendance(userId) {
       const record = {
         attendance_status: h.stored_status,
         attendance_source: h.attendance_source,
-        contest_rank: h.rank,
+        contest_rank: h.rank !== null ? h.rank : (h.sync_rank !== null ? h.sync_rank : null),
         registration_time: h.registration_time,
         join_time: h.join_time,
-        sync_status: h.sync_status
+        sync_status: h.sync_status,
+        score: h.score !== null ? parseFloat(h.score) : (h.sync_score !== null ? parseFloat(h.sync_score) : null),
+        finish_time: h.sync_penalty !== null ? h.sync_penalty : null,
+        exists_in_contest_participants: h.exists_in_contest_participants > 0
       };
       const resolved = resolveCanonicalStatus(student, h, record);
       status = resolved.status;
@@ -177,7 +228,7 @@ async function getStudentAttendance(userId) {
       contest_status: h.contest_status,
       contest_type: h.contest_type || (h.contest_name?.toLowerCase().includes('biweekly') ? 'Biweekly' : 'Weekly'),
       platform: h.platform || 'LeetCode',
-      attendance_status: status,
+      attendance_status: normalizeAttendanceStatus(status),
       attendance_source: h.attendance_source || 'AUTO',
       remarks: h.remarks || null,
       last_updated: h.last_updated,
@@ -605,7 +656,7 @@ async function loadAttendanceOverrides(contestId, studentIdList) {
 async function loadAttendanceMappings(contestSlug, studentIdList) {
   if (!studentIdList) return [];
   const rows = await db.query(
-    `SELECT studentId, attendanceStatus, syncPass, verified
+    `SELECT studentId, attendanceStatus, \`rank\`, score, penalty, solved, syncPass, verified
      FROM ContestAttendance
      WHERE contestId = (SELECT id FROM LiveContests WHERE contestSlug = ? LIMIT 1)
        AND studentId IN (${studentIdList})`,
@@ -899,7 +950,7 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
   if (studentIds.length > 0) {
     const studentIdList = studentIds.join(',');
     const dbStartDetails = Date.now();
-    const [ratings, attendanceRecords, standings, registrations, participationLogs] = await Promise.all([
+    const [ratings, attendanceRecords, standings, registrations, participationLogs, attendanceMappings] = await Promise.all([
       loadPlatformRatings(profileTable, studentIdList),
       db.query(
         `SELECT user_id, attendance_status, attendance_source, remarks, last_updated,
@@ -909,11 +960,12 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
         [contest.contest_id]
       ),
       db.query(
-        `SELECT username, finish_time FROM ContestParticipants WHERE contest_slug = ?`,
+        `SELECT username, \`rank\`, score, problems_solved, finish_time FROM ContestParticipants WHERE contest_slug = ?`,
         [contestSlug]
       ),
       loadRegistrations(contest.contest_id, studentIdList),
-      loadParticipationLogs(contest.contest_id, studentIdList)
+      loadParticipationLogs(contest.contest_id, studentIdList),
+      loadAttendanceMappings(contestSlug, studentIdList)
     ]);
     const dbEndDetails = Date.now();
     dbQueryTime += (dbEndDetails - dbStartDetails);
@@ -921,9 +973,10 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
 
     const ratingMap = new Map(ratings.map(r => [r.user_id, r.current_rating]));
     const attMap = new Map(attendanceRecords.map(a => [a.user_id, a]));
-    const finishTimeMap = new Map(standings.map(s => [normalizeUsername(s.username), s.finish_time]));
+    const contestParticipantsMap = new Map(standings.map(s => [normalizeUsername(s.username), s]));
     const regMap = new Map(registrations.map(r => [r.user_id, r.registration_time]));
     const partMap = new Map(participationLogs.map(p => [p.user_id, p.join_time]));
+    const mappingMap = new Map(attendanceMappings.map(m => [m.studentId, m]));
 
     // Pre-calculate duplicate usernames for conflict logic
     const usernameCounts = new Map();
@@ -955,10 +1008,14 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
       const platformUsername = student[usernameCol] || '';
       const normUsername = normalizeUsername(platformUsername);
       const attRec = attMap.get(student.id);
+      const syncRec = mappingMap.get(student.id);
 
-      let status = 'absent';
+      let status = 'ABSENT';
       let attendanceStatus = 'ABSENT';
       let reason = 'Absent';
+
+      const standing = normUsername ? contestParticipantsMap.get(normUsername) : null;
+      const participantExists = !!standing;
 
       if (!platformUsername || !platformUsername.trim()) {
         reason = 'Not Registered';
@@ -966,10 +1023,23 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
       } else if (normUsername && usernameCounts.get(normUsername) > 1) {
         reason = 'Conflict';
         duplicateUsernames.push(platformUsername);
-      } else if (attRec && attRec.attendance_status === 'PRESENT') {
-        status = 'present';
-        attendanceStatus = 'PRESENT';
-        reason = 'Attended';
+      } else {
+        const recordObj = {
+          attendance_status: attRec?.attendance_status || null,
+          attendance_source: attRec?.attendance_source || null,
+          contest_rank: (attRec && attRec.rank !== null) ? attRec.rank : (standing ? standing.rank : (syncRec?.rank !== undefined ? syncRec.rank : null)),
+          registration_time: regMap.get(student.id) || null,
+          join_time: partMap.get(student.id) || null,
+          sync_status: syncRec?.attendanceStatus || null,
+          score: (attRec && attRec.score !== null) ? parseFloat(attRec.score) : (standing ? parseFloat(standing.score) : (syncRec?.score !== undefined ? parseFloat(syncRec.score) : null)),
+          finish_time: standing ? standing.finish_time : (syncRec?.penalty !== undefined ? syncRec.penalty : null),
+          exists_in_contest_participants: participantExists
+        };
+
+        const resolved = resolveCanonicalStatus(student, contest, recordObj);
+        status = normalizeAttendanceStatus(resolved.status);
+        attendanceStatus = status;
+        reason = resolved.reason;
       }
 
       const participantDetails = {
@@ -993,19 +1063,19 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
         marked_by:         attRec?.attendance_source === 'MANUAL' ? 'faculty' : 'system',
         remarks:           attRec?.remarks || null,
         last_updated:      attRec?.last_updated || null,
-        contest_rank:      attRec?.rank || null,
+        contest_rank:      (attRec && attRec.rank !== null) ? attRec.rank : (standing ? standing.rank : (syncRec?.rank !== undefined ? syncRec.rank : null)),
         rating_change:     attRec?.rating_change || 0,
-        problems_solved:   attRec?.problems_solved || 0,
-        problemsSolved:    attRec?.problems_solved || 0,
-        contest_score:     attRec?.score || 0.00,
-        contestScore:      attRec?.score || 0.00,
+        problems_solved:   (attRec && attRec.problems_solved !== null) ? attRec.problems_solved : (standing ? standing.problems_solved : (syncRec?.solved !== undefined ? syncRec.solved : 0)),
+        problemsSolved:    (attRec && attRec.problems_solved !== null) ? attRec.problems_solved : (standing ? standing.problems_solved : (syncRec?.solved !== undefined ? syncRec.solved : 0)),
+        contest_score:     (attRec && attRec.score !== null) ? attRec.score : (standing ? standing.score : (syncRec?.score !== undefined ? syncRec.score : 0.00)),
+        contestScore:      (attRec && attRec.score !== null) ? attRec.score : (standing ? standing.score : (syncRec?.score !== undefined ? syncRec.score : 0.00)),
         total_problems:    totalProblems,
         totalProblems:     totalProblems,
-        finishTime:        normUsername ? (finishTimeMap.get(normUsername) ?? null) : null,
+        finishTime:        standing ? standing.finish_time : (syncRec?.penalty !== undefined ? syncRec.penalty : null),
         reason:            reason
       };
 
-      if (status === 'present') {
+      if (status === 'PRESENT') {
         presentList.push(participantDetails);
       } else {
         absentList.push(participantDetails);

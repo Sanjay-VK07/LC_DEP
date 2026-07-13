@@ -243,15 +243,15 @@ async function syncAllData() {
         }
 
         await db.query(`
-          INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, \`rank\`, score, participated)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, attendance_status, attendance_source, \`rank\`, score, participated)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE 
             attendance_status = VALUES(attendance_status),
             attendance_source = VALUES(attendance_source),
             \`rank\` = IFNULL(\`rank\`, VALUES(\`rank\`)),
             score = IFNULL(score, VALUES(score)),
             participated = VALUES(participated)
-        `, [user.id, contest.contest_id, finalStatus, finalSource, rank, score, finalStatus === 'PRESENT' ? 1 : 0]);
+        `, [user.id, contest.contest_id, contest.title, contest.slug, contest.start_time, finalStatus, finalSource, rank, score, finalStatus === 'PRESENT' ? 1 : 0]);
       }
       finalizedCount++;
     }
@@ -402,7 +402,7 @@ async function ensureContestInDb(platform, entry) {
   }
 
   // Check if slug already exists
-  const existing = await db.query("SELECT contest_id, title, start_time FROM Contests WHERE slug = ?", [slug]);
+  const existing = await db.query("SELECT contest_id, title, slug, start_time FROM Contests WHERE slug = ?", [slug]);
   if (existing.length > 0) {
     return existing[0];
   }
@@ -450,11 +450,13 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
 
   if (state && !forceSync) {
     const now = new Date();
-    // Skip if recently synced (last 30 minutes) and healthy/partial
+    // Skip if recently synced (last 10 minutes) and healthy/partial
     if ((state.sync_status === 'Healthy' || state.sync_status === 'Partial') && state.last_successful_sync) {
       const diffMs = now - new Date(state.last_successful_sync);
-      if (diffMs < 30 * 60 * 1000) {
-        return { skipped: true, reason: 'Recently synced', lastSuccessfulSync: state.last_successful_sync };
+      if (diffMs < 10 * 60 * 1000) { // 10 minutes TTL
+        const logger = require('./logger');
+        logger.debug(`[Sync] Skipping external API call for ${plat} for user ${userId}. Recently synced ${Math.round(diffMs / 1000 / 60)}m ago.`);
+        return { skipped: true, reason: 'Recently synced within TTL', lastSuccessfulSync: state.last_successful_sync };
       }
     }
     // Skip if failed and next_retry is in the future
@@ -612,8 +614,8 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
         }
 
         await db.query(`
-          INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, \`rank\`, score, rating_before, rating_after, rating_change, participated)
-          VALUES (?, ?, 'PRESENT', 'AUTO', ?, ?, ?, ?, ?, 1)
+          INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, attendance_status, attendance_source, \`rank\`, score, rating_before, rating_after, rating_change, participated)
+          VALUES (?, ?, ?, ?, ?, 'PRESENT', 'AUTO', ?, ?, ?, ?, ?, 1)
           ON DUPLICATE KEY UPDATE
             attendance_status = 'PRESENT',
             attendance_source = 'AUTO',
@@ -623,7 +625,7 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
             rating_after = VALUES(rating_after),
             rating_change = VALUES(rating_change),
             participated = 1
-        `, [userId, dbContest.contest_id, rank, score, oldRatingVal, newRatingVal, ratingChangeVal]);
+        `, [userId, dbContest.contest_id, dbContest.title, dbContest.slug, dbContest.start_time, rank, score, oldRatingVal, newRatingVal, ratingChangeVal]);
       }
     }
   }
@@ -817,10 +819,23 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
 }
 
 async function syncStudentProfiles(userId) {
-  console.log(`[Sync] Triggering manual live synchronization for user ID: ${userId}...`);
-  for (const platform of Object.keys(connectors)) {
-    await syncStudentPlatform(userId, platform, true);
-  }
+  const logger = require('./logger');
+  logger.info(`[Sync] Triggering manual live synchronization for user ID: ${userId}...`);
+  const platforms = Object.keys(connectors);
+  const results = await Promise.allSettled(platforms.map(platform => syncStudentPlatform(userId, platform, true)));
+  
+  let updated = false;
+  results.forEach((res, idx) => {
+    if (res.status === 'fulfilled') {
+      const val = res.value;
+      if (val && !val.skipped) {
+        updated = true;
+      }
+    } else {
+      logger.error(`[Sync Failure] Platform: ${platforms[idx]} | Error:`, res.reason);
+    }
+  });
+  return { updated };
 }
 
 module.exports = {

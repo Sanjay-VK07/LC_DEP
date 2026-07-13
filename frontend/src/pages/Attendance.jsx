@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
+import { normalizeAttendanceStatus } from '../utils/attendance';
 
 function Attendance() {
   const [activeTab, setActiveTab] = useState('sheet');
@@ -291,7 +292,7 @@ function Attendance() {
   // Open override modal
   const openOverride = (student) => {
     setOverrideStudent(student);
-    setOverrideStatus(student.status === 'present' ? 'absent' : 'present');
+    setOverrideStatus(normalizeAttendanceStatus(student.status) === 'PRESENT' ? 'absent' : 'present');
     setOverrideRemarks('');
     setShowOverrideModal(true);
   };
@@ -403,7 +404,7 @@ function Attendance() {
     
     let matchesStatus = true;
     if (filterStatus) {
-      matchesStatus = s.status === filterStatus.toLowerCase();
+      matchesStatus = normalizeAttendanceStatus(s.status) === filterStatus.toUpperCase();
     }
     
     return matchesSearch && matchesStatus;
@@ -413,7 +414,7 @@ function Attendance() {
   
   // Contest Analytics Calculations
   const totalStudentsInBatch = students.length;
-  const totalPresent = students.filter(s => s.status === 'present' || s.status === 'unrated contest').length;
+  const totalPresent = students.filter(s => normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST').length;
   const attendanceRate = totalStudentsInBatch > 0 ? Math.round((totalPresent / totalStudentsInBatch) * 100) : 0;
   const averageRating = totalStudentsInBatch > 0 
     ? Math.round(students.reduce((acc, s) => acc + Number(s.current_rating || 1500), 0) / totalStudentsInBatch) 
@@ -421,7 +422,7 @@ function Attendance() {
 
   // Contest Leaderboard Calculations (Ranked by LeetCode current rating)
   const leaderboardData = students
-    .filter(s => s.status === 'present' || s.status === 'unrated contest')
+    .filter(s => normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST')
     .sort((a, b) => Number(b.current_rating || 1500) - Number(a.current_rating || 1500))
     .slice(0, 10);
 
@@ -663,7 +664,7 @@ function Attendance() {
                     </tr>
                   ) : (
                     filteredStudents.map((s) => {
-                      const isPresent = s.status === 'present' || s.status === 'unrated contest';
+                      const isPresent = normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST';
                       const toggleExpand = (studentId) => {
                         setExpandedStudentId(expandedStudentId === studentId ? null : studentId);
                       };
@@ -716,31 +717,32 @@ function Attendance() {
                             </td>
                             <td className="px-6 py-3.5">
                               {(() => {
-                                if (s.status === 'present') {
+                                const normStatus = normalizeAttendanceStatus(s.status);
+                                if (normStatus === 'PRESENT') {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-450 border border-emerald-200/50 dark:border-emerald-900/30">
                                       Present
                                     </span>
                                   );
-                                } else if (s.status === 'absent') {
+                                } else if (normStatus === 'ABSENT') {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-rose-100 text-rose-800 dark:bg-rose-950/30 dark:text-rose-450 border border-rose-200/50 dark:border-rose-900/30">
                                       Absent
                                     </span>
                                   );
-                                } else if (s.status === 'unrated contest') {
+                                } else if (normStatus === 'UNRATED CONTEST') {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-blue-100 text-blue-800 dark:bg-blue-950/30 dark:text-blue-450 border border-blue-200/50 dark:border-blue-900/30">
                                       Unrated Contest
                                     </span>
                                   );
-                                } else if (s.status === 'contest in progress') {
+                                } else if (normStatus === 'CONTEST IN PROGRESS') {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-amber-100 text-amber-805 dark:bg-amber-950/30 dark:text-amber-450 border border-amber-200/50 dark:border-amber-900/30 animate-pulse">
                                       In Progress
                                     </span>
                                   );
-                                } else if (s.status === 'waiting for rankings') {
+                                } else if (normStatus === 'WAITING FOR RANKINGS') {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-amber-100 text-amber-805 dark:bg-amber-950/30 dark:text-amber-450 border border-amber-200/50 dark:border-amber-900/30">
                                       Waiting for Rankings
@@ -1427,7 +1429,7 @@ function Attendance() {
                           <td className="py-3.5 px-4 text-slate-500">{record.department} {"/ Sec"} {record.section || 'N/A'}</td>
                           <td className="py-3.5 px-4 font-semibold text-primary-550">{record.leetcode_username}</td>
                           <td className="py-3.5 px-4 text-center">
-                            {record.attendance === 'PRESENT' ? (
+                            {normalizeAttendanceStatus(record.attendance) === 'PRESENT' ? (
                               <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">PRESENT</span>
                             ) : (
                               <span className="px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-[10px]">ABSENT</span>

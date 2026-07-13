@@ -210,151 +210,157 @@ async function getRatingDistribution() {
  * @param {number} userId
  */
 async function getUnifiedStudentProfile(userId) {
-  const [row] = await db.query(
-    `SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch,
-            u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username,
-            u.academic_start_date, u.academic_end_date,
-            lp.current_rating as lc_rating, lp.highest_rating as lc_best_rating,
-            lp.global_ranking as lc_rank, lp.problems_solved as lc_solved,
-            lp.contest_history as lc_history,
-            lp.active_days as lc_active_days, lp.submission_calendar as lc_submission_calendar,
-            lp.badges as lc_badges, lp.language_stats as lc_language_stats,
-            lp.topic_stats as lc_topic_stats, lp.recent_submissions as lc_recent_submissions,
-            lp.easy_solved as lc_easy_solved, lp.medium_solved as lc_medium_solved,
-            lp.hard_solved as lc_hard_solved, lp.acceptance_rate as lc_acceptance_rate,
-            cp.current_rating as cc_rating, cp.highest_rating as cc_best_rating, cp.lowest_rating as cc_lowest_rating,
-            cp.is_provisional as cc_is_provisional, cp.status as cc_status,
-            cp.global_ranking as cc_rank, cp.country_rank as cc_country_rank,
-            cp.problems_solved as cc_solved, cp.stars as cc_stars, cp.contest_history as cc_history, cp.rating_history as cc_rating_history,
-            cfp.current_rating as cf_rating, cfp.highest_rating as cf_best_rating,
-            cfp.rank as cf_rank, cfp.max_rank as cf_max_rank,
-            cfp.problems_solved as cf_solved, cfp.contest_history as cf_history,
-            hrp.problems_solved as hr_solved, hrp.stars as hr_stars,
-            hrp.badges as hr_badges, hrp.certificates as hr_certs
-     FROM Users u
-     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
-     LEFT JOIN CodeChefProfiles cp ON u.id = cp.user_id
-     LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
-     LEFT JOIN HackerRankProfiles hrp ON u.id = hrp.user_id
-     WHERE u.id = ?`,
-    [userId]
-  );
+  const cacheKey = cache.KEYS.STUDENT_ANALYTICS(userId);
+  return cache.getOrCompute(cacheKey, async () => {
+    const [row] = await db.query(
+      `SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch,
+              u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username,
+              u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
+              u.academic_start_date, u.academic_end_date,
+              lp.current_rating as lc_rating, lp.highest_rating as lc_best_rating,
+              lp.global_ranking as lc_rank, lp.problems_solved as lc_solved,
+              lp.contest_history as lc_history,
+              lp.active_days as lc_active_days, lp.submission_calendar as lc_submission_calendar,
+              lp.badges as lc_badges, lp.language_stats as lc_language_stats,
+              lp.topic_stats as lc_topic_stats, lp.recent_submissions as lc_recent_submissions,
+              lp.easy_solved as lc_easy_solved, lp.medium_solved as lc_medium_solved,
+              lp.hard_solved as lc_hard_solved, lp.acceptance_rate as lc_acceptance_rate,
+              cp.current_rating as cc_rating, cp.highest_rating as cc_best_rating, cp.lowest_rating as cc_lowest_rating,
+              cp.is_provisional as cc_is_provisional, cp.status as cc_status,
+              cp.global_ranking as cc_rank, cp.country_rank as cc_country_rank,
+              cp.problems_solved as cc_solved, cp.stars as cc_stars, cp.contest_history as cc_history, cp.rating_history as cc_rating_history,
+              cfp.current_rating as cf_rating, cfp.highest_rating as cf_best_rating,
+              cfp.rank as cf_rank, cfp.max_rank as cf_max_rank,
+              cfp.problems_solved as cf_solved, cfp.contest_history as cf_history,
+              hrp.problems_solved as hr_solved, hrp.stars as hr_stars,
+              hrp.badges as hr_badges, hrp.certificates as hr_certs
+       FROM Users u
+       LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
+       LEFT JOIN CodeChefProfiles cp ON u.id = cp.user_id
+       LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
+       LEFT JOIN HackerRankProfiles hrp ON u.id = hrp.user_id
+       WHERE u.id = ?`,
+      [userId]
+    );
 
-  if (!row) return null;
-  
-  const ccRatingHistory = (() => {
-    try {
-      return typeof row.cc_rating_history === 'string' ? JSON.parse(row.cc_rating_history) : (row.cc_rating_history || []);
-    } catch {
-      return [];
-    }
-  })();
-  const ccLowestRating = row.cc_lowest_rating !== null ? Number(row.cc_lowest_rating) : null;
-  const ccCurrentRating = row.cc_rating !== null ? Number(row.cc_rating) : null;
-  const ccHighestRating = row.cc_best_rating !== null ? Number(row.cc_best_rating) : null;
-  const ccIsProvisional = row.cc_is_provisional === 1;
-  const ccStatus = row.cc_status || (ccCurrentRating !== null ? 'RATED' : 'UNRATED');
-  const ccIsRated = ccCurrentRating !== null;
+    if (!row) return null;
+    
+    const ccRatingHistory = (() => {
+      try {
+        return typeof row.cc_rating_history === 'string' ? JSON.parse(row.cc_rating_history) : (row.cc_rating_history || []);
+      } catch {
+        return [];
+      }
+    })();
+    const ccLowestRating = row.cc_lowest_rating !== null ? Number(row.cc_lowest_rating) : null;
+    const ccCurrentRating = row.cc_rating !== null ? Number(row.cc_rating) : null;
+    const ccHighestRating = row.cc_best_rating !== null ? Number(row.cc_best_rating) : null;
+    const ccIsProvisional = row.cc_is_provisional === 1;
+    const ccStatus = row.cc_status || (ccCurrentRating !== null ? 'RATED' : 'UNRATED');
+    const ccIsRated = ccCurrentRating !== null;
 
-  console.log('[AUDIT][DB READ] currentRating =', ccCurrentRating, 'highestRating =', ccHighestRating, 'lowestRating =', ccLowestRating, 'ratingHistory.length =', ccRatingHistory.length);
-  console.log('[AUDIT LOG][Database Read] currentRating (row.cc_rating) =', row.cc_rating);
+    console.log('[AUDIT][DB READ] currentRating =', ccCurrentRating, 'highestRating =', ccHighestRating, 'lowestRating =', ccLowestRating, 'ratingHistory.length =', ccRatingHistory.length);
+    console.log('[AUDIT LOG][Database Read] currentRating (row.cc_rating) =', row.cc_rating);
 
-  const lcHistory = parseContestHistory(row.lc_history).map(normalizeLeetCodeEntry).filter(e => e.attended);
-  const ccHistory = parseContestHistory(row.cc_history).map(normalizeCodeChefEntry).filter(e => e.attended);
-  const cfHistory = parseContestHistory(row.cf_history).map(normalizeCodeforcesEntry);
+    const lcHistory = parseContestHistory(row.lc_history).map(normalizeLeetCodeEntry).filter(e => e.attended);
+    const ccHistory = parseContestHistory(row.cc_history).map(normalizeCodeChefEntry).filter(e => e.attended);
+    const cfHistory = parseContestHistory(row.cf_history).map(normalizeCodeforcesEntry);
 
-  const profiles = {
-    leetcode: {
-      platform: 'leetcode',
-      verified: !!row.leetcode_username,
-      username: row.leetcode_username,
-      rating: Number(row.lc_rating) || null,
-      maxRating: Number(row.lc_best_rating) || null,
-      globalRanking: row.lc_rank || null,
-      problemsSolved: Number(row.lc_solved) || 0,
-      easySolved: Number(row.lc_easy_solved) || 0,
-      mediumSolved: Number(row.lc_medium_solved) || 0,
-      hardSolved: Number(row.lc_hard_solved) || 0,
-      acceptanceRate: row.lc_acceptance_rate !== null ? Number(row.lc_acceptance_rate) : null,
-      contests: lcHistory.length,
-      contestHistory: lcHistory,
-      activeDays: Number(row.lc_active_days) || 0,
-      submissionCalendar: (() => { try { return typeof row.lc_submission_calendar === 'string' ? JSON.parse(row.lc_submission_calendar) : (row.lc_submission_calendar || {}); } catch { return {}; } })(),
-      badges: (() => { try { return typeof row.lc_badges === 'string' ? JSON.parse(row.lc_badges) : (row.lc_badges || []); } catch { return []; } })(),
-      languageStats: (() => { try { return typeof row.lc_language_stats === 'string' ? JSON.parse(row.lc_language_stats) : (row.lc_language_stats || []); } catch { return []; } })(),
-      topicStats: (() => { try { return typeof row.lc_topic_stats === 'string' ? JSON.parse(row.lc_topic_stats) : (row.lc_topic_stats || []); } catch { return []; } })(),
-      recentSubmissions: (() => { try { return typeof row.lc_recent_submissions === 'string' ? JSON.parse(row.lc_recent_submissions) : (row.lc_recent_submissions || []); } catch { return []; } })()
-    },
-    codechef: {
-      platform: 'codechef',
-      verified: !!row.codechef_username,
-      username: row.codechef_username,
-      rating: ccCurrentRating,
-      maxRating: ccHighestRating,
-      lowestRating: ccLowestRating,
-      currentRating: ccCurrentRating,
-      highestRating: ccHighestRating,
-      isRated: ccIsRated,
-      isProvisional: ccIsProvisional,
-      status: ccStatus,
-      globalRanking: row.cc_rank || null,
-      countryRank: row.cc_country_rank || null,
-      stars: row.cc_stars || null,
-      problemsSolved: Number(row.cc_solved) || 0,
-      contests: ccHistory.length,
-      contestHistory: ccHistory,
-      ratingHistory: ccRatingHistory
-    },
-    codeforces: {
-      platform: 'codeforces',
-      verified: !!row.codeforces_username,
-      username: row.codeforces_username,
-      rating: Number(row.cf_rating) || null,
-      maxRating: Number(row.cf_best_rating) || null,
-      rank: row.cf_rank || null,
-      maxRank: row.cf_max_rank || null,
-      problemsSolved: Number(row.cf_solved) || 0,
-      contests: cfHistory.length,
-      contestHistory: cfHistory
-    },
-    hackerrank: {
-      platform: 'hackerrank',
-      verified: !!row.hackerrank_username,
-      username: row.hackerrank_username,
-      problemsSolved: Number(row.hr_solved) || 0,
-      stars: Number(row.hr_stars) || 0,
-      badges: (() => { try { return typeof row.hr_badges === 'string' ? JSON.parse(row.hr_badges) : (row.hr_badges || []); } catch { return []; } })(),
-      certificates: (() => { try { return typeof row.hr_certs === 'string' ? JSON.parse(row.hr_certs) : (row.hr_certs || []); } catch { return []; } })()
-    }
-  };
+    const profiles = {
+      leetcode: {
+        platform: 'leetcode',
+        verified: !!row.leetcode_username,
+        username: row.leetcode_username,
+        rating: Number(row.lc_rating) || null,
+        maxRating: Number(row.lc_best_rating) || null,
+        globalRanking: row.lc_rank || null,
+        problemsSolved: Number(row.lc_solved) || 0,
+        easySolved: Number(row.lc_easy_solved) || 0,
+        mediumSolved: Number(row.lc_medium_solved) || 0,
+        hardSolved: Number(row.lc_hard_solved) || 0,
+        acceptanceRate: row.lc_acceptance_rate !== null ? Number(row.lc_acceptance_rate) : null,
+        contests: lcHistory.length,
+        contestHistory: lcHistory,
+        activeDays: Number(row.lc_active_days) || 0,
+        submissionCalendar: (() => { try { return typeof row.lc_submission_calendar === 'string' ? JSON.parse(row.lc_submission_calendar) : (row.lc_submission_calendar || {}); } catch { return {}; } })(),
+        badges: (() => { try { return typeof row.lc_badges === 'string' ? JSON.parse(row.lc_badges) : (row.lc_badges || []); } catch { return []; } })(),
+        languageStats: (() => { try { return typeof row.lc_language_stats === 'string' ? JSON.parse(row.lc_language_stats) : (row.lc_language_stats || []); } catch { return []; } })(),
+        topicStats: (() => { try { return typeof row.lc_topic_stats === 'string' ? JSON.parse(row.lc_topic_stats) : (row.lc_topic_stats || []); } catch { return []; } })(),
+        recentSubmissions: (() => { try { return typeof row.lc_recent_submissions === 'string' ? JSON.parse(row.lc_recent_submissions) : (row.lc_recent_submissions || []); } catch { return []; } })()
+      },
+      codechef: {
+        platform: 'codechef',
+        verified: !!row.codechef_username,
+        username: row.codechef_username,
+        rating: ccCurrentRating,
+        maxRating: ccHighestRating,
+        lowestRating: ccLowestRating,
+        currentRating: ccCurrentRating,
+        highestRating: ccHighestRating,
+        isRated: ccIsRated,
+        isProvisional: ccIsProvisional,
+        status: ccStatus,
+        globalRanking: row.cc_rank || null,
+        countryRank: row.cc_country_rank || null,
+        stars: row.cc_stars || null,
+        problemsSolved: Number(row.cc_solved) || 0,
+        contests: ccHistory.length,
+        contestHistory: ccHistory,
+        ratingHistory: ccRatingHistory
+      },
+      codeforces: {
+        platform: 'codeforces',
+        verified: row.codeforces_verified === 1 || row.codeforces_verified === true,
+        verifiedAt: row.codeforces_verified_at || null,
+        verifiedSource: row.codeforces_verified_source || null,
+        username: row.codeforces_username,
+        rating: Number(row.cf_rating) || null,
+        maxRating: Number(row.cf_best_rating) || null,
+        rank: row.cf_rank || null,
+        maxRank: row.cf_max_rank || null,
+        problemsSolved: Number(row.cf_solved) || 0,
+        contests: cfHistory.length,
+        contestHistory: cfHistory
+      },
+      hackerrank: {
+        platform: 'hackerrank',
+        verified: !!row.hackerrank_username,
+        username: row.hackerrank_username,
+        problemsSolved: Number(row.hr_solved) || 0,
+        stars: Number(row.hr_stars) || 0,
+        badges: (() => { try { return typeof row.hr_badges === 'string' ? JSON.parse(row.hr_badges) : (row.hr_badges || []); } catch { return []; } })(),
+        certificates: (() => { try { return typeof row.hr_certs === 'string' ? JSON.parse(row.hr_certs) : (row.hr_certs || []); } catch { return []; } })()
+      }
+    };
 
-  const overallScore = computeOverallScore(
-    Number(row.lc_rating), Number(row.cc_rating), Number(row.cf_rating),
-    Number(row.lc_solved), Number(row.cc_solved), Number(row.cf_solved), Number(row.hr_solved)
-  );
+    const overallScore = computeOverallScore(
+      Number(row.lc_rating), Number(row.cc_rating), Number(row.cf_rating),
+      Number(row.lc_solved), Number(row.cc_solved), Number(row.cf_solved), Number(row.hr_solved)
+    );
 
-  const totalProblemsSolved = Object.values(profiles).reduce((s, p) => s + (p.problemsSolved || 0), 0);
+    const totalProblemsSolved = Object.values(profiles).reduce((s, p) => s + (p.problemsSolved || 0), 0);
 
-  return {
-    student: {
-      id: row.id,
-      name: row.name,
-      roll_no: row.roll_no,
-      department: row.department,
-      section: row.section,
-      academic_batch: row.academic_batch,
-      academic_start_date: row.academic_start_date,
-      academic_end_date: row.academic_end_date,
-      leetcode_username: row.leetcode_username || null,
-      codechef_username: row.codechef_username || null,
-      codeforces_username: row.codeforces_username || null,
-      hackerrank_username: row.hackerrank_username || null,
-      platforms: buildPlatformList(row)
-    },
-    profiles,
-    overallScore,
-    totalProblemsSolved
-  };
+    return {
+      student: {
+        id: row.id,
+        name: row.name,
+        roll_no: row.roll_no,
+        department: row.department,
+        section: row.section,
+        academic_batch: row.academic_batch,
+        academic_start_date: row.academic_start_date,
+        academic_end_date: row.academic_end_date,
+        leetcode_username: row.leetcode_username || null,
+        codechef_username: row.codechef_username || null,
+        codeforces_username: row.codeforces_username || null,
+        hackerrank_username: row.hackerrank_username || null,
+        platforms: buildPlatformList(row)
+      },
+      profiles,
+      overallScore,
+      totalProblemsSolved
+    };
+  }, 10 * 60 * 1000);
 }
 
 module.exports = {

@@ -113,7 +113,7 @@ function DataHealth() {
   const fetchPlatformStats = async () => {
     setPlatformStatsLoading(true);
     try {
-      const res = await axios.get('/api/reports/platform-stats');
+      const res = await axios.get('/api/analytics/platform-stats');
       if (res.data.success) setPlatformStats(res.data.data);
     } catch (err) { console.error(err); }
     finally { setPlatformStatsLoading(false); }
@@ -124,7 +124,7 @@ function DataHealth() {
     try {
       const params = {};
       if (matrixContestType) params.contestType = matrixContestType;
-      const res = await axios.get('/api/reports/attendance-matrix', { params });
+      const res = await axios.get('/api/analytics/attendance-matrix', { params });
       if (res.data.success) setMatrix(res.data);
     } catch (err) { console.error(err); }
     finally { setMatrixLoading(false); }

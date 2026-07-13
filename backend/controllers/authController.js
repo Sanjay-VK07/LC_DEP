@@ -62,7 +62,8 @@ async function login(req, res) {
       }
     });
   } catch (err) {
-    console.error('[Auth] Login error:', err.message);
+    console.error('[Auth] Login error - Complete stack trace:');
+    console.error(err);
     return res.status(500).json({ success: false, message: 'Internal server error during login' });
   }
 }
@@ -93,10 +94,12 @@ async function register(req, res) {
 
     return res.status(201).json({ success: true, message: `Account for ${username} created successfully` });
   } catch (err) {
+    console.error('[Auth] Register error - Complete stack trace:');
+    console.error(err);
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ success: false, message: 'Username or email already exists' });
     }
-    return res.status(500).json({ success: false, message: 'Failed to register account: ' + err.message });
+    return res.status(500).json({ success: false, message: 'Failed to register account due to an internal server error' });
   }
 }
 
@@ -105,6 +108,9 @@ async function register(req, res) {
  */
 async function me(req, res) {
   try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
     const rows = await db.query(
       'SELECT id, username, role, name, email, student_id, created_at FROM Accounts WHERE id = ?',
       [req.user.id]
@@ -116,7 +122,9 @@ async function me(req, res) {
 
     return res.json({ success: true, user: rows[0] });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('[Auth] Get current user details error - Complete stack trace:');
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 }
 

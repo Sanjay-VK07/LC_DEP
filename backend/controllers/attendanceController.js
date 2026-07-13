@@ -5,6 +5,7 @@ const { getUserCodeChefStats } = require('../utils/codechef');
 const { normalizeBatchToShort } = require('../utils/batchHelper');
 const { normalizeUsername } = require('../utils/usernameNormalizer');
 const attendanceService = require('../services/attendanceService');
+const { normalizeAttendanceStatus } = require('../utils/attendanceNormalizer');
 
 // Helper to parse dates timezone-independently
 function parseDateOnly(dateInput) {
@@ -621,8 +622,8 @@ async function getStudentAttendanceHistory(req, res) {
       const isUnrated = item.contest_status && item.contest_status.toLowerCase() === 'unrated';
       
       let hasAttended = false;
-      if (item.attendance_source === 'MANUAL' && item.attendance_status) {
-        hasAttended = item.attendance_status === 'PRESENT';
+      if (item.attendance_status) {
+        hasAttended = normalizeAttendanceStatus(item.attendance_status) === 'PRESENT';
       } else {
         hasAttended = attendedTitles.has(item.contest_name.trim().toLowerCase()) || item.is_joined > 0;
       }
@@ -662,7 +663,7 @@ async function getStudentAttendanceHistory(req, res) {
       return {
         ...item,
         status: attendanceStatus === 'PRESENT' ? 'attended' : (attendanceStatus === 'ABSENT' ? 'not attended' : attendanceStatus.toLowerCase()),
-        attendance_status: attendanceStatus,
+        attendance_status: normalizeAttendanceStatus(attendanceStatus),
         eligibility_status: isEligible ? 'Eligible' : 'Outside Academic Period',
         marked_by: item.attendance_source === 'MANUAL' ? 'faculty' : 'system',
         last_updated: null,

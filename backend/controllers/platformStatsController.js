@@ -54,7 +54,7 @@ function getMonthRange(date = new Date()) {
 }
 
 /**
- * GET /api/reports/platform-stats
+ * GET /api/analytics/platform-stats
  * Returns per-student platform contest solve stats + Codeforces badge
  */
 async function getPlatformStats(req, res) {
@@ -198,7 +198,7 @@ async function getPlatformStats(req, res) {
 }
 
 /**
- * GET /api/reports/attendance-matrix
+ * GET /api/analytics/attendance-matrix
  * Returns attendance per student × per contest date (all dates as columns)
  * Ready for Excel export where each row = student, each column = contest date
  */

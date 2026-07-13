@@ -213,7 +213,7 @@ export default function CodeChefProgress(props) {
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Recent Contests</h4>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {contestHistory.map((c, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-950/10 text-xs">
+                <div key={`${c.contestId || 'c'}_${idx}`} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-950/10 text-xs">
                   <div>
                     <span className="font-semibold text-slate-700 dark:text-slate-300 block">{c.contestName || 'Contest Name Unavailable'}</span>
                     <span className="text-[10px] text-slate-400">{c.contestDate ? new Date(c.contestDate).toLocaleDateString() : ''}</span>

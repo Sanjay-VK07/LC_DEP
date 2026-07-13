@@ -5,6 +5,7 @@
  * and DashboardMetricsService. No independent calculations.
  */
 
+const db = require('../config/db');
 const platformAnalytics = require('../services/platformAnalyticsService');
 const dashboardMetrics = require('../services/dashboardMetricsService');
 const contestAnalytics = require('../services/contestAnalyticsService');
@@ -115,15 +116,21 @@ async function getRatingDistribution(req, res) {
 async function getStudentRatingHistory(req, res) {
   const { studentId } = req.params;
   const { platform } = req.query;
+  const logger = require('../utils/logger');
   try {
     const platforms = platform ? [platform] : ['leetcode', 'codechef', 'codeforces'];
     const result = {};
-    for (const p of platforms) {
-      result[p] = await contestAnalytics.getRatingHistory(Number(studentId), p);
-    }
+    await Promise.allSettled(platforms.map(async (p) => {
+      try {
+        result[p] = await contestAnalytics.getRatingHistory(Number(studentId), p);
+      } catch (err) {
+        logger.error(`[Rating History Failure] Platform: ${p} | Error:`, err.message);
+        result[p] = [];
+      }
+    }));
     return res.json({ success: true, ratingHistory: result });
   } catch (error) {
-    console.error('[AnalyticsController] Error fetching rating history:', error);
+    logger.error('[AnalyticsController] Error fetching rating history:', error);
     return res.status(500).json({ success: false, message: 'Failed to retrieve rating history' });
   }
 }
@@ -142,11 +149,149 @@ async function getStudentContestHistory(req, res) {
   }
 }
 
+// Relocated getDashboardStats method for warning alerts in Navbar
+async function getDashboardStats(req, res) {
+  try {
+    const serviceStats = await dashboardMetrics.getDashboardStats();
+
+    // Fetch lowAttendanceStudents and studentsWithoutProfiles directly from DB as they are alert-specific
+    const lowAttendanceStudents = await db.query(
+      `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
+              (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) as total_contests,
+              (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) as present_count,
+              ROUND((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
+                NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100) as attendance_percentage
+       FROM Users u
+       WHERE u.status = 'active'
+         AND (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) >= 3
+         AND (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
+             NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100 < 30
+       ORDER BY attendance_percentage ASC
+       LIMIT 10`
+    );
+
+    const studentsWithoutProfiles = await db.query(
+      `SELECT u.id, u.name, u.roll_no as register_number, u.department
+       FROM Users u
+       WHERE u.status = 'active'
+         AND u.leetcode_username IS NULL
+         AND u.codechef_username IS NULL
+         AND u.codeforces_username IS NULL
+         AND u.hackerrank_username IS NULL
+       LIMIT 5`
+    );
+
+    const platformOverview = [
+      {
+        platform: 'leetcode',
+        label: 'LeetCode',
+        linkedUsers: Number(serviceStats.platformAdoption?.leetcode ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.leetcode / 100) : 0),
+        avgRating: serviceStats.averageCodingRating,
+        avgProblems: 0,
+        participationCount: serviceStats.totalParts || 0
+      },
+      {
+        platform: 'codechef',
+        label: 'CodeChef',
+        linkedUsers: Number(serviceStats.platformAdoption?.codechef ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.codechef / 100) : 0),
+        avgRating: 0,
+        avgProblems: 0,
+        participationCount: 0
+      },
+      {
+        platform: 'codeforces',
+        label: 'Codeforces',
+        linkedUsers: Number(serviceStats.platformAdoption?.codeforces ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.codeforces / 100) : 0),
+        avgRating: 0,
+        avgProblems: 0,
+        participationCount: 0
+      },
+      {
+        platform: 'hackerrank',
+        label: 'HackerRank',
+        linkedUsers: Number(serviceStats.platformAdoption?.hackerrank ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.hackerrank / 100) : 0),
+        avgRating: 0,
+        avgProblems: 0,
+        participationCount: 0
+      }
+    ];
+
+    const formattedDepartmentStats = (serviceStats.departmentStats || []).map(d => ({
+      department: d.department,
+      totalStudents: Number(d.student_count || 0),
+      total_students: Number(d.student_count || 0),
+      average_rating: Number(d.avg_lc_rating || 0),
+      avg_lc_rating: Number(d.avg_lc_rating || 0),
+      attendancePercentage: 0,
+      attendance_percentage: 0
+    }));
+
+    return res.json({
+      success: true,
+      // ---- Original shape (required for backward compatibility) ----
+      stats: {
+        totalStudents: serviceStats.totalStudents,
+        totalActiveStudents: serviceStats.totalStudents,
+        totalContests: Number(serviceStats.contestStats?.total || 0),
+        ratedContests: Number(serviceStats.contestStats?.rated || 0),
+        unratedContests: Number(serviceStats.contestStats?.unrated || 0),
+        cancelledContests: Number(serviceStats.contestStats?.cancelled || 0),
+        weeklyContests: Number(serviceStats.contestStats?.weekly || 0),
+        biweeklyContests: Number(serviceStats.contestStats?.biweekly || 0),
+        overallAttendance: serviceStats.overallAttendance,
+        averageRating: serviceStats.averageCodingRating,
+        recentlySynced: serviceStats.recentSync?.[0] ? {
+          time: serviceStats.recentSync[0].completed_at,
+          contests: serviceStats.recentSync[0].contests_synced,
+          students: serviceStats.recentSync[0].students_processed
+        } : null,
+        activeCodingProfiles: serviceStats.activeCodingProfiles,
+        ratedStudents: serviceStats.ratedStudents,
+        unratedStudents: serviceStats.unratedStudents,
+        platformConnections: serviceStats.platformConnections,
+        overallCodingScore: serviceStats.averageCodingRating,
+        averageProblemsSolved: 0
+      },
+      departmentStats: formattedDepartmentStats,
+      weeklyTrend: serviceStats.weeklyTrend || [],
+      topStudents: serviceStats.topPerformers || [],
+      alerts: {
+        missingUploads: [],
+        lowAttendanceStudents,
+        recentContests: serviceStats.upcomingContests || [],
+        invalidPlatformUsernames: [],
+        studentsWithoutProfiles,
+        profilesNeedingVerification: [],
+        failedPlatformSynchronizations: []
+      },
+      // ---- New fields (used by normalized code) ----
+      totalStudents: serviceStats.totalStudents,
+      activeCodingProfiles: serviceStats.activeCodingProfiles,
+      averageCodingRating: serviceStats.averageCodingRating,
+      ratedStudents: serviceStats.ratedStudents,
+      unratedStudents: serviceStats.unratedStudents,
+      platformConnections: serviceStats.platformConnections,
+      overallAttendance: serviceStats.overallAttendance,
+      totalRegs: serviceStats.totalRegs,
+      totalParts: serviceStats.totalParts,
+      platformAdoption: serviceStats.platformAdoption,
+      platformOverview,
+      topPerformers: serviceStats.topPerformers || [],
+      recentSync: serviceStats.recentSync || [],
+      upcomingContests: serviceStats.upcomingContests || []
+    });
+  } catch (error) {
+    console.error('[AnalyticsController] Error fetching dashboard stats:', error);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve dashboard statistics: ' + error.message });
+  }
+}
+
 module.exports = {
   getStudentAnalytics,
   getLeaderboards,
   getPortalSummary,
   getRatingDistribution,
   getStudentRatingHistory,
-  getStudentContestHistory
+  getStudentContestHistory,
+  getDashboardStats
 };

@@ -10,7 +10,6 @@ import {
   Archive, 
   TrendingUp,
   Sparkles,
-  FileText,
   Building2,
   Bell,
   Activity,
@@ -30,7 +29,6 @@ function Sidebar({ isOpen, toggleSidebar }) {
     { to: '/notifications', label: 'Actionable Alerts', icon: Bell },
     { to: '/profile', label: 'Contest Participation Timeline', icon: TrendingUp },
     { to: '/analytics', label: 'Performance Analytics', icon: BarChart3 },
-    { to: '/reports', label: 'Reports & Summary', icon: FileText },
     { to: '/archive', label: 'Graduation Archive', icon: Archive },
     { to: '/departments', label: 'Department Manager', icon: Building2 },
   ];

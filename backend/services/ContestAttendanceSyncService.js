@@ -128,8 +128,34 @@ class ContestAttendanceSyncService {
       }
     }
 
-    // Build participant lookup map with normalized usernames
+    // Build participant lookup map with normalized usernames from both DB and newly fetched participants
     const participantMap = new Map();
+
+    // 1. Load from DB official ContestParticipants cache first
+    try {
+      const dbParticipants = await db.query(
+        "SELECT username, `rank`, score, problems_solved, finish_time FROM ContestParticipants WHERE contest_slug = ?",
+        [slug]
+      );
+      dbParticipants.forEach(p => {
+        if (p.username) {
+          const normKey = normalizeUsername(p.username);
+          if (normKey) {
+            participantMap.set(normKey, {
+              username: p.username,
+              rank: p.rank,
+              score: parseFloat(p.score) || 0.00,
+              finishTime: p.finish_time,
+              problemsSolved: p.problems_solved || 0
+            });
+          }
+        }
+      });
+    } catch (dbErr) {
+      console.warn(`[Sync Worker] Failed to load cached ContestParticipants: ${dbErr.message}`);
+    }
+
+    // 2. Load/overwrite from newly fetched participants (if fetched successfully)
     if (fetchSuccess) {
       participants.forEach(p => {
         if (p.username) {
@@ -140,7 +166,7 @@ class ContestAttendanceSyncService {
         }
       });
       console.log(`[Sync Worker] [DIAGNOSTICS] Participants Fetched: ${participants.length}`);
-      console.log(`[Sync Worker] [DIAGNOSTICS] Unique Normalized Entries: ${participantMap.size}`);
+      console.log(`[Sync Worker] [DIAGNOSTICS] Unique Normalized Entries in map: ${participantMap.size}`);
       updateProgress(60, `Successfully retrieved ${participants.length} participants from ${platform}.`);
     } else {
       console.error(`[Sync Worker] Failed to fetch participants for contest ${realContestId} on platform ${platform}:`, lastError.message);
@@ -190,6 +216,13 @@ class ContestAttendanceSyncService {
     let unknownCount = 0;
     let skippedDowngradeCount = 0;
 
+    let recoveredCount = 0;
+    let recoveredContestParticipants = 0;
+    let recoveredRank = 0;
+    let recoveredScore = 0;
+    let recoveredFinishTime = 0;
+    let skippedUnmatchedCount = 0;
+
     try {
       await connection.beginTransaction();
 
@@ -197,36 +230,128 @@ class ContestAttendanceSyncService {
         const platLower = platform.toLowerCase();
         const handle = student[`${platLower}_username`];
 
-        let status = 'Unknown';
+        let status = 'Absent';
         let rank = null;
         let score = 0.00;
         let penalty = 0;
         let solved = 0;
         let ratingBefore = null;
 
-        if (!handle || !handle.trim()) {
-          // No handle configured -> ABSENT
-          status = 'Absent';
-          absentCount++;
-        } else if (!fetchSuccess) {
-          // Successful fetch was not completed -> UNKNOWN
-          status = 'Unknown';
-          unknownCount++;
+        // Fetch existing records from database
+        const [existingRecord] = await connection.query(
+          "SELECT attendanceStatus, `rank`, score, penalty, solved, syncPass, verified FROM ContestAttendance WHERE contestId = ? AND studentId = ?",
+          [liveContestId, student.id]
+        );
+
+        // Check for manual override / existing legacy record
+        const [overrideCheck] = await connection.query(
+          "SELECT attendance_source, attendance_status, `rank`, score, problems_solved FROM AttendanceRecords WHERE user_id = ? AND contest_id = ?",
+          [student.id, realContestId]
+        );
+
+        let existingIsPresent = false;
+        let existingIsVerified = false;
+        let existingHigherPass = false;
+        let existingRank = null;
+        let existingScore = 0.00;
+        let existingPenalty = 0;
+        let existingSolved = 0;
+
+        if (existingRecord.length > 0) {
+          const existing = existingRecord[0];
+          existingIsPresent = existing.attendanceStatus === 'Present' || existing.attendanceStatus === 'Participating';
+          existingIsVerified = existing.verified === 1;
+          existingHigherPass = existing.syncPass > pass;
+          existingRank = existing.rank;
+          existingScore = parseFloat(existing.score) || 0.00;
+          existingPenalty = existing.penalty || 0;
+          existingSolved = existing.solved || 0;
+        }
+
+        let legacyRank = null;
+        let legacyScore = 0.00;
+        let legacySolved = 0;
+        if (overrideCheck.length > 0) {
+          const legacy = overrideCheck[0];
+          legacyRank = legacy.rank;
+          legacyScore = parseFloat(legacy.score) || 0.00;
+          legacySolved = legacy.problems_solved || 0;
+        }
+
+        const cleanHandle = handle ? normalizeUsername(handle) : null;
+        const match = cleanHandle ? participantMap.get(cleanHandle) : null;
+        const participantExists = !!match;
+
+        const resolvedRank = (match && match.rank !== null) ? match.rank : 
+                             (existingRank !== null ? existingRank : legacyRank);
+        const resolvedScore = (match && match.score !== null) ? match.score : 
+                              (existingScore > 0 ? existingScore : legacyScore);
+        const resolvedPenalty = (match && (match.finishTime !== null && match.finishTime !== undefined)) ? match.finishTime : existingPenalty;
+        const resolvedSolved = (match && (match.problemsSolved !== null && match.problemsSolved !== undefined)) ? match.problemsSolved : 
+                               (existingSolved > 0 ? existingSolved : legacySolved);
+
+        const hasRank = resolvedRank !== null;
+        const hasScore = resolvedScore > 0;
+        const hasFinishTime = resolvedPenalty > 0;
+
+        let isPresent = false;
+        let recoveryReason = null;
+
+        // Precedence checks
+        if (participantExists) {
+          isPresent = true;
+          recoveryReason = 'ContestParticipants';
+        } else if (hasRank) {
+          isPresent = true;
+          recoveryReason = 'Rank';
+        } else if (hasScore) {
+          isPresent = true;
+          recoveryReason = 'Score';
+        } else if (hasFinishTime) {
+          isPresent = true;
+          recoveryReason = 'FinishTime';
+        }
+
+        // Safety: Keep as Present if it was previously marked Present
+        if (existingIsPresent && !isPresent) {
+          isPresent = true;
+          status = 'PRESENT';
+          rank = existingRank;
+          score = existingScore;
+          penalty = existingPenalty;
+          solved = existingSolved;
+          matchedCount++;
+        } else if (isPresent) {
+          status = 'PRESENT';
+          rank = resolvedRank;
+          score = resolvedScore;
+          penalty = resolvedPenalty;
+          solved = resolvedSolved;
+          matchedCount++;
         } else {
-          // Look up handle in participants map using normalized username
-          const cleanHandle = normalizeUsername(handle);
-          const match = participantMap.get(cleanHandle);
-          if (match) {
-            status = 'Present';
-            rank = match.rank;
-            score = match.score || 0.00;
-            penalty = match.finishTime || 0;
-            solved = match.problemsSolved || 0;
-            matchedCount++;
-          } else {
-            status = 'Absent';
-            absentCount++;
+          status = 'ABSENT';
+          absentCount++;
+        }
+
+        // Track recovery stats
+        const existingIsAbsent = (existingRecord.length > 0 && existingRecord[0].attendanceStatus === 'Absent') ||
+                                 (overrideCheck.length > 0 && overrideCheck[0].attendance_status === 'ABSENT');
+
+        if (isPresent && existingIsAbsent) {
+          recoveredCount++;
+          if (recoveryReason === 'ContestParticipants') {
+            recoveredContestParticipants++;
+          } else if (recoveryReason === 'Rank') {
+            recoveredRank++;
+          } else if (recoveryReason === 'Score') {
+            recoveredScore++;
+          } else if (recoveryReason === 'FinishTime') {
+            recoveredFinishTime++;
           }
+        }
+
+        if (!isPresent) {
+          skippedUnmatchedCount++;
         }
 
         // Fetch rating before sync if Present
@@ -245,22 +370,6 @@ class ContestAttendanceSyncService {
         // If a previous higher-fidelity sync pass marked this student as
         // Present, do NOT overwrite with a lower-fidelity result.
         // -----------------------------------------------------------------
-        const [existingRecord] = await connection.query(
-          "SELECT attendanceStatus, syncPass, verified FROM ContestAttendance WHERE contestId = ? AND studentId = ?",
-          [liveContestId, student.id]
-        );
-
-        let existingIsPresent = false;
-        let existingIsVerified = false;
-        let existingHigherPass = false;
-
-        if (existingRecord.length > 0) {
-          const existing = existingRecord[0];
-          existingIsPresent = existing.attendanceStatus === 'Present' || existing.attendanceStatus === 'Participating';
-          existingIsVerified = existing.verified === 1;
-          existingHigherPass = existing.syncPass > pass;
-        }
-
         if (existingIsPresent) {
           // Unknown must never overwrite Present
           if (status === 'Unknown') {
@@ -307,14 +416,10 @@ class ContestAttendanceSyncService {
 
         // B. Insert/Update in AttendanceRecords (legacy dashboard table) if status is not Unknown
         if (status !== 'Unknown') {
-          const legacyStatus = status === 'Present' ? 'PRESENT' : 'ABSENT';
-          const remarks = status === 'Present' ? `Present via ${platform} Sync` : `Absent from ${platform} contest`;
+          const legacyStatus = status === 'PRESENT' ? 'PRESENT' : 'ABSENT';
+          const remarks = status === 'PRESENT' ? `Present via ${platform} Sync` : `Absent from ${platform} contest`;
 
           // Check for MANUAL override — never overwrite manual attendance
-          const [overrideCheck] = await connection.query(
-            "SELECT attendance_source, attendance_status FROM AttendanceRecords WHERE user_id = ? AND contest_id = ?",
-            [student.id, realContestId]
-          );
           const hasManualOverride = overrideCheck.length > 0 && overrideCheck[0].attendance_source === 'MANUAL';
           const existingLegacyPresent = overrideCheck.length > 0 && overrideCheck[0].attendance_status === 'PRESENT';
 
@@ -345,12 +450,56 @@ class ContestAttendanceSyncService {
             contest.contest_status || 'RATED',
             legacyStatus,
             remarks,
-            status === 'Present' ? rank : null,
-            status === 'Present' ? score : null,
-            status === 'Present' ? solved : 0
+            status === 'PRESENT' ? rank : null,
+            status === 'PRESENT' ? score : null,
+            status === 'PRESENT' ? solved : 0
           ]);
         }
       }
+
+      // Consistent updates for BOTH tables inside the same transaction
+      await connection.query(`
+        UPDATE ContestAttendance
+        SET attendanceStatus = 'PRESENT'
+        WHERE contestId = ? AND attendanceStatus = 'ABSENT'
+          AND (\`rank\` IS NOT NULL OR score > 0.00 OR penalty > 0)
+      `, [liveContestId]);
+
+      await connection.query(`
+        UPDATE AttendanceRecords
+        SET attendance_status = 'PRESENT',
+            remarks = COALESCE(remarks, 'Present via Sync Recovery')
+        WHERE contest_id = ? AND attendance_status = 'ABSENT'
+          AND (\`rank\` IS NOT NULL OR score > 0.00)
+      `, [realContestId]);
+
+      await connection.query(`
+        UPDATE AttendanceRecords ar
+        JOIN Contests c ON ar.contest_id = c.contest_id
+        JOIN LiveContests lc ON c.slug = lc.contestSlug
+        JOIN ContestAttendance ca ON lc.id = ca.contestId AND ar.user_id = ca.studentId
+        SET ar.attendance_status = 'PRESENT',
+            ar.\`rank\` = COALESCE(ar.\`rank\`, ca.\`rank\`),
+            ar.score = COALESCE(ar.score, ca.score),
+            ar.problems_solved = COALESCE(ar.problems_solved, ca.solved),
+            ar.remarks = COALESCE(ar.remarks, 'Present via Sync Recovery')
+        WHERE ca.contestId = ? AND ca.attendanceStatus = 'PRESENT'
+          AND ar.attendance_status = 'ABSENT'
+      `, [liveContestId]);
+
+      await connection.query(`
+        UPDATE ContestAttendance ca
+        JOIN LiveContests lc ON ca.contestId = lc.id
+        JOIN Contests c ON lc.contestSlug = c.slug
+        JOIN AttendanceRecords ar ON c.contest_id = ar.contest_id AND ca.studentId = ar.user_id
+        SET ca.attendanceStatus = 'PRESENT',
+            ca.\`rank\` = COALESCE(ca.\`rank\`, ar.\`rank\`),
+            ca.score = COALESCE(ca.score, ar.score),
+            ca.solved = COALESCE(ca.solved, ar.problems_solved)
+        WHERE ca.contestId = ? AND ar.attendance_status = 'PRESENT'
+          AND ca.attendanceStatus = 'ABSENT'
+          AND (ar.\`rank\` IS NOT NULL OR ar.score > 0.00)
+      `, [liveContestId]);
 
       await connection.commit();
       updateProgress(90, 'Database transaction committed successfully.');
@@ -382,14 +531,17 @@ class ContestAttendanceSyncService {
 
     // Diagnostic summary
     console.log(`[Sync Worker] [DIAGNOSTICS] ========== Attendance Sync Complete ==========`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Contest Slug: "${slug}"`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Total Participants Fetched: ${participants.length}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Students Checked: ${students.length}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Students Matched (Present): ${matchedCount}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Students Absent: ${absentCount}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Students Unknown: ${unknownCount}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Downgrades Prevented: ${skippedDowngradeCount}`);
-    console.log(`[Sync Worker] [DIAGNOSTICS] Time Taken: ${syncDurationMs}ms`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Contest: "${slug}"`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Participants synced: ${participants.length}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Present count: ${matchedCount}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Absent count: ${absentCount}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Recovered records: ${recoveredCount}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Skipped unmatched students: ${skippedUnmatchedCount}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS] Recovered because of:`);
+    console.log(`[Sync Worker] [DIAGNOSTICS]   ContestParticipants: ${recoveredContestParticipants}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS]   Rank: ${recoveredRank}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS]   Score: ${recoveredScore}`);
+    console.log(`[Sync Worker] [DIAGNOSTICS]   FinishTime: ${recoveredFinishTime}`);
     console.log(`[Sync Worker] [DIAGNOSTICS] ================================================`);
 
     updateProgress(100, 'Synchronization completed successfully.');

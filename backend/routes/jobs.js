@@ -12,7 +12,6 @@ router.get('/cache', authorize(['Super Admin', 'HOD', 'Faculty']), jobController
 router.post('/cache/invalidate', authorize(['Super Admin', 'HOD', 'Faculty']), jobController.invalidateCache);
 router.post('/sync', authorize(['Super Admin', 'HOD', 'Faculty']), jobController.triggerSyncJob);
 router.post('/analytics-recalc', authorize(['Super Admin', 'HOD', 'Faculty']), jobController.triggerAnalyticsRecalc);
-router.post('/export', authorize(['Super Admin', 'HOD', 'Faculty', 'Placement Coordinator']), jobController.triggerExportJob);
 router.post('/backfill', authorize(['Super Admin', 'HOD', 'Faculty']), jobController.triggerAttendanceBackfill);
 router.get('/:id/download', authorize(['Super Admin', 'HOD', 'Faculty', 'Placement Coordinator', 'Student']), jobController.downloadJobFile);
 router.get('/:id', authorize(['Super Admin', 'HOD', 'Faculty', 'Placement Coordinator', 'Student']), jobController.getJob);

@@ -3,6 +3,17 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
+const certPath = path.join(__dirname, '../certs/ca.pem');
+let sslCA = null;
+
+if (fs.existsSync(certPath)) {
+  try {
+    sslCA = fs.readFileSync(certPath);
+  } catch (err) {
+    console.error('[DB] Error reading CA certificate:', err.message);
+  }
+}
+
 let pool = null;
 let isConnected = false;
 let isConnecting = false;
@@ -32,6 +43,55 @@ async function executeSchema(activePool) {
   }
 }
 
+async function seedDefaultDataIfNeeded(activePool) {
+  console.log('[DB] Running self-healing default data checks...');
+  try {
+    // 1. Check & Seed Default College
+    try {
+      await activePool.query(`
+        INSERT IGNORE INTO colleges (name, code)
+        VALUES ('Default Engineering College', 'DEC')
+      `);
+      console.log('[DB] Verified default college (DEC) seeding.');
+    } catch (err) {
+      console.warn('[DB] Skipping college seeding (table may not exist yet):', err.message);
+    }
+
+    // 2. Check & Seed Default 12 Departments
+    try {
+      const defaultDepts = [
+        ['CSE', 'Computer Science Engineering', 'active'],
+        ['CSBS', 'Computer Science & Business Systems', 'active'],
+        ['AIDS', 'Artificial Intelligence & Data Science', 'active'],
+        ['AIML', 'Artificial Intelligence & Machine Learning', 'active'],
+        ['CYBER', 'Cyber Security', 'active'],
+        ['IT', 'Information Technology', 'active'],
+        ['ECE', 'Electronics & Communication Engineering', 'active'],
+        ['EEE', 'Electrical & Electronics Engineering', 'active'],
+        ['BME', 'Biomedical Engineering', 'active'],
+        ['MECH', 'Mechanical Engineering', 'active'],
+        ['CIVIL', 'Civil Engineering', 'active'],
+        ['BIOTECH', 'Biotechnology', 'active']
+      ];
+
+      for (const [code, name, status] of defaultDepts) {
+        await activePool.query(
+          `INSERT IGNORE INTO departments (code, name, status) VALUES (?, ?, ?)`,
+          [code, name, status]
+        );
+      }
+      
+      const [rows] = await activePool.query('SELECT COUNT(*) as count FROM departments');
+      const count = rows[0]?.count || 0;
+      console.log(`[DB] Verified default departments seeding. Total departments in database: ${count}`);
+    } catch (err) {
+      console.warn('[DB] Skipping departments seeding (table may not exist yet):', err.message);
+    }
+  } catch (err) {
+    console.error('[DB] Error in seedDefaultDataIfNeeded:', err.message);
+  }
+}
+
 async function initializeDatabase() {
   if (isConnected) return;
   if (isConnecting) return;
@@ -39,12 +99,26 @@ async function initializeDatabase() {
   isConnecting = true;
   lastError = null;
 
+  if (!sslCA) {
+    const errorMsg = 'Aiven CA certificate not found. Expected location: backend/certs/ca.pem. Download it from the Aiven Console and place it in the certs directory.';
+    console.error(`\n======================================================================\n[ERROR] ${errorMsg}\n======================================================================\n`);
+    const missingCertError = new Error(errorMsg);
+    lastError = missingCertError;
+    isConnecting = false;
+    isConnected = false;
+    pool = null;
+    throw missingCertError;
+  }
+
   const config = {
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '3306'),
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD === 'your_mysql_password_here' ? '' : process.env.DB_PASSWORD,
-    multipleStatements: true
+    multipleStatements: true,
+    ssl: {
+      ca: sslCA
+    }
   };
 
   console.log(`[DB] Attempting database initialization (Attempt #${retryCount + 1})...`);
@@ -71,7 +145,22 @@ async function initializeDatabase() {
 
     // 3. Test pool connection
     const testConn = await pool.getConnection();
+
+    // Run verification queries
+    const [versionRows] = await testConn.query("SELECT @@version");
+    const mysqlVersion = versionRows[0]['@@version'] || 'Unknown';
+
+    const [dbRows] = await testConn.query("SELECT DATABASE()");
+    const currentDb = dbRows[0]['DATABASE()'] || dbRows[0]['database'] || 'Unknown';
+
+    const [sslRows] = await testConn.query("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
+    const sslCipher = sslRows[0]?.Value || sslRows[0]?.value || '';
+
     testConn.release();
+
+    if (!sslCipher) {
+      throw new Error('SSL is not enabled on the database connection.');
+    }
 
     isConnected = true;
     isConnecting = false;
@@ -81,7 +170,11 @@ async function initializeDatabase() {
       retryTimer = null;
     }
 
-    console.log('[DB] MySQL connection pool initialized successfully.');
+    console.log('✓ Connected to Aiven MySQL');
+    console.log(`Database : ${currentDb}`);
+    console.log(`Host     : ${config.host}`);
+    console.log(`Version  : MySQL ${mysqlVersion}`);
+    console.log(`SSL      : Enabled (${sslCipher})`);
 
     // 4. Run schema setup
     let schemaNeeded = false;
@@ -191,6 +284,9 @@ async function initializeDatabase() {
       console.log('[DB] Users table not yet available (pending migration). Skipping dependent table creation.');
     }
 
+    // Run self-healing seed default data check
+    await seedDefaultDataIfNeeded(pool);
+
   } catch (error) {
     isConnecting = false;
     isConnected = false;
@@ -288,7 +384,7 @@ async function query(sql, params) {
     console.error('Placeholder Count:', placeholderCount);
     console.error('Value Count:', paramCount);
     console.error('Values:', params);
-    console.error('Database Error:', err.message);
+    console.error('Database Error:', err);
     console.error('======================================================================');
     throw err;
   }

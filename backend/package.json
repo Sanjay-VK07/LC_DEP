@@ -16,8 +16,6 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.9.7",
     "node-cron": "^4.4.1",

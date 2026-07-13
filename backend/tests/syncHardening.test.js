@@ -4,7 +4,7 @@ const assert = require('node:assert');
 // 1. Test Format Validations
 test('Username regex format checks', (t) => {
   const leetcodeRegex = /^[a-zA-Z0-9_-]{3,30}$/;
-  const codeforcesRegex = /^[a-zA-Z0-9_-]{3,24}$/;
+  const codeforcesRegex = /^[a-zA-Z0-9_.-]{3,24}$/;
   const codechefRegex = /^[a-zA-Z0-9_]{3,30}$/;
   const hackerrankRegex = /^[a-zA-Z0-9_.-]{3,30}$/;
 
@@ -17,6 +17,7 @@ test('Username regex format checks', (t) => {
   // Codeforces tests
   assert.ok(codeforcesRegex.test('tourist'));
   assert.ok(codeforcesRegex.test('code_forces-1'));
+  assert.ok(codeforcesRegex.test('ganeshkumarr.cse2024'));
   assert.ok(!codeforcesRegex.test('a'.repeat(25))); // too long
 
   // CodeChef tests

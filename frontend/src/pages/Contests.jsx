@@ -34,6 +34,7 @@ import {
 import * as XLSX from 'xlsx';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
+import { normalizeAttendanceStatus } from '../utils/attendance';
 import {
   ResponsiveContainer,
   BarChart,
@@ -151,8 +152,8 @@ function TypeBadge({ type }) {
 function AttendanceBadge({ contest }) {
   const timing = getContestTiming(contest.date, contest.duration || 5400);
   const isOngoing = timing === 'active';
-  const isUnrated = contest.status?.toLowerCase() === 'unrated' || contest.contest_status?.toLowerCase() === 'unrated' || contest.attendance_status === 'UNRATED';
-  const isPresent = contest.is_joined || contest.attendance_status === 'PRESENT';
+  const isUnrated = contest.status?.toLowerCase() === 'unrated' || contest.contest_status?.toLowerCase() === 'unrated' || normalizeAttendanceStatus(contest.attendance_status) === 'UNRATED';
+  const isPresent = contest.is_joined || normalizeAttendanceStatus(contest.attendance_status) === 'PRESENT';
 
   if (isOngoing) {
     return (
@@ -473,7 +474,7 @@ function Contests() {
       const eligible = records.length;
       let attended = 0;
       if (selectedStudentId !== 'all') {
-        attended = records.filter(c => c.is_joined || c.attendance_status === 'PRESENT').length;
+        attended = records.filter(c => c.is_joined || normalizeAttendanceStatus(c.attendance_status) === 'PRESENT').length;
       } else {
         const totalAttended = records.reduce((acc, c) => acc + (c.attendance_count || 0), 0);
         attended = Math.round(totalAttended / batchStudentsCount);
@@ -863,7 +864,11 @@ function Contests() {
             className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 py-2 pl-8 pr-3 text-xs font-semibold outline-none focus:border-primary-400 dark:text-slate-200 transition-colors appearance-none"
           >
             <option value="">All Batches</option>
-            {availableBatches.map(b => <option key={b} value={b}>{b}</option>)}
+            {(() => {
+              console.log('[Contests Academic Years Audit]', availableBatches);
+              const years = [...new Set(availableBatches)];
+              return years.map(b => <option key={b} value={b}>{b}</option>);
+            })()}
           </select>
         </div>
 
@@ -1154,7 +1159,7 @@ function Contests() {
                           filteredContestsByBatch.map(c => {
                             const isPresent = selectedStudentId === 'all'
                               ? c.attendance_count > 0
-                              : c.is_joined || c.attendance_status === 'PRESENT';
+                              : c.is_joined || normalizeAttendanceStatus(c.attendance_status) === 'PRESENT';
                             return (
                               <tr key={c.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
                                 <td className="py-2 px-4 font-semibold text-slate-700 dark:text-slate-300">{c.name}</td>
@@ -1458,11 +1463,11 @@ function Contests() {
                                         Join Now
                                       </button>
                                     )}
-                                    {timing === 'past' && c.status?.toLowerCase() !== 'unrated' && c.contest_status?.toLowerCase() !== 'unrated' && c.attendance_status !== 'UNRATED' && (
+                                    {timing === 'past' && c.status?.toLowerCase() !== 'unrated' && c.contest_status?.toLowerCase() !== 'unrated' && normalizeAttendanceStatus(c.attendance_status) !== 'UNRATED' && (
                                       <button
                                         onClick={() => openOverride(c)}
                                         className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg border transition-all ${
-                                          c.is_joined || c.attendance_status === 'PRESENT'
+                                          c.is_joined || normalizeAttendanceStatus(c.attendance_status) === 'PRESENT'
                                             ? 'border-rose-200 text-rose-600 hover:bg-rose-50/30 dark:border-rose-900/30 dark:text-rose-400'
                                             : 'border-emerald-200 text-emerald-600 hover:bg-emerald-50/30 dark:border-emerald-900/30 dark:text-emerald-400'
                                         }`}
@@ -1668,7 +1673,7 @@ function Contests() {
                                     {[
                                       { label: '1. Registration Status', value: c.is_registered ? 'Registered ✓' : 'Not Registered', sub: c.is_registered ? 'Crawler verified' : '—', ok: c.is_registered },
                                       { label: '2. Participation Action', value: c.is_joined ? 'Joined ✓' : 'No activity logged', sub: c.is_joined ? 'Contest action detected' : '—', ok: c.is_joined },
-                                      { label: '3. Final Attendance', value: c.attendance_status === 'PRESENT' ? 'PRESENT' : 'ABSENT', sub: c.attendance_source === 'MANUAL' ? 'Manual override by Faculty' : 'Automatic platform sync', ok: c.attendance_status === 'PRESENT' },
+                                      { label: '3. Final Attendance', value: normalizeAttendanceStatus(c.attendance_status) === 'PRESENT' ? 'PRESENT' : 'ABSENT', sub: c.attendance_source === 'MANUAL' ? 'Manual override by Faculty' : 'Automatic platform sync', ok: normalizeAttendanceStatus(c.attendance_status) === 'PRESENT' },
                                     ].map((item, i) => (
                                       <div key={i} className="bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-700/60 p-3 rounded-xl shadow-sm">
                                         <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">{item.label}</span>

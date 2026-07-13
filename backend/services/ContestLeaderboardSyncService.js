@@ -448,7 +448,7 @@ Stop Reason: ${stopReason}
             ? as contestId,
             u.id as studentId,
             u.leetcode_username as username,
-            IF(cp.username IS NOT NULL, 'Present', 'Absent') as attendanceStatus,
+            IF(cp.username IS NOT NULL, 'PRESENT', 'ABSENT') as attendanceStatus,
             cp.rank as \`rank\`,
             IFNULL(cp.score, 0.00) as score,
             CURRENT_TIMESTAMP as lastUpdatedAt
@@ -517,8 +517,8 @@ Stop Reason: ${stopReason}
       // Fetch final stats
       const [statsResult] = await db.query(`
         SELECT 
-          SUM(CASE WHEN attendanceStatus = 'Present' THEN 1 ELSE 0 END) as present,
-          SUM(CASE WHEN attendanceStatus = 'Absent' THEN 1 ELSE 0 END) as absent,
+          SUM(CASE WHEN attendanceStatus = 'PRESENT' THEN 1 ELSE 0 END) as present,
+          SUM(CASE WHEN attendanceStatus = 'ABSENT' THEN 1 ELSE 0 END) as absent,
           COUNT(*) as totalStudents
         FROM ContestAttendance
         WHERE contestId = ? AND studentId IN (

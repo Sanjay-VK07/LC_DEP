@@ -41,6 +41,7 @@ function Departments() {
       const res = await axios.get('/api/departments');
       if (res.data.success) {
         setDepartments(res.data.data);
+        console.log(`[Diagnostic] Departments count rendered in frontend: ${res.data.data.length}`);
       }
     } catch (err) {
       setError('Failed to fetch departments list.');

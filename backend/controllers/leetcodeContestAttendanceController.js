@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const LeetCodeRankingSearchService = require('../services/leetcodeRankingSearchService');
+const { normalizeAttendanceStatus } = require('../utils/attendanceNormalizer');
 
 /**
  * Controller to handle LeetCode Contest Ranking Search Attendance actions
@@ -180,6 +181,10 @@ const LeetCodeContestAttendanceController = {
         }
         recordsQuery += " ORDER BY ca.attendanceStatus DESC, ca.rank ASC, u.name ASC";
         records = await db.query(recordsQuery, recordsParams);
+        records = records.map(r => ({
+          ...r,
+          attendance: normalizeAttendanceStatus(r.attendance)
+        }));
       }
 
       // 5. Query persistent sync logs from ContestSyncLog

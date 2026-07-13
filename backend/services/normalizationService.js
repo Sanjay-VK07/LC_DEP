@@ -171,10 +171,16 @@ function normalizeHackerRankProfile(result, username) {
   return profile;
 }
 
+function normalizeHandle(handle) {
+  return (handle || "").trim().toLowerCase();
+}
+
 module.exports = {
   createBasePlatformProfile,
   normalizeLeetCodeProfile,
   normalizeCodeChefProfile,
   normalizeCodeforcesProfile,
-  normalizeHackerRankProfile
+  normalizeHackerRankProfile,
+  normalizeHandle
 };
+

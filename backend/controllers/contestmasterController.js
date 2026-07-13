@@ -113,7 +113,7 @@ async function getContestMasterBatches(req, res) {
          AND u.academic_batch != ''
        ORDER BY u.academic_batch ASC`
     );
-    const batches = list.map(item => formatBatchToLong(item.academic_batch));
+    const batches = [...new Set(list.map(item => formatBatchToLong(item.academic_batch)))];
     return res.json(batches);
   } catch (error) {
     console.error('[ContestMasterController] Error fetching dynamic batches:', error);

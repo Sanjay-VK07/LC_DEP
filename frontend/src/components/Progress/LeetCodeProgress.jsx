@@ -383,7 +383,7 @@ export default function LeetCodeProgress() {
             <div className="flex flex-wrap gap-2.5">
               {profile.badges.map((badge, idx) => (
                 <div 
-                  key={idx} 
+                  key={`${badge.name || 'badge'}_${idx}`} 
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border bg-white dark:bg-slate-900 shadow-sm text-xs font-medium ${idx === 0 ? 'border-amber-500 ring-1 ring-amber-500/20 bg-amber-50/10 dark:bg-amber-950/10' : 'border-slate-150 dark:border-slate-800/80'}`}
                   title={badge.hoverText || badge.name}
                 >
@@ -420,7 +420,7 @@ export default function LeetCodeProgress() {
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
               {recentSubmissions.map((s, idx) => (
                 <div 
-                  key={idx} 
+                  key={`${s.title || 'sub'}_${s.timestamp || ''}_${idx}`} 
                   className="flex items-center justify-between p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-950/10 text-xs"
                 >
                   <div className="space-y-1">

@@ -153,7 +153,7 @@ export default function HackerRankProgress() {
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Earned Skill Badges</h4>
             <div className="flex flex-wrap gap-3">
               {profile.badges.map((badge, idx) => (
-                <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 text-xs">
+                <div key={`${badge.name || badge}_${idx}`} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 text-xs">
                   <span className="text-base">⭐</span>
                   <span className="font-semibold text-slate-700 dark:text-slate-300">{badge.name || badge}</span>
                   {badge.stars && <span className="font-bold text-amber-500 text-[10px]">{badge.stars}★</span>}
@@ -169,7 +169,7 @@ export default function HackerRankProgress() {
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Verified Certificates</h4>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {profile.certificates.map((cert, idx) => (
-                <div key={idx} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-950/10 text-xs">
+                <div key={`${cert.name || cert}_${idx}`} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-950/10 text-xs">
                   <CheckCircle className="h-4.5 w-4.5 text-emerald-500 shrink-0" />
                   <div>
                     <span className="font-semibold text-slate-700 dark:text-slate-300 block">{cert.name || cert}</span>

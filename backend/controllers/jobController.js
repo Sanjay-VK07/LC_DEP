@@ -119,34 +119,8 @@ async function invalidateCache(req, res) {
   return res.json({ success: true, message: 'Analytics cache cleared successfully' });
 }
 
-const exportJobService = require('../services/exportJobService');
 const attendanceService = require('../services/attendanceService');
 const fs = require('fs');
-
-/**
- * Trigger report export as a background job.
- */
-async function triggerExportJob(req, res) {
-  const { format, reportType, filters } = req.body;
-  if (!format || !reportType) {
-    return res.status(400).json({ success: false, message: 'format and reportType are required' });
-  }
-
-  const jobId = jobQueue.enqueue(
-    `EXPORT_${format.toUpperCase()}`,
-    { format, reportType, filters },
-    async (job, updateProgress) => {
-      const result = await exportJobService.generateReport(job.id, format, reportType, filters || {}, updateProgress);
-      return result;
-    }
-  );
-
-  await auditLog.log(auditLog.AUDIT_ACTIONS.JOB_ENQUEUED, {
-    details: { jobId, type: `EXPORT_${format.toUpperCase()}`, format, reportType }
-  });
-
-  return res.json({ success: true, message: 'Export job enqueued', jobId });
-}
 
 /**
  * Trigger background attendance backfill.
@@ -203,7 +177,6 @@ module.exports = {
   triggerAnalyticsRecalc,
   getCacheStats,
   invalidateCache,
-  triggerExportJob,
   triggerAttendanceBackfill,
   downloadJobFile
 };

@@ -10,7 +10,6 @@ import Dashboard from './pages/Dashboard';
 import Students from './pages/Students';
 import Contests from './pages/Contests';
 import Attendance from './pages/Attendance';
-import Reports from './pages/Reports';
 import Archive from './pages/Archive';
 import Profile from './pages/Profile';
 import Analytics from './pages/Analytics';
@@ -62,7 +61,6 @@ function LayoutWrapper() {
               <Route path="/attendance" element={<Attendance />} />
               <Route path="/live-monitor" element={<LiveMonitor />} />
               <Route path="/analytics" element={<Analytics />} />
-              <Route path="/reports" element={<Reports />} />
               <Route path="/archive" element={<Archive />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/departments" element={<Departments />} />

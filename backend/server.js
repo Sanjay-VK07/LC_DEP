@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
+const requestLogger = require('./middlewares/loggingMiddleware');
+const errorHandler = require('./middlewares/errorHandler');
 const { initializeDatabase, query, getConnectionStatus } = require('./config/db');
 const { initScheduler, seedMasterContests } = require('./utils/scheduler');
 
@@ -8,7 +10,6 @@ const { initScheduler, seedMasterContests } = require('./utils/scheduler');
 const studentRoutes = require('./routes/students');
 const contestRoutes = require('./routes/contests');
 const attendanceRoutes = require('./routes/attendance');
-const reportRoutes = require('./routes/reports');
 const analyticsRoutes = require('./routes/analytics');
 const notificationRoutes = require('./routes/notifications');
 const departmentRoutes = require('./routes/departments');
@@ -27,12 +28,12 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(requestLogger);
 
 // Routes mapping — existing routes preserved, new routes added
 app.use('/api/students', studentRoutes);
 app.use('/api/contests', contestRoutes);
 app.use('/api/attendance', attendanceRoutes);
-app.use('/api/reports', reportRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/departments', departmentRoutes);
@@ -51,7 +52,6 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/v1/students', studentRoutes);
 app.use('/api/v1/contests', contestRoutes);
 app.use('/api/v1/attendance', attendanceRoutes);
-app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/departments', departmentRoutes);
@@ -62,6 +62,9 @@ app.use('/api/v1/contestmaster', contestmasterRoutes);
 app.use('/api/v1/contest', contestLeaderboardSyncRoutes);
 app.use('/api/v1/placement', placementRoutes);
 app.use('/api/v1/ai', aiRoutes);
+
+// Global error handler (must be registered after all route controllers)
+app.use(errorHandler);
 
 
 // Root API

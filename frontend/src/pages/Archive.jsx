@@ -353,7 +353,7 @@ function Archive() {
                   </tr>
                 ) : (
                   archivedBatches.map((batch, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/10 transition-colors">
+                    <tr key={`${batch.department}_${batch.academic_batch}_${batch.section || 'all'}`} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/10 transition-colors">
                       <td className="px-5 py-3">
                         <span className="font-bold text-slate-800 dark:text-slate-200 block">
                           {batch.department} Department {batch.section ? `• Section ${batch.section}` : ''}

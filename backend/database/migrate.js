@@ -514,6 +514,42 @@ async function run() {
     } else {
       console.log('[Migration] Executing migration "enthrahub_platform_transition"...');
 
+      // Drop foreign keys referencing Contests(contest_slug) first
+      console.log('[Migration] Dropping foreign keys referencing Contests...');
+      try {
+        await db.query("ALTER TABLE Contest_Attendance DROP FOREIGN KEY fk_attendance_contest");
+      } catch (err) {}
+      try {
+        await db.query("ALTER TABLE Contest_Participants DROP FOREIGN KEY fk_participant_contest");
+      } catch (err) {}
+
+      // Alter Contests table
+      console.log('[Migration] Restructuring Contests table...');
+      try {
+        await db.query(`
+          ALTER TABLE Contests 
+          DROP PRIMARY KEY,
+          ADD COLUMN contest_id INT AUTO_INCREMENT PRIMARY KEY,
+          CHANGE COLUMN contest_slug slug VARCHAR(255) NOT NULL,
+          CHANGE COLUMN contest_name title VARCHAR(255) NOT NULL,
+          CHANGE COLUMN contest_date start_time DATETIME NOT NULL,
+          ADD COLUMN contest_type ENUM('Weekly','Biweekly') NOT NULL DEFAULT 'Weekly',
+          ADD COLUMN contest_number INT NOT NULL DEFAULT 0,
+          ADD COLUMN duration INT DEFAULT NULL,
+          ADD COLUMN total_problems INT DEFAULT 4
+        `);
+      } catch (err) {
+        console.error('[Migration Error] Failed to alter Contests columns:', err.message);
+      }
+
+      try {
+        await db.query("ALTER TABLE Contests MODIFY COLUMN contest_status ENUM('Rated','Unrated') DEFAULT 'Rated'");
+      } catch (err) {}
+
+      try {
+        await db.query("ALTER TABLE Contests ADD UNIQUE KEY unique_slug (slug)");
+      } catch (err) {}
+
       // 1. Get current tables
       const tables = await db.query("SHOW TABLES");
       const tableNames = tables.map(t => Object.values(t)[0].toLowerCase());
@@ -1554,6 +1590,186 @@ async function run() {
       console.log('[Migration] Migration "contest_participants_integrity" completed.');
     }
 
+    // ==========================================
+    // MIGRATION 17: codeforces_verification_persistence
+    // ==========================================
+    const rows17 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'codeforces_verification_persistence'"
+    );
+
+    if (rows17.length > 0) {
+      console.log('[Migration] Migration "codeforces_verification_persistence" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Applying Codeforces Verification Persistence...');
+
+      // 1. Add columns to Users
+      const userCols = await db.query("SHOW COLUMNS FROM Users");
+      const userColNames = userCols.map(c => c.Field);
+
+      if (!userColNames.includes('codeforces_username_normalized')) {
+        await db.query("ALTER TABLE Users ADD COLUMN codeforces_username_normalized VARCHAR(100) DEFAULT NULL UNIQUE;");
+        console.log('[Migration] Added codeforces_username_normalized column to Users.');
+      }
+      if (!userColNames.includes('codeforces_verified')) {
+        await db.query("ALTER TABLE Users ADD COLUMN codeforces_verified TINYINT(1) DEFAULT 0;");
+        console.log('[Migration] Added codeforces_verified column to Users.');
+      }
+      if (!userColNames.includes('codeforces_verified_at')) {
+        await db.query("ALTER TABLE Users ADD COLUMN codeforces_verified_at TIMESTAMP NULL DEFAULT NULL;");
+        console.log('[Migration] Added codeforces_verified_at column to Users.');
+      }
+      if (!userColNames.includes('codeforces_verified_source')) {
+        await db.query("ALTER TABLE Users ADD COLUMN codeforces_verified_source VARCHAR(50) DEFAULT NULL;");
+        console.log('[Migration] Added codeforces_verified_source column to Users.');
+      }
+
+      // Populate normalized column for existing codeforces_username records
+      await db.query("UPDATE Users SET codeforces_username_normalized = LOWER(TRIM(codeforces_username)) WHERE codeforces_username IS NOT NULL AND codeforces_username_normalized IS NULL;");
+
+      // 2. Add columns to CodeforcesProfiles
+      const cfCols = await db.query("SHOW COLUMNS FROM CodeforcesProfiles");
+      const cfColNames = cfCols.map(c => c.Field);
+
+      if (!cfColNames.includes('last_profile_sync')) {
+        await db.query("ALTER TABLE CodeforcesProfiles ADD COLUMN last_profile_sync TIMESTAMP NULL DEFAULT NULL;");
+        console.log('[Migration] Added last_profile_sync column to CodeforcesProfiles.');
+      }
+
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('codeforces_verification_persistence')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "codeforces_verification_persistence" completed.');
+    }
+
+    // ==========================================
+    // MIGRATION 18: restore_contests_platform_column
+    // ==========================================
+    const rows18 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'restore_contests_platform_column'"
+    );
+
+    if (rows18.length > 0) {
+      console.log('[Migration] Migration "restore_contests_platform_column" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "restore_contests_platform_column"...');
+
+      // Step 1: Inspect Current Schema
+      const columnsBefore = await db.query("SHOW COLUMNS FROM Contests");
+      console.log('[Migration] Detected schema for Contests before migration:');
+      console.log(columnsBefore.map(c => c.Field));
+
+      const colNames = columnsBefore.map(c => c.Field);
+
+      // Step 2: Verify Platform Column
+      if (colNames.includes('platform')) {
+        console.log('[Migration] Column "platform" already exists. Skipping column addition.');
+      } else {
+        // Step 3: Add Column
+        console.log('[Migration] Adding platform column to Contests...');
+        await db.query(`
+          ALTER TABLE Contests
+          ADD COLUMN platform VARCHAR(50) NOT NULL DEFAULT 'LeetCode' AFTER contest_status
+        `);
+      }
+
+      // Step 4: Backfill Existing Rows
+      console.log('[Migration] Backfilling platform column for existing Contests...');
+      await db.query(`
+        UPDATE Contests
+        SET platform = 'LeetCode'
+        WHERE platform IS NULL OR platform = ''
+      `);
+
+      // Post-Migration Validation
+      const columnsAfter = await db.query("SHOW COLUMNS FROM Contests");
+      console.log('[Migration] Detected schema for Contests after migration:');
+      console.log(columnsAfter.map(c => c.Field));
+
+      if (!columnsAfter.map(c => c.Field).includes('platform')) {
+        throw new Error('Validation Failed: platform column was not successfully added to Contests table.');
+      }
+
+      const [nullCountRow] = await db.query(`
+        SELECT COUNT(*) AS null_count
+        FROM Contests
+        WHERE platform IS NULL
+      `);
+      const nullCount = nullCountRow?.null_count || 0;
+      console.log(`[Migration] Contests with NULL platform count: ${nullCount} (Expected: 0)`);
+      if (nullCount > 0) {
+        throw new Error(`Validation Failed: ${nullCount} Contests have NULL platform value.`);
+      }
+      // Step 5: Record Migration
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('restore_contests_platform_column')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "restore_contests_platform_column" completed successfully.');
+    }
+
+    // ==========================================
+    // MIGRATION 19: add_rating_columns_to_attendance
+    // ==========================================
+    const rows19 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'add_rating_columns_to_attendance'"
+    );
+
+    if (rows19.length > 0) {
+      console.log('[Migration] Migration "add_rating_columns_to_attendance" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "add_rating_columns_to_attendance"...');
+
+      // Step 1: Inspect Current Schema
+      const columns = await db.query("SHOW COLUMNS FROM AttendanceRecords");
+      console.log('[Migration] Detected columns for AttendanceRecords before migration:');
+      console.log(columns.map(c => c.Field));
+
+      const colNames = columns.map(c => c.Field);
+
+      // Step 2: Determine missing columns
+      const missing = [];
+      if (!colNames.includes('rating_before')) missing.push('ADD COLUMN rating_before INT DEFAULT NULL AFTER problems_solved');
+      if (!colNames.includes('rating_after')) {
+        const afterColumn = colNames.includes('rating_before') ? 'rating_before' : 'problems_solved';
+        missing.push(`ADD COLUMN rating_after INT DEFAULT NULL AFTER ${afterColumn}`);
+      }
+      if (!colNames.includes('rating_change')) {
+        let afterColumn = 'problems_solved';
+        if (colNames.includes('rating_after')) afterColumn = 'rating_after';
+        else if (colNames.includes('rating_before')) afterColumn = 'rating_before';
+        missing.push(`ADD COLUMN rating_change INT DEFAULT NULL AFTER ${afterColumn}`);
+      }
+
+      // Step 3: Execute ONE ALTER TABLE statement adding all missing columns
+      if (missing.length > 0) {
+        console.log(`[Migration] Adding missing columns: ${missing.join(', ')}`);
+        await db.query(`ALTER TABLE AttendanceRecords ${missing.join(', ')}`);
+      } else {
+        console.log('[Migration] No rating columns are missing.');
+      }
+
+      // Step 4: Verify with DESCRIBE AttendanceRecords
+      const describe = await db.query("DESCRIBE AttendanceRecords");
+      console.log('[Migration] Detected columns for AttendanceRecords after migration:');
+      console.log(describe.map(c => c.Field));
+
+      const finalColNames = describe.map(c => c.Field);
+      if (!finalColNames.includes('rating_before') || !finalColNames.includes('rating_after') || !finalColNames.includes('rating_change')) {
+        throw new Error('Validation Failed: rating columns were not successfully added to AttendanceRecords table.');
+      }
+
+      // Step 5: Insert migration record
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('add_rating_columns_to_attendance')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "add_rating_columns_to_attendance" completed successfully.');
+    }
+
     process.exit(0);
   } catch (err) {
     console.error('[Migration] Migration failed:', err.message);
@@ -1562,3 +1778,4 @@ async function run() {
 }
 
 run();
+

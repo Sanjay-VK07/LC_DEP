@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
+import { normalizeAttendanceStatus } from '../utils/attendance';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -224,7 +225,7 @@ function Profile() {
 
     // 2. Attendance Status Filter
     let matchesStatus = true;
-    const isPresent = c.attendance_status === 'PRESENT';
+    const isPresent = normalizeAttendanceStatus(c.attendance_status) === 'PRESENT';
     if (statusFilter === 'Present') {
       matchesStatus = isPresent;
     } else if (statusFilter === 'Absent') {
@@ -246,7 +247,7 @@ function Profile() {
 
   // Calculate timeline statistics based on filtered contests
   const totalContestsCount = filteredContests.length;
-  const attendedCount = filteredContests.filter(c => c.attendance_status === 'PRESENT').length;
+  const attendedCount = filteredContests.filter(c => normalizeAttendanceStatus(c.attendance_status) === 'PRESENT').length;
   const missedCount = totalContestsCount - attendedCount;
   const attendanceRate = totalContestsCount > 0 ? parseFloat(((attendedCount / totalContestsCount) * 100).toFixed(1)) : 100.0;
 
@@ -590,7 +591,7 @@ function Profile() {
             /* Timeline View */
             <div className="relative border-l-2 border-slate-200 dark:border-slate-800 ml-4 pl-6 space-y-5">
               {filteredContests.map((c) => {
-                const isPresent = c.attendance_status === 'PRESENT';
+                const isPresent = normalizeAttendanceStatus(c.attendance_status) === 'PRESENT';
                 const isExpanded = expandedContestId === c.contest_id;
                 
                 return (
@@ -726,7 +727,7 @@ function Profile() {
                 </thead>
                 <tbody>
                   {filteredContests.map((c) => {
-                    const isPresent = c.attendance_status === 'PRESENT';
+                    const isPresent = normalizeAttendanceStatus(c.attendance_status) === 'PRESENT';
                     return (
                       <tr key={c.contest_id} className="border-b border-slate-100 dark:border-slate-850 hover:bg-slate-50/30 dark:hover:bg-slate-850/20 transition-all">
                         <td className="p-4 font-bold text-slate-800 dark:text-slate-200">
@@ -965,7 +966,7 @@ function Profile() {
                 <div className="text-[11px] text-slate-455 italic">No historical contests in selection.</div>
               ) : (
                 filteredContests.map(c => {
-                  const isPresent = c.attendance_status === 'PRESENT';
+                  const isPresent = normalizeAttendanceStatus(c.attendance_status) === 'PRESENT';
                   const registered = c.is_registered;
                   
                   let colorClass = 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-650';

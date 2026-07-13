@@ -1,383 +1,548 @@
-/**
- * reportController.js (UPDATED)
- * ================================
- * Delegates all metric calculations to centralized services.
- * Returns the exact same response shape as the original, augmented
- * with new fields from DashboardMetricsService so the Dashboard renders correctly.
- */
-
 const db = require('../config/db');
-const dashboardMetrics = require('../services/dashboardMetricsService');
-const attendanceService = require('../services/attendanceService');
-const contestAnalytics = require('../services/contestAnalyticsService');
+
+// Helper to parse dates timezone-independently
+function parseDateOnly(dateInput) {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  let dateStr;
+  if (dateInput instanceof Date) {
+    const year = dateInput.getFullYear();
+    const month = String(dateInput.getMonth() + 1).padStart(2, '0');
+    const day = String(dateInput.getDate()).padStart(2, '0');
+    dateStr = `${year}-${month}-${day}`;
+  } else if (typeof dateInput === 'string') {
+    dateStr = dateInput.substring(0, 10);
+  } else {
+    const year = d.getFullYear();
+    const month = String(dateInput.getMonth() + 1).padStart(2, '0');
+    const day = String(dateInput.getDate()).padStart(2, '0');
+    dateStr = `${year}-${month}-${day}`;
+  }
+  const parts = dateStr.split('-');
+  return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 0, 0, 0, 0);
+}
 
 // 1. Get Faculty Dashboard Statistics
-// Returns original shape + extended fields for backward compatibility
 async function getDashboardStats(req, res) {
-  try {
-    const serviceStats = await dashboardMetrics.getDashboardStats();
+  const { platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
 
-    // Fetch lowAttendanceStudents and studentsWithoutProfiles directly from DB as they are alert-specific
-    const lowAttendanceStudents = await db.query(
-      `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
-              (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) as total_contests,
-              (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) as present_count,
-              ROUND((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
-                NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100) as attendance_percentage
+  try {
+    // Total Students (Active)
+    const [totalStudentsResult] = await db.query(
+      "SELECT COUNT(*) as count FROM Users WHERE status = 'active'"
+    );
+    const totalStudents = totalStudentsResult ? totalStudentsResult.count : 0;
+
+    // Fetch all contests counts
+    let contestsSql = "SELECT contest_status, contest_type FROM Contests";
+    const contestsParams = [];
+    if (filterPlatform !== 'all') {
+      contestsSql += " WHERE platform = ?";
+      contestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+    }
+    const contestsResult = await db.query(contestsSql, contestsParams);
+    
+    const totalContests = contestsResult.length;
+    const ratedContests = contestsResult.filter(c => c.contest_status === 'Rated').length;
+    const unratedContests = contestsResult.filter(c => c.contest_status === 'Unrated').length;
+    const cancelledContests = contestsResult.filter(c => c.contest_status === 'Cancelled').length;
+    const weeklyContests = contestsResult.filter(c => c.contest_type === 'Weekly').length;
+    const biweeklyContests = contestsResult.filter(c => c.contest_type === 'Biweekly').length;
+
+    // Overall Attendance Percentage
+    const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+    const [attendancePercentResult] = await db.query(
+      `SELECT 
+         (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as total_regs,
+         (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as total_parts`
+    );
+    const totalRegs = attendancePercentResult ? attendancePercentResult.total_regs : 0;
+    const totalParts = attendancePercentResult ? attendancePercentResult.total_parts : 0;
+    const overallAttendance = totalRegs > 0 ? Math.round((totalParts / totalRegs) * 100) : 0;
+
+    // Average Rating
+    const profileTable = filterPlatform === 'codechef' ? 'CodeChefProfiles' : 'LeetCodeProfiles';
+    const [avgRatingResult] = await db.query(
+      `SELECT AVG(current_rating) as avgRating FROM ${profileTable} lp JOIN Users u ON lp.user_id = u.id WHERE u.status = 'active'`
+    );
+    const averageRating = avgRatingResult && avgRatingResult.avgRating ? Math.round(avgRatingResult.avgRating) : 1500;
+
+    // Recently Synced Records
+    const [latestSyncResult] = await db.query(
+      "SELECT completed_at, contests_synced, students_processed FROM sync_logs WHERE status = 'success' ORDER BY started_at DESC LIMIT 1"
+    );
+    const recentlySynced = latestSyncResult ? {
+      time: latestSyncResult.completed_at,
+      contests: latestSyncResult.contests_synced,
+      students: latestSyncResult.students_processed
+    } : null;
+
+    // Department-wise Stats
+    const deptStats = await db.query(
+      `SELECT u.department, 
+              COUNT(DISTINCT u.id) as total_students,
+              IFNULL((SELECT COUNT(*) FROM Registrations r JOIN Users u2 ON r.user_id = u2.id JOIN Contests c ON r.contest_id = c.contest_id WHERE u2.department = u.department AND u2.status = 'active'${platformFilterStr}), 0) as total_records,
+              IFNULL((SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u3 ON p.user_id = u3.id JOIN Contests c ON p.contest_id = c.contest_id WHERE u3.department = u.department AND u3.status = 'active'${platformFilterStr}), 0) as present_count
        FROM Users u
        WHERE u.status = 'active'
-         AND (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) >= 3
-         AND (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
-             NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100 < 30
+       GROUP BY u.department`
+    );
+
+    const departmentStats = deptStats.map(d => ({
+      department: d.department,
+      totalStudents: d.total_students,
+      attendancePercentage: d.total_records > 0 ? Math.round((d.present_count / d.total_records) * 100) : 100
+    }));
+
+    // Weekly Participation Trend (last 10 contests)
+    let weeklyTrendSql = `
+       SELECT c.title as name, c.start_time as date, c.platform,
+              (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as present_count,
+              (SELECT COUNT(*) FROM Users WHERE status = 'active') as total_students
+       FROM Contests c
+    `;
+    const weeklyTrendParams = [];
+    if (filterPlatform !== 'all') {
+      weeklyTrendSql += ` WHERE c.platform = ? `;
+      weeklyTrendParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+    }
+    weeklyTrendSql += ` ORDER BY c.start_time DESC LIMIT 10 `;
+
+    const weeklyTrend = await db.query(weeklyTrendSql, weeklyTrendParams);
+    // Reverse to chronological order for charts
+    weeklyTrend.reverse();
+
+    // Top Active Students (highest current rating)
+    const topStudents = await db.query(
+      `SELECT u.id, u.name, u.roll_no as register_number, u.leetcode_username, u.codechef_username, u.department,
+              (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) as present_count,
+              (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) as total_contests,
+              ROUND(IFNULL(lp.current_rating, 1500)) as current_rating
+       FROM Users u
+       LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
+       WHERE u.status = 'active'
+       ORDER BY current_rating DESC, present_count DESC
+       LIMIT 5`
+    );
+
+    // Students with Low Attendance (< 10%)
+    const lowAttendanceStudents = await db.query(
+      `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
+              (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) as total_contests,
+              (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) as present_count,
+              ROUND((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) / NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}), 0) * 100) as attendance_percentage
+       FROM Users u
+       WHERE u.status = 'active' 
+         AND (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) >= 3 
+         AND (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) / NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}), 0) * 100 < 10
        ORDER BY attendance_percentage ASC
        LIMIT 10`
     );
 
-    const studentsWithoutProfiles = await db.query(
-      `SELECT u.id, u.name, u.roll_no as register_number, u.department
-       FROM Users u
-       WHERE u.status = 'active'
-         AND u.leetcode_username IS NULL
-         AND u.codechef_username IS NULL
-         AND u.codeforces_username IS NULL
-         AND u.hackerrank_username IS NULL
-       LIMIT 5`
-    );
+    // Recently Added Contests (last 2 weeks)
+    let recentContestsSql = `
+       SELECT title as name, start_time as date, platform
+       FROM Contests 
+       WHERE start_time >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+    `;
+    const recentContestsParams = [];
+    if (filterPlatform !== 'all') {
+      recentContestsSql += ` AND platform = ? `;
+      recentContestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+    }
+    recentContestsSql += ` ORDER BY start_time DESC `;
 
-    const platformOverview = [
-      {
-        platform: 'leetcode',
-        label: 'LeetCode',
-        linkedUsers: Number(serviceStats.platformAdoption?.leetcode ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.leetcode / 100) : 0),
-        avgRating: serviceStats.averageCodingRating,
-        avgProblems: 0,
-        participationCount: serviceStats.totalParts || 0
-      },
-      {
-        platform: 'codechef',
-        label: 'CodeChef',
-        linkedUsers: Number(serviceStats.platformAdoption?.codechef ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.codechef / 100) : 0),
-        avgRating: 0,
-        avgProblems: 0,
-        participationCount: 0
-      },
-      {
-        platform: 'codeforces',
-        label: 'Codeforces',
-        linkedUsers: Number(serviceStats.platformAdoption?.codeforces ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.codeforces / 100) : 0),
-        avgRating: 0,
-        avgProblems: 0,
-        participationCount: 0
-      },
-      {
-        platform: 'hackerrank',
-        label: 'HackerRank',
-        linkedUsers: Number(serviceStats.platformAdoption?.hackerrank ? Math.round(serviceStats.totalStudents * serviceStats.platformAdoption.hackerrank / 100) : 0),
-        avgRating: 0,
-        avgProblems: 0,
-        participationCount: 0
-      }
-    ];
-
-    const formattedDepartmentStats = (serviceStats.departmentStats || []).map(d => ({
-      department: d.department,
-      totalStudents: Number(d.student_count || 0),
-      total_students: Number(d.student_count || 0),
-      average_rating: Number(d.avg_lc_rating || 0),
-      avg_lc_rating: Number(d.avg_lc_rating || 0),
-      attendancePercentage: 0,
-      attendance_percentage: 0
-    }));
+    const recentContests = await db.query(recentContestsSql, recentContestsParams);
 
     return res.json({
       success: true,
-      // ---- Original shape (required for backward compatibility) ----
       stats: {
-        totalStudents: serviceStats.totalStudents,
-        totalActiveStudents: serviceStats.totalStudents,
-        totalContests: Number(serviceStats.contestStats?.total || 0),
-        ratedContests: Number(serviceStats.contestStats?.rated || 0),
-        unratedContests: Number(serviceStats.contestStats?.unrated || 0),
-        cancelledContests: Number(serviceStats.contestStats?.cancelled || 0),
-        weeklyContests: Number(serviceStats.contestStats?.weekly || 0),
-        biweeklyContests: Number(serviceStats.contestStats?.biweekly || 0),
-        overallAttendance: serviceStats.overallAttendance,
-        averageRating: serviceStats.averageCodingRating,
-        recentlySynced: serviceStats.recentSync?.[0] ? {
-          time: serviceStats.recentSync[0].completed_at,
-          contests: serviceStats.recentSync[0].contests_synced,
-          students: serviceStats.recentSync[0].students_processed
-        } : null,
-        activeCodingProfiles: serviceStats.activeCodingProfiles,
-        ratedStudents: serviceStats.ratedStudents,
-        unratedStudents: serviceStats.unratedStudents,
-        platformConnections: serviceStats.platformConnections,
-        overallCodingScore: serviceStats.averageCodingRating,
-        averageProblemsSolved: 0
+        totalStudents,
+        totalActiveStudents: totalStudents,
+        totalContests,
+        ratedContests,
+        unratedContests,
+        cancelledContests,
+        weeklyContests,
+        biweeklyContests,
+        overallAttendance,
+        averageRating,
+        recentlySynced
       },
-      departmentStats: formattedDepartmentStats,
-      weeklyTrend: serviceStats.weeklyTrend || [],
-      topStudents: serviceStats.topPerformers || [],
+      departmentStats,
+      weeklyTrend,
+      topStudents,
       alerts: {
         missingUploads: [],
         lowAttendanceStudents,
-        recentContests: serviceStats.upcomingContests || [],
-        invalidPlatformUsernames: [],
-        studentsWithoutProfiles,
-        profilesNeedingVerification: [],
-        failedPlatformSynchronizations: []
-      },
-      // ---- New fields (used by normalized code) ----
-      totalStudents: serviceStats.totalStudents,
-      activeCodingProfiles: serviceStats.activeCodingProfiles,
-      averageCodingRating: serviceStats.averageCodingRating,
-      ratedStudents: serviceStats.ratedStudents,
-      unratedStudents: serviceStats.unratedStudents,
-      platformConnections: serviceStats.platformConnections,
-      overallAttendance: serviceStats.overallAttendance,
-      totalRegs: serviceStats.totalRegs,
-      totalParts: serviceStats.totalParts,
-      platformAdoption: serviceStats.platformAdoption,
-      platformOverview,
-      topPerformers: serviceStats.topPerformers || [],
-      recentSync: serviceStats.recentSync || [],
-      upcomingContests: serviceStats.upcomingContests || []
+        recentContests
+      }
     });
   } catch (error) {
-    console.error('[ReportController] Error fetching dashboard stats:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve dashboard statistics: ' + error.message });
+    console.error('Error generating dashboard stats:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 }
 
-// 2. Get Per-Contest Attendance Report
+// 2. Get Contest-wise Summary Report
 async function getContestsReport(req, res) {
-  const { type, startDate, endDate, batch } = req.query;
+  const { batch, platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
+  const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+
   try {
     let sql = '';
     let params = [];
 
     if (batch) {
       sql = `
-        SELECT c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration,
+        SELECT c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration, c.platform,
                (SELECT COUNT(*) FROM Users WHERE status = 'active' AND academic_batch = ?) as total_students,
                (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) as present_count,
-               (SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?) -
+               (SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?) - 
                (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) as absent_count,
                0 as not_applicable_count,
-               IFNULL(ROUND(
-                 (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) /
-                 NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?), 0) * 100
-               ), 0) as attendance_percentage
+               CASE
+                 WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 0
+                 WHEN c.contest_status = 'Unrated' THEN 0
+                 ELSE IFNULL(ROUND(
+                   (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) / 
+                   NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?), 0) * 100
+                 ), 100)
+               END as attendance_percentage
         FROM Contests c
-        WHERE c.contest_status != 'Cancelled'
+        WHERE 1=1 ${platformFilterStr}
         ORDER BY c.start_time DESC
       `;
       params = [batch, batch, batch, batch, batch, batch];
     } else {
       sql = `
-        SELECT c.contest_id, c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration,
+        SELECT c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration, c.platform,
                (SELECT COUNT(*) FROM Users WHERE status = 'active') as total_students,
                (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as present_count,
-               (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) -
-               (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as absent_count,
+               (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) - (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as absent_count,
                0 as not_applicable_count,
-               IFNULL(ROUND(
-                 (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) /
-                 NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id), 0) * 100
-               ), 0) as attendance_percentage
+               CASE
+                 WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 0
+                 WHEN c.contest_status = 'Unrated' THEN 0
+                 ELSE IFNULL(ROUND((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) / NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id), 0) * 100), 100)
+               END as attendance_percentage
         FROM Contests c
-        WHERE 1=1
+        WHERE 1=1 ${platformFilterStr}
+        ORDER BY c.start_time DESC
       `;
-      if (type) { sql += ' AND c.contest_type = ?'; params.push(type); }
-      if (startDate) { sql += ' AND c.start_time >= ?'; params.push(startDate); }
-      if (endDate) { sql += ' AND c.start_time <= ?'; params.push(endDate); }
-      sql += ' ORDER BY c.start_time DESC';
     }
 
-    const data = await db.query(sql, params);
-    return res.json({ success: true, count: data.length, data });
+    const report = await db.query(sql, params);
+
+    const formatted = report.map(r => ({
+      ...r,
+      type: r.name.toLowerCase().includes('biweekly') ? 'biweekly' : 'weekly',
+      platform: r.platform || 'LeetCode'
+    }));
+
+    return res.json({ success: true, data: formatted });
   } catch (error) {
-    console.error('[ReportController] Error fetching contests report:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve contests report' });
+    console.error('Error generating contests report:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate report' });
   }
 }
 
-// 3. Get All Students Report with Attendance
+// 3. Get Student-wise Summary Report
 async function getStudentsReport(req, res) {
-  const { department, section, academicBatch, academicYear, minAttendance, maxAttendance, platform, startDate, endDate } = req.query;
+  const { department, section, academicBatch, academicYear, startDate, endDate, platform } = req.query;
+  const batch = academicBatch || academicYear;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
+  const isCodeChef = filterPlatform === 'codechef';
+  const profileTable = isCodeChef ? 'CodeChefProfiles' : 'LeetCodeProfiles';
+  const platformFilterStr = filterPlatform === 'all' ? '' : (isCodeChef ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+  
+  let sql = `
+    SELECT u.id, u.roll_no as register_number, u.name, u.department, u.section, u.academic_batch as academic_year, u.leetcode_username, u.codechef_username,
+           (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id ${platformFilterStr}) as total_contests,
+           (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id 
+            WHERE r.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as rated_contests,
+           (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id 
+            WHERE r.user_id = u.id AND c.contest_status = 'Unrated' ${platformFilterStr}) as unrated_contests,
+           (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id 
+            WHERE p.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as present_count,
+           (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id 
+            WHERE r.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) -
+           (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id 
+            WHERE p.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as absent_count,
+           ROUND(IFNULL(
+             (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id 
+              WHERE p.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) /
+             NULLIF(
+               (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id 
+                WHERE r.user_id = u.id AND c.contest_status = 'Rated' ${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()), 0
+             ) * 100, 100
+           )) as attendance_percentage,
+           ROUND(IFNULL(lp.current_rating, 1500)) as current_rating,
+           ROUND(IFNULL(lp.highest_rating, 1500)) as best_rating,
+           IFNULL(
+             (
+               SELECT GROUP_CONCAT(
+                 CASE 
+                   WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 'Ongoing'
+                   WHEN c.contest_status = 'Unrated' THEN 'Unrated'
+                   WHEN ar.attendance_status = 'PRESENT' THEN 'Present'
+                   ELSE 'Absent'
+                 END 
+                 ORDER BY c.start_time DESC
+               )
+               FROM AttendanceRecords ar
+               JOIN Contests c ON ar.contest_id = c.contest_id
+               WHERE ar.user_id = u.id ${platformFilterStr}
+             ),
+             'No History'
+           ) as rank_history
+    FROM Users u
+    LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
+    WHERE u.status = 'active'
+  `;
+  const params = [];
+
+  if (department) {
+    sql += ' AND u.department = ?';
+    params.push(department);
+  }
+  if (section) {
+    sql += ' AND u.section = ?';
+    params.push(section);
+  }
+  if (batch) {
+    sql += ' AND u.academic_batch = ?';
+    params.push(batch);
+  }
+  if (startDate) {
+    sql += ' AND u.academic_start_date >= ?';
+    params.push(startDate);
+  }
+  if (endDate) {
+    sql += ' AND u.academic_end_date <= ?';
+    params.push(endDate);
+  }
+
+  sql += ' ORDER BY u.roll_no ASC';
+
   try {
-    const targetBatch = academicBatch || academicYear;
-    let data = await attendanceService.getBatchAttendanceSummary({ 
-      department: department || undefined, 
-      section: section || undefined, 
-      academicBatch: targetBatch || undefined, 
-      platform: platform || undefined, 
-      startDate: startDate || undefined, 
-      endDate: endDate || undefined 
-    });
-    if (minAttendance !== undefined) data = data.filter(s => s.attendance_percentage >= Number(minAttendance));
-    if (maxAttendance !== undefined) data = data.filter(s => s.attendance_percentage <= Number(maxAttendance));
-    return res.json({ success: true, count: data.length, data });
+    const report = await db.query(sql, params);
+    return res.json({ success: true, data: report });
   } catch (error) {
-    console.error('[ReportController] Error fetching students report:', error.message || error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve students report' });
+    console.error('Error generating students report:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate report' });
   }
 }
 
-// 4. Get Department Report
+// 4. Department-wise Comparison
 async function getDepartmentReport(req, res) {
+  const { platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
+  const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+
   try {
-    const stats = await db.query(
+    const report = await db.query(
       `SELECT u.department,
               COUNT(DISTINCT u.id) as total_students,
-              IFNULL(SUM(
-                (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id
-                 WHERE r.user_id = u.id AND c.contest_status = 'Rated'
-                   AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW())
-              ), 0) as total_records,
-              IFNULL(SUM(
-                (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id
-                 WHERE p.user_id = u.id AND c.contest_status = 'Rated'
-                   AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW())
-              ), 0) as present_count,
-              IFNULL(ROUND(AVG(lp.current_rating)), 0) as average_rating,
-              IFNULL(ROUND(MAX(lp.highest_rating)), 0) as peak_rating
+              IFNULL(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as total_records,
+              IFNULL(SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as present_count,
+              IFNULL(ROUND((SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())) / NULLIF(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0)) * 100), 100) as attendance_percentage
        FROM Users u
-       LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
        WHERE u.status = 'active'
        GROUP BY u.department
-       ORDER BY present_count DESC`
+       ORDER BY attendance_percentage DESC`
     );
-    const result = stats.map(s => {
-      const total = Number(s.total_records);
-      const present = Number(s.present_count);
-      return { ...s, absent_count: Math.max(0, total - present), attendance_percentage: total > 0 ? Math.round((present / total) * 100) : 0 };
-    });
-    return res.json({ success: true, data: result });
+    return res.json({ success: true, data: report });
   } catch (error) {
-    console.error('[ReportController] Error fetching department report:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve department report' });
+    console.error('Error generating department report:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate report' });
   }
 }
 
-// 5. Get Section Report
+// 5. Section-wise Comparison
 async function getSectionReport(req, res) {
-  const { department } = req.query;
+  const { platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
+  const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+
   try {
-    let sql = `
-      SELECT u.department, u.section,
-             CONCAT(u.department, ' - ', u.section) as section_label,
-             COUNT(DISTINCT u.id) as total_students,
-             IFNULL(SUM(
-               (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id
-                WHERE r.user_id = u.id AND c.contest_status = 'Rated'
-                  AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW())
-             ), 0) as total_records,
-             IFNULL(SUM(
-               (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id
-                WHERE p.user_id = u.id AND c.contest_status = 'Rated'
-                  AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW())
-             ), 0) as present_count,
-             IFNULL(ROUND(AVG(lp.current_rating)), 0) as average_rating
-      FROM Users u
-      LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
-      WHERE u.status = 'active'
-    `;
-    const params = [];
-    if (department) { sql += ' AND u.department = ?'; params.push(department); }
-    sql += ' GROUP BY u.department, u.section ORDER BY u.department, u.section';
-    const stats = await db.query(sql, params);
-    const result = stats.map(s => {
-      const total = Number(s.total_records);
-      const present = Number(s.present_count);
-      return { ...s, absent_count: Math.max(0, total - present), attendance_percentage: total > 0 ? Math.round((present / total) * 100) : 0 };
-    });
-    return res.json({ success: true, data: result });
+    const report = await db.query(
+      `SELECT u.department, u.section,
+              COUNT(DISTINCT u.id) as total_students,
+              IFNULL(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as total_records,
+              IFNULL(SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as present_count,
+              IFNULL(ROUND((SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())) / NULLIF(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0)) * 100), 100) as attendance_percentage
+       FROM Users u
+       WHERE u.status = 'active'
+       GROUP BY u.department, u.section
+       ORDER BY u.department ASC, u.section ASC`
+    );
+    return res.json({ success: true, data: report });
   } catch (error) {
-    console.error('[ReportController] Error fetching section report:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve section report' });
+    console.error('Error generating section report:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate report' });
   }
 }
 
-// 6. Get Attendance Heatmap
+// 6. Heatmap Data (matrix of Student presence across recent 8 contests)
 async function getAttendanceHeatmap(req, res) {
-  const { year, type } = req.query;
-  try {
-    const targetYear = year ? parseInt(year, 10) : new Date().getFullYear();
-    let sql = `
-      SELECT DATE(c.start_time) as date,
-             COUNT(DISTINCT p.user_id) as participant_count,
-             COUNT(DISTINCT r.user_id) as registered_count,
-             c.contest_type, c.contest_status
-      FROM Contests c
-      LEFT JOIN ParticipationLogs p ON p.contest_id = c.contest_id
-      LEFT JOIN Registrations r ON r.contest_id = c.contest_id
-      WHERE YEAR(c.start_time) = ? AND c.contest_status != 'Cancelled'
-    `;
-    const params = [targetYear];
-    if (type) { sql += ' AND c.contest_type = ?'; params.push(type); }
-    sql += ' GROUP BY c.contest_id ORDER BY c.start_time ASC';
-    const rows = await db.query(sql, params);
-    return res.json({ success: true, data: rows });
-  } catch (error) {
-    console.error('[ReportController] Error fetching heatmap:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve attendance heatmap' });
-  }
-}
+  const { platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
 
-// 7. Get Attendance Log (paginated)
-async function getAttendanceLog(req, res) {
-  const { contestId, userId, status, page = 1, limit = 50 } = req.query;
   try {
-    let sql = `
-      SELECT ar.id, ar.user_id, ar.contest_id, ar.attendance_status, ar.attendance_source,
-             ar.remarks, ar.last_updated,
-             u.name, u.roll_no, u.department, u.section,
-             c.title as contest_name, c.start_time as contest_date, c.contest_type
-      FROM AttendanceRecords ar
-      JOIN Users u ON u.id = ar.user_id
-      JOIN Contests c ON c.contest_id = ar.contest_id
-      WHERE 1=1
-    `;
-    const params = [];
-    if (contestId) { sql += ' AND ar.contest_id = ?'; params.push(contestId); }
-    if (userId) { sql += ' AND ar.user_id = ?'; params.push(userId); }
-    if (status) { sql += ' AND ar.attendance_status = ?'; params.push(status); }
-    const safeLimit = Number.parseInt(limit, 10) || 50;
-    const safeOffset = (Number.parseInt(page, 10) - 1) * safeLimit;
-    if (!Number.isInteger(safeLimit) || safeLimit <= 0 || !Number.isInteger(safeOffset) || safeOffset < 0) {
-      throw new Error("Invalid limit or offset");
+    // Get recent 8 contests overall
+    let contestSql = `SELECT contest_id, title as name, start_time as date, contest_status, duration, platform
+       FROM Contests `;
+    const contestParams = [];
+    if (filterPlatform !== 'all') {
+      contestSql += ` WHERE platform = ? `;
+      contestParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+    }
+    contestSql += ` ORDER BY start_time DESC LIMIT 8 `;
+
+    const recentContests = await db.query(contestSql, contestParams);
+    // Reverse to chronological
+    recentContests.reverse();
+
+    if (recentContests.length === 0) {
+      return res.json({ success: true, contests: [], students: [] });
     }
 
-    sql += ` ORDER BY ar.last_updated DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
-    const rows = await db.query(sql, params);
-    return res.json({ success: true, data: rows });
+    const contestIds = recentContests.map(c => c.contest_id);
+    const placeHolders = contestIds.map(() => '?').join(',');
+
+    // Get active students' attendance for these contests
+    const rawHeatmap = await db.query(
+      `SELECT u.id as student_id, u.name, u.roll_no as register_number, u.leetcode_username, u.codechef_username,
+              u.academic_start_date, u.academic_end_date,
+              ar.contest_id, ar.attendance_status
+       FROM Users u
+       LEFT JOIN AttendanceRecords ar ON u.id = ar.user_id AND ar.contest_id IN (${placeHolders})
+       WHERE u.status = 'active'
+       ORDER BY u.roll_no ASC`,
+      contestIds
+    );
+
+    const contestDatesMap = new Map();
+    recentContests.forEach(c => {
+      contestDatesMap.set(c.contest_id, new Date(c.date));
+    });
+
+    // Format matrix: Group by student
+    const studentHeatmapMap = new Map();
+    rawHeatmap.forEach(row => {
+      if (!studentHeatmapMap.has(row.student_id)) {
+        studentHeatmapMap.set(row.student_id, {
+          studentId: row.student_id,
+          name: row.name,
+          registerNumber: row.register_number,
+          leetcodeUsername: row.leetcode_username,
+          codechefUsername: row.codechef_username,
+          academic_start_date: row.academic_start_date,
+          academic_end_date: row.academic_end_date,
+          attendance: {} // contestId -> status
+        });
+      }
+      if (row.contest_id) {
+        studentHeatmapMap.get(row.student_id).attendance[row.contest_id] = row.attendance_status === 'PRESENT' ? 'present' : 'absent';
+      }
+    });
+
+    const studentsData = Array.from(studentHeatmapMap.values()).map(student => {
+      const start = parseDateOnly(student.academic_start_date);
+      const end = parseDateOnly(student.academic_end_date);
+      end.setHours(23, 59, 59, 999);
+
+      const timeline = contestIds.map(cid => {
+        const cDateRaw = contestDatesMap.get(cid);
+        const cDate = parseDateOnly(cDateRaw);
+        const isEligible = cDate && cDate >= start && cDate <= end;
+        
+        const contestInfo = recentContests.find(c => c.contest_id === cid);
+        const startTime = new Date(cDateRaw);
+        const durationMs = (contestInfo?.duration || 5400) * 1000;
+        const endTime = new Date(startTime.getTime() + durationMs);
+        const isOngoing = startTime <= new Date() && endTime > new Date();
+        const isUnrated = contestInfo?.contest_status === 'Unrated';
+        
+        if (!isEligible) {
+          return 'not_applicable';
+        }
+        if (isOngoing) {
+          return 'ongoing';
+        }
+        if (isUnrated) {
+          return 'unrated';
+        }
+        return student.attendance[cid] || 'absent';
+      });
+
+      return {
+        studentId: student.studentId,
+        name: student.name,
+        registerNumber: student.registerNumber,
+        leetcodeUsername: student.leetcodeUsername,
+        codechefUsername: student.codechefUsername,
+        timeline
+      };
+    });
+
+    // Format contests list to include a mock id
+    const contestsList = recentContests.map((c, idx) => ({
+      id: c.contest_id,
+      name: c.name,
+      date: c.date,
+      platform: c.platform || 'LeetCode'
+    }));
+
+    return res.json({
+      success: true,
+      contests: contestsList,
+      students: studentsData
+    });
   } catch (error) {
-    console.error('[ReportController] Error fetching attendance log:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve attendance log' });
+    console.error('Error generating heatmap:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate heatmap data' });
   }
 }
 
-// 8. Faculty Summary (new)
-async function getFacultySummary(req, res) {
+// 7. Get Detailed Attendance Log (Student-Contest records)
+async function getAttendanceLog(req, res) {
+  const { platform } = req.query;
+  const filterPlatform = platform ? platform.toLowerCase() : 'all';
+
   try {
-    const [ratingDist] = await db.query(
-      `SELECT
-         SUM(CASE WHEN lp.current_rating < 1400 THEN 1 ELSE 0 END) as beginner,
-         SUM(CASE WHEN lp.current_rating >= 1400 AND lp.current_rating < 1600 THEN 1 ELSE 0 END) as intermediate,
-         SUM(CASE WHEN lp.current_rating >= 1600 AND lp.current_rating < 1800 THEN 1 ELSE 0 END) as advanced,
-         SUM(CASE WHEN lp.current_rating >= 1800 THEN 1 ELSE 0 END) as expert
-       FROM LeetCodeProfiles lp
-       JOIN Users u ON u.id = lp.user_id
-       WHERE u.status = 'active' AND lp.current_rating > 0`
-    );
-    return res.json({
-      success: true,
-      ratingDistribution: ratingDist || { beginner: 0, intermediate: 0, advanced: 0, expert: 0 }
-    });
+    let sql = `SELECT u.roll_no as register_number, u.name as student_name, u.department, u.section,
+              c.title as contest_name, c.start_time as contest_date, c.contest_status, c.platform,
+              CASE 
+                WHEN c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date THEN
+                  CASE
+                    WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 'ONGOING'
+                    WHEN c.contest_status = 'Unrated' THEN 'UNRATED'
+                    ELSE ar.attendance_status
+                  END
+                ELSE 'NOT_APPLICABLE'
+              END as attendance_status
+       FROM AttendanceRecords ar
+       JOIN Users u ON ar.user_id = u.id
+       JOIN Contests c ON ar.contest_id = c.contest_id
+       WHERE u.status = 'active'
+    `;
+    const params = [];
+    if (filterPlatform !== 'all') {
+      sql += ` AND c.platform = ? `;
+      params.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+    }
+    sql += ` ORDER BY c.start_time DESC, u.roll_no ASC `;
+
+    const log = await db.query(sql, params);
+    return res.json({ success: true, data: log });
   } catch (error) {
-    console.error('[ReportController] Error fetching faculty summary:', error);
-    return res.status(500).json({ success: false, message: 'Failed to retrieve faculty summary' });
+    console.error('Error generating attendance log report:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate attendance log report' });
   }
 }
 
@@ -388,6 +553,5 @@ module.exports = {
   getDepartmentReport,
   getSectionReport,
   getAttendanceHeatmap,
-  getAttendanceLog,
-  getFacultySummary
+  getAttendanceLog
 };

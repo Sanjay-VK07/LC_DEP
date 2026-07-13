@@ -15,6 +15,8 @@ async function getDepartments(req, res) {
     sql += ' ORDER BY name ASC';
 
     const list = await db.query(sql, params);
+    console.log(`[Diagnostic] Departments fetched from DB count: ${list.length}`);
+    console.log(`[Diagnostic] Departments returned by API count: ${list.length}`);
     return res.json({ success: true, count: list.length, data: list });
   } catch (error) {
     console.error('Error fetching departments:', error);

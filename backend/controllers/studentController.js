@@ -3,11 +3,14 @@ const { getAdapter } = require('../services/adapters/AdapterFactory');
 const { getUnifiedStudentProfile } = require('../services/platformAnalyticsService');
 const { getLeetCodeStats } = require('../services/leetcodeService');
 const xlsx = require('xlsx');
+const { formatBatchToLong } = require('../utils/batchHelper');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const { normalizeHandle } = require('../services/normalizationService');
+const codeforcesVerificationService = require('../services/codeforcesVerificationService');
 
 // Reusable handle validation regex constants
 const LEETCODE_REGEX = /^[a-zA-Z0-9_-]{3,30}$/;
-const CODEFORCES_REGEX = /^[a-zA-Z0-9_-]{3,24}$/;
+const CODEFORCES_REGEX = /^[a-zA-Z0-9_.-]{3,24}$/;
 const CODECHEF_REGEX = /^[a-zA-Z0-9_]{3,30}$/;
 const HACKERRANK_REGEX = /^[a-zA-Z0-9_.-]{3,30}$/;
 
@@ -35,12 +38,15 @@ async function getStudents(req, res) {
     SELECT u.id, u.name, u.roll_no, u.department, u.section, u.leetcode_username, 
            u.codechef_username, u.codeforces_username, u.hackerrank_username,
            u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at,
+           u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
+           cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank,
            (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) AS total_contests,
            (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS attended_contests,
            (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) - (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS missed_contests,
            lp.highest_rating, lp.current_rating, lp.global_ranking AS highest_rank
     FROM Users u
     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
+    LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
     WHERE 1=1
   `;
   const params = [];
@@ -102,7 +108,7 @@ function formatDateForSql(dateInput) {
 
 // 2. Add single student
 async function addStudent(req, res) {
-  const { name, rollNo, department, section, leetcodeUsername, codechefUsername, codeforcesUsername, hackerrankUsername, academicBatch, academicStartDate, academicEndDate } = req.body;
+  const { name, rollNo, department, section, leetcodeUsername, codechefUsername, codeforcesUsername, hackerrankUsername, academicBatch, academicStartDate, academicEndDate, leetcodeVerified, codechefVerified, codeforcesVerified, hackerrankVerified } = req.body;
 
   if (!name || !rollNo || !department || !section || !leetcodeUsername || !academicBatch || !academicStartDate || !academicEndDate) {
     return res.status(400).json({ success: false, message: 'All fields are required.' });
@@ -154,10 +160,7 @@ async function addStudent(req, res) {
       }
     }
     if (trimmedForces) {
-      const checkForces = await db.query('SELECT id FROM Users WHERE codeforces_username = ?', [trimmedForces]);
-      if (checkForces && checkForces.length > 0) {
-        return res.status(400).json({ success: false, message: 'Codeforces username already registered.' });
-      }
+      // Handled via codeforcesVerificationService.verifyHandle during verification phase
     }
     if (trimmedRank) {
       const checkRank = await db.query('SELECT id FROM Users WHERE hackerrank_username = ?', [trimmedRank]);
@@ -167,46 +170,81 @@ async function addStudent(req, res) {
     }
 
     // LeetCode Handle Verification
-    console.log(`Verifying LeetCode username: ${trimmedLC}`);
-    const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
-    if (!verifyResult.verified) {
-      return res.status(400).json({ 
-        success: false, 
-        message: verifyResult.message || `LeetCode handle '${trimmedLC}' could not be verified.`
-      });
+    let verifyResult = null;
+    if (leetcodeVerified === true) {
+      verifyResult = { verified: true, username: trimmedLC };
+    } else {
+      console.log(`Verifying LeetCode username: ${trimmedLC}`);
+      const resVal = await getAdapter('leetcode').getProfile(trimmedLC);
+      if (!resVal.verified) {
+        return res.status(400).json({ 
+          success: false, 
+          message: resVal.message || `LeetCode handle '${trimmedLC}' could not be verified.`
+        });
+      }
+      verifyResult = resVal;
     }
 
     // CodeChef Handle Verification
     let finalChef = null;
     if (trimmedChef) {
-      console.log(`Verifying CodeChef username: ${trimmedChef}`);
-      const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
-      if (!verifyChef.verified) {
-        return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
+      if (codechefVerified === true) {
+        finalChef = trimmedChef;
+      } else {
+        console.log(`Verifying CodeChef username: ${trimmedChef}`);
+        const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
+        if (!verifyChef.verified) {
+          return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
+        }
+        finalChef = verifyChef.username;
       }
-      finalChef = verifyChef.username;
     }
 
-    // Codeforces Handle Verification
+    // Codeforces Handle Verification (Authoritative API check outside transaction)
+    let cfVerified = 0;
+    let cfVerifiedAt = null;
+    let cfVerifiedSource = null;
     let finalForces = null;
+    let cfNormalized = null;
+    let cfRating = null;
+    let cfRank = null;
+    let cfMaxRank = null;
+
+    console.log('[Codeforces Update Audit Log] [Add Student - Incoming Payload]', {
+      newUsername: codeforcesUsername || null,
+      timestamp: new Date().toISOString()
+    });
+
     if (trimmedForces) {
-      console.log(`Verifying Codeforces username: ${trimmedForces}`);
-      const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
-      if (!verifyForces.verified) {
-        return res.status(400).json({ success: false, message: verifyForces.message || `Codeforces handle '${trimmedForces}' could not be verified.` });
+      try {
+        const cfVerifyRes = await codeforcesVerificationService.verifyHandle(trimmedForces, null);
+        cfVerified = cfVerifyRes.verified;
+        cfVerifiedAt = cfVerifyRes.verifiedAt;
+        cfVerifiedSource = cfVerifyRes.verifiedSource;
+        finalForces = cfVerifyRes.username;
+        cfNormalized = cfVerifyRes.normalized;
+        cfRating = cfVerifyRes.rating;
+        cfRank = cfVerifyRes.rank;
+        cfMaxRank = cfVerifyRes.maxRank;
+      } catch (err) {
+        console.error('[Codeforces Verification Error] [Add Student]', err.message);
+        return res.status(err.statusCode || 400).json({ success: false, message: err.message });
       }
-      finalForces = verifyForces.username;
     }
 
     // HackerRank Handle Verification
     let finalRank = null;
     if (trimmedRank) {
-      console.log(`Verifying HackerRank username: ${trimmedRank}`);
-      const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
-      if (!verifyRank.verified) {
-        return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
+      if (hackerrankVerified === true) {
+        finalRank = trimmedRank;
+      } else {
+        console.log(`Verifying HackerRank username: ${trimmedRank}`);
+        const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
+        if (!verifyRank.verified) {
+          return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
+        }
+        finalRank = verifyRank.username;
       }
-      finalRank = verifyRank.username;
     }
 
     const sqlStartDate = formatDateForSql(academicStartDate);
@@ -219,9 +257,9 @@ async function addStudent(req, res) {
       await connection.beginTransaction();
 
       const result = await connection.query(
-        `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
-        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), verifyResult.username, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate]
+        `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, codeforces_username_normalized, codeforces_verified, codeforces_verified_at, codeforces_verified_source, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), verifyResult.username, finalChef, finalForces, cfNormalized, cfVerified, cfVerifiedAt, cfVerifiedSource, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate]
       );
 
       newStudentId = result.insertId || result[0]?.insertId;
@@ -235,10 +273,44 @@ async function addStudent(req, res) {
 
       // Seed empty profile records for other platforms
       await connection.query(`INSERT INTO CodeChefProfiles (user_id) VALUES (?)`, [newStudentId]);
-      await connection.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
+      
+      // Upsert Codeforces Profile stats if verified
+      if (finalForces) {
+        await connection.query(
+          `INSERT INTO CodeforcesProfiles (user_id, current_rating, highest_rating, \`rank\`, max_rank, last_profile_sync)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             current_rating = VALUES(current_rating),
+             highest_rating = GREATEST(COALESCE(highest_rating, 0), VALUES(highest_rating)),
+             \`rank\` = VALUES(\`rank\`),
+             max_rank = VALUES(max_rank),
+             last_profile_sync = VALUES(last_profile_sync)`,
+          [newStudentId, cfRating, cfRating, cfRank, cfMaxRank, cfVerifiedAt]
+        );
+      } else {
+        await connection.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?) ON DUPLICATE KEY UPDATE user_id = user_id`, [newStudentId]);
+      }
+      
       await connection.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
 
       await connection.commit();
+
+      // Query database immediately after save and log the "Database object after save"
+      const [savedUser] = await db.query(
+        `SELECT u.id, u.codeforces_username, u.codeforces_username_normalized, u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
+                cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank
+         FROM Users u
+         LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
+         WHERE u.id = ?`,
+        [newStudentId]
+      );
+
+      console.log('[Codeforces Update Audit Log] [Add Student - Database Object After Save]', {
+        studentId: newStudentId,
+        savedUser,
+        timestamp: new Date().toISOString()
+      });
+
     } catch (transactionErr) {
       await connection.rollback();
       throw transactionErr;
@@ -261,7 +333,7 @@ async function addStudent(req, res) {
       syncStudentPlatform(newStudentId, 'hackerrank', true).catch(err => console.error('[Historical Sync Error] HackerRank:', err.message));
     }
 
-    return res.status(201).json({
+    const responsePayload = {
       success: true,
       message: 'Student added successfully.',
       data: {
@@ -273,13 +345,18 @@ async function addStudent(req, res) {
         leetcodeUsername: verifyResult.username,
         codechefUsername: finalChef,
         codeforcesUsername: finalForces,
+        codeforcesVerified: cfVerified,
+        codeforcesVerifiedAt: cfVerifiedAt,
+        codeforcesVerifiedSource: cfVerifiedSource,
         hackerrankUsername: finalRank,
         academicBatch,
         academicStartDate: sqlStartDate,
         academicEndDate: sqlEndDate,
         status: 'active'
       }
-    });
+    };
+    console.log('[Codeforces Update Audit Log] [Add Student - Response Payload]', responsePayload);
+    return res.status(201).json(responsePayload);
   } catch (error) {
     console.error('Error adding student:', error);
     return res.status(500).json({ success: false, message: 'Internal server error.' });
@@ -289,7 +366,7 @@ async function addStudent(req, res) {
 // 3. Edit student
 async function editStudent(req, res) {
   const { id } = req.params;
-  const { name, rollNo, department, section, leetcodeUsername, codechefUsername, codeforcesUsername, hackerrankUsername, academicBatch, academicStartDate, academicEndDate, status } = req.body;
+  const { name, rollNo, department, section, leetcodeUsername, codechefUsername, codeforcesUsername, hackerrankUsername, academicBatch, academicStartDate, academicEndDate, status, leetcodeVerified, codechefVerified, codeforcesVerified, codeforcesRating, codeforcesRank, hackerrankVerified } = req.body;
 
   if (!name || !rollNo || !department || !section || !leetcodeUsername || !academicBatch || !academicStartDate || !academicEndDate) {
     return res.status(400).json({ success: false, message: 'All fields are required.' });
@@ -348,10 +425,7 @@ async function editStudent(req, res) {
       }
     }
     if (trimmedForces) {
-      const checkForces = await db.query('SELECT id FROM Users WHERE codeforces_username = ? AND id != ?', [trimmedForces, id]);
-      if (checkForces && checkForces.length > 0) {
-        return res.status(400).json({ success: false, message: 'Codeforces username already in use by another student.' });
-      }
+      // Handled via codeforcesVerificationService during verification phase
     }
     if (trimmedRank) {
       const checkRank = await db.query('SELECT id FROM Users WHERE hackerrank_username = ? AND id != ?', [trimmedRank, id]);
@@ -362,52 +436,140 @@ async function editStudent(req, res) {
 
     let finalLCUsername = trimmedLC;
 
-    const currentLeetCode = String(currentStudent[0].leetcode_username || '').toLowerCase();
-    const currentCodeChef = String(currentStudent[0].codechef_username || '').toLowerCase();
-    const currentCodeforces = String(currentStudent[0].codeforces_username || '').toLowerCase();
-    const currentHackerRank = String(currentStudent[0].hackerrank_username || '').toLowerCase();
+    const currentLeetCode = String(currentStudent[0].leetcode_username || '').trim().toLowerCase();
+    const currentCodeChef = String(currentStudent[0].codechef_username || '').trim().toLowerCase();
+    const currentCodeforces = String(currentStudent[0].codeforces_username || '').trim().toLowerCase();
+    const currentHackerRank = String(currentStudent[0].hackerrank_username || '').trim().toLowerCase();
+
+    console.log('[Codeforces Update Audit Log] [Edit Student - Database Object Before Save]', {
+      studentId: id,
+      databaseRecord: currentStudent[0],
+      timestamp: new Date().toISOString()
+    });
 
     // Re-verify LeetCode handle only if it changed
     if (currentLeetCode !== trimmedLC.toLowerCase()) {
-      console.log(`Re-verifying LeetCode username: ${trimmedLC}`);
-      const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
-      if (!verifyResult.verified) {
-        return res.status(400).json({ 
-          success: false, 
-          message: verifyResult.message || `LeetCode handle '${trimmedLC}' could not be verified.`
-        });
+      if (leetcodeVerified === true) {
+        finalLCUsername = trimmedLC;
+      } else {
+        console.log(`Re-verifying LeetCode username: ${trimmedLC}`);
+        const verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
+        if (!verifyResult.verified) {
+          return res.status(400).json({ 
+            success: false, 
+            message: verifyResult.message || `LeetCode handle '${trimmedLC}' could not be verified.`
+          });
+        }
+        finalLCUsername = verifyResult.username;
       }
-      finalLCUsername = verifyResult.username;
     }
 
     let finalChef = trimmedChef;
-    if (trimmedChef && currentCodeChef !== trimmedChef.toLowerCase()) {
-      console.log(`Re-verifying CodeChef username: ${trimmedChef}`);
-      const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
-      if (!verifyChef.verified) {
-        return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
+    if (trimmedChef) {
+      const isUnchanged = currentCodeChef === trimmedChef.toLowerCase();
+      const isVerified = codechefVerified === true;
+      if (isUnchanged || isVerified) {
+        finalChef = trimmedChef;
+      } else {
+        console.log(`Re-verifying CodeChef username: ${trimmedChef}`);
+        const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
+        if (!verifyChef.verified) {
+          return res.status(400).json({ success: false, message: verifyChef.message || `CodeChef handle '${trimmedChef}' could not be verified.` });
+        }
+        finalChef = verifyChef.username;
       }
-      finalChef = verifyChef.username;
     }
 
-    let finalForces = trimmedForces;
-    if (trimmedForces && currentCodeforces !== trimmedForces.toLowerCase()) {
-      console.log(`Re-verifying Codeforces username: ${trimmedForces}`);
-      const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
-      if (!verifyForces.verified) {
-        return res.status(400).json({ success: false, message: verifyForces.message || `Codeforces handle '${trimmedForces}' could not be verified.` });
+    // Codeforces Verification logic (Authoritative API check outside transaction)
+    let cfVerified = 0;
+    let cfVerifiedAt = null;
+    let cfVerifiedSource = null;
+    let finalForces = null;
+    let cfNormalized = null;
+    let cfRating = null;
+    let cfRank = null;
+    let cfMaxRank = null;
+    let cfVerifiedUnchanged = false;
+
+    const currentCFNormalized = currentStudent[0].codeforces_username_normalized ? currentStudent[0].codeforces_username_normalized.trim().toLowerCase() : '';
+    const newCFNormalized = trimmedForces ? trimmedForces.trim().toLowerCase() : '';
+    const isForcesVerified = codeforcesVerified === true || codeforcesVerified === 'true';
+
+    if (newCFNormalized !== currentCFNormalized) {
+      if (newCFNormalized) {
+        // Changed: Verify handle again on backend
+        try {
+          const cfVerifyRes = await codeforcesVerificationService.verifyHandle(trimmedForces, id);
+          cfVerified = cfVerifyRes.verified;
+          cfVerifiedAt = cfVerifyRes.verifiedAt;
+          cfVerifiedSource = cfVerifyRes.verifiedSource;
+          finalForces = cfVerifyRes.username;
+          cfNormalized = cfVerifyRes.normalized;
+          cfRating = cfVerifyRes.rating;
+          cfRank = cfVerifyRes.rank;
+          cfMaxRank = cfVerifyRes.maxRank;
+        } catch (err) {
+          console.error('[Codeforces Verification Error] [Edit Student]', err.message);
+          return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+        }
+      } else {
+        // Cleared
+        cfVerified = 0;
+        cfVerifiedAt = null;
+        cfVerifiedSource = null;
+        finalForces = null;
+        cfNormalized = null;
+        console.log('[Codeforces Verification Service] Handle cleared.', { studentId: id });
       }
-      finalForces = verifyForces.username;
+    } else if (currentStudent[0].codeforces_verified) {
+      // Unchanged AND database already verified: reuse existing database verification
+      cfVerified = currentStudent[0].codeforces_verified;
+      cfVerifiedAt = currentStudent[0].codeforces_verified_at;
+      cfVerifiedSource = currentStudent[0].codeforces_verified_source;
+      finalForces = currentStudent[0].codeforces_username;
+      cfNormalized = currentStudent[0].codeforces_username_normalized;
+      cfVerifiedUnchanged = true;
+      console.log('[Codeforces Verification Service] Handle unchanged & verified. Reusing verification.', { studentId: id, currentCFNormalized });
+    } else if (isForcesVerified) {
+      // Unchanged AND request contains a successful verification: persist new verification state
+      cfVerified = 1;
+      cfVerifiedAt = new Date();
+      cfVerifiedSource = 'MANUAL';
+      finalForces = currentStudent[0].codeforces_username;
+      cfNormalized = currentStudent[0].codeforces_username_normalized;
+      cfVerifiedUnchanged = false; // Trigger database CodeforcesProfiles update
+      if (codeforcesRating !== undefined && codeforcesRating !== null) {
+        cfRating = Number(codeforcesRating);
+        cfRank = codeforcesRank || null;
+        cfMaxRank = codeforcesRank || null;
+      }
+      console.log('[Codeforces Verification Service] Handle unchanged but newly verified. Saving verification.', { studentId: id, currentCFNormalized });
+    } else {
+      // Else: remain unverified
+      cfVerified = 0;
+      cfVerifiedAt = null;
+      cfVerifiedSource = null;
+      finalForces = currentStudent[0].codeforces_username;
+      cfNormalized = currentStudent[0].codeforces_username_normalized;
+      cfVerifiedUnchanged = true;
+      console.log('[Codeforces Verification Service] Handle unchanged and remains unverified.', { studentId: id, currentCFNormalized });
     }
 
-    let finalRank = trimmedRank;
-    if (trimmedRank && currentHackerRank !== trimmedRank.toLowerCase()) {
-      console.log(`Re-verifying HackerRank username: ${trimmedRank}`);
-      const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
-      if (!verifyRank.verified) {
-        return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
+    // HackerRank Handle Verification
+    let finalRank = null;
+    if (trimmedRank) {
+      const isUnchanged = currentHackerRank === trimmedRank.toLowerCase();
+      const isVerified = hackerrankVerified === true;
+      if (isUnchanged || isVerified) {
+        finalRank = trimmedRank;
+      } else {
+        console.log(`Re-verifying HackerRank username: ${trimmedRank}`);
+        const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
+        if (!verifyRank.verified) {
+          return res.status(400).json({ success: false, message: verifyRank.message || `HackerRank handle '${trimmedRank}' could not be verified.` });
+        }
+        finalRank = verifyRank.username;
       }
-      finalRank = verifyRank.username;
     }
 
     const sqlStartDate = formatDateForSql(academicStartDate);
@@ -421,18 +583,73 @@ async function editStudent(req, res) {
       await connection.query(
         `UPDATE Users 
          SET name = ?, roll_no = ?, department = ?, section = ?, leetcode_username = ?, 
-             codechef_username = ?, codeforces_username = ?, hackerrank_username = ?,
-             academic_batch = ?, academic_start_date = ?, academic_end_date = ?, status = ? 
+             codechef_username = ?, codeforces_username = ?, codeforces_username_normalized = ?,
+             codeforces_verified = ?, codeforces_verified_at = ?, codeforces_verified_source = ?,
+             hackerrank_username = ?, academic_batch = ?, academic_start_date = ?, academic_end_date = ?, status = ? 
          WHERE id = ?`,
-        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), finalLCUsername, finalChef, finalForces, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate, status || 'active', id]
+        [name.trim(), trimmedRoll, department.trim(), section.trim().toUpperCase(), finalLCUsername, finalChef, finalForces, cfNormalized, cfVerified, cfVerifiedAt, cfVerifiedSource, finalRank, academicBatch.trim(), sqlStartDate, sqlEndDate, status || 'active', id]
       );
 
       // Seed missing profile cache tables if they don't exist
       await connection.query(`INSERT IGNORE INTO CodeChefProfiles (user_id) VALUES (?)`, [id]);
-      await connection.query(`INSERT IGNORE INTO CodeforcesProfiles (user_id) VALUES (?)`, [id]);
+      
+      // Update or Reset Codeforces Profile stats inside transaction
+      if (finalForces) {
+        if (!cfVerifiedUnchanged) {
+          await connection.query(
+            `INSERT INTO CodeforcesProfiles (user_id, current_rating, highest_rating, \`rank\`, max_rank, last_profile_sync)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               current_rating = VALUES(current_rating),
+               highest_rating = GREATEST(COALESCE(highest_rating, 0), VALUES(highest_rating)),
+               \`rank\` = VALUES(\`rank\`),
+               max_rank = VALUES(max_rank),
+               last_profile_sync = VALUES(last_profile_sync)`,
+            [id, cfRating, cfRating, cfRank, cfMaxRank, cfVerifiedAt]
+          );
+        }
+      } else {
+        // Reset statistics when handle is cleared
+        await connection.query(
+          `UPDATE CodeforcesProfiles 
+           SET current_rating = NULL, 
+               highest_rating = NULL, 
+               \`rank\` = NULL, 
+               max_rank = NULL, 
+               problems_solved = 0, 
+               contest_history = NULL, 
+               last_profile_sync = NULL 
+           WHERE user_id = ?`,
+          [id]
+        );
+      }
+
       await connection.query(`INSERT IGNORE INTO HackerRankProfiles (user_id) VALUES (?)`, [id]);
 
       await connection.commit();
+
+      // Invalidate cache for the updated student
+      const cache = require('../services/analyticsCacheService');
+      cache.invalidate(cache.KEYS.STUDENT_ANALYTICS(id));
+      cache.invalidate(cache.KEYS.PLACEMENT_STUDENT(id));
+      cache.invalidate(cache.KEYS.AI_INSIGHTS(id));
+
+      // Query database immediately after save and log the "Database object after save"
+      const [savedUser] = await db.query(
+        `SELECT u.id, u.codeforces_username, u.codeforces_username_normalized, u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
+                cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank
+         FROM Users u
+         LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
+         WHERE u.id = ?`,
+        [id]
+      );
+
+      console.log('[Codeforces Update Audit Log] [Edit Student - Database Object After Save]', {
+        studentId: id,
+        savedUser,
+        timestamp: new Date().toISOString()
+      });
+
     } catch (transactionErr) {
       await connection.rollback();
       throw transactionErr;
@@ -455,10 +672,30 @@ async function editStudent(req, res) {
       syncStudentPlatform(id, 'hackerrank', true).catch(err => console.error('[Historical Sync Error] HackerRank:', err.message));
     }
 
-    return res.json({
+    const responsePayload = {
       success: true,
-      message: 'Student updated successfully.'
-    });
+      message: 'Student updated successfully.',
+      data: {
+        id,
+        name,
+        rollNo: trimmedRoll,
+        department,
+        section,
+        leetcodeUsername: finalLCUsername,
+        codechefUsername: finalChef,
+        codeforcesUsername: finalForces,
+        codeforcesVerified: cfVerified,
+        codeforcesVerifiedAt: cfVerifiedAt,
+        codeforcesVerifiedSource: cfVerifiedSource,
+        hackerrankUsername: finalRank,
+        academicBatch,
+        academicStartDate: sqlStartDate,
+        academicEndDate: sqlEndDate,
+        status: status || 'active'
+      }
+    };
+    console.log('[Codeforces Update Audit Log] [Edit Student - Response Payload]', responsePayload);
+    return res.json(responsePayload);
   } catch (error) {
     console.error('Error updating student:', error);
     return res.status(500).json({ success: false, message: 'Internal server error.' });
@@ -480,6 +717,10 @@ async function deleteStudent(req, res) {
     }
 
     await db.query('DELETE FROM Users WHERE id = ?', [id]);
+    const cache = require('../services/analyticsCacheService');
+    cache.invalidate(cache.KEYS.STUDENT_ANALYTICS(id));
+    cache.invalidate(cache.KEYS.PLACEMENT_STUDENT(id));
+    cache.invalidate(cache.KEYS.AI_INSIGHTS(id));
     return res.json({ success: true, message: 'Student deleted successfully.' });
   } catch (error) {
     console.error('Error deleting student:', error);
@@ -883,15 +1124,35 @@ async function checkUsername(req, res) {
 async function getUnifiedProfileById(req, res) {
   const { id } = req.params;
   const { refresh } = req.query;
+  const logger = require('../utils/logger');
+  const start = Date.now();
   try {
-    const student = await db.query('SELECT id, name, roll_no, department, section, academic_batch, leetcode_username, codechef_username, codeforces_username, hackerrank_username FROM Users WHERE id = ?', [id]);
+    const student = await db.query('SELECT id, name FROM Users WHERE id = ?', [id]);
     if (!student || student.length === 0) {
       return res.status(404).json({ success: false, message: 'Student not found.' });
     }
 
     if (refresh === 'true') {
       const { syncStudentProfiles } = require('../utils/scheduler');
-      await syncStudentProfiles(Number(id));
+      const syncPromise = syncStudentProfiles(Number(id))
+        .then((result) => {
+          if (result && result.updated) {
+            const cache = require('../services/analyticsCacheService');
+            cache.invalidate(cache.KEYS.STUDENT_ANALYTICS(id));
+            logger.info(`[Sync Complete] Student ID ${id} updated; cache invalidated.`);
+          } else {
+            logger.debug(`[Sync Complete] Student ID ${id} sync completed with no updates.`);
+          }
+        })
+        .catch(err => {
+          logger.error(`[Background Sync Error] Student ID ${id}:`, err);
+        });
+
+      const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), 2000));
+      const raceWinner = await Promise.race([syncPromise, timeoutPromise]);
+      if (raceWinner === 'TIMEOUT') {
+        logger.debug(`[Sync Timeout] Student ID ${id} sync exceeded 2s. Continuing in background...`);
+      }
     }
 
     const profile = await getUnifiedStudentProfile(Number(id));
@@ -901,18 +1162,13 @@ async function getUnifiedProfileById(req, res) {
     console.log('[AUDIT][API] currentRating =', cc.currentRating, 'highestRating =', cc.highestRating, 'lowestRating =', cc.lowestRating, 'ratingHistory.length =', ratingHistory.length);
     console.log('[AUDIT LOG][Controller] currentRating =', cc.currentRating);
     console.log('[AUDIT LOG][API] Response codechef currentRating =', cc.currentRating);
+    
+    const durationMs = Date.now() - start;
+    logger.debug(`Unified profile`, { studentId: id, durationMs });
     return res.json({ success: true, data: profile });
   } catch (error) {
-    console.error('====================================================');
-    console.error('DETAILED ERROR LOG');
-    console.error(`Request URL: ${req.originalUrl}`);
-    console.error(`HTTP Method: ${req.method}`);
-    console.error(`Student ID: ${id}`);
-    console.error(`Controller: studentController.getUnifiedProfileById`);
-    console.error(`Original Error: ${error.message}`);
-    console.error(`Full Stack Trace:\n${error.stack}`);
-    console.error('====================================================');
-
+    const durationMs = Date.now() - start;
+    logger.error(`Unified profile failed`, { studentId: id, durationMs, error: error.message });
     return res.status(500).json({
       success: false,
       platform: req.query.platform || 'all',
@@ -958,7 +1214,7 @@ async function getUniqueBatches(req, res) {
     const list = await db.query(
       "SELECT DISTINCT academic_batch FROM Users WHERE academic_batch IS NOT NULL AND academic_batch != '' ORDER BY academic_batch DESC"
     );
-    const batches = list.map(item => item.academic_batch);
+    const batches = [...new Set(list.map(item => formatBatchToLong(item.academic_batch)))];
     return res.json({ success: true, data: batches });
   } catch (error) {
     console.error('Error fetching unique batches:', error);
@@ -1005,6 +1261,41 @@ async function checkPlatformUsername(req, res) {
     const p = platform.toLowerCase();
     if (['leetcode', 'codechef', 'codeforces', 'hackerrank'].includes(p)) {
       result = await getAdapter(p).getProfile(username);
+      if (p === 'codeforces') {
+        if (!result.verified) {
+          return res.status(400).json({ success: false, message: 'Invalid Codeforces Handle' });
+        }
+        
+        // Update CodeforcesProfiles if the student already exists
+        const normalized = normalizeHandle(result.username || username);
+        const users = await db.query(
+          "SELECT id FROM Users WHERE codeforces_username_normalized = ?",
+          [normalized]
+        );
+        if (users.length > 0) {
+          const userId = users[0].id;
+          const rating = result.rating || null;
+          const maxRating = result.maxRating || rating;
+          const rank = result.rank || null;
+          const maxRank = result.metadata?.maxRank || rank;
+          
+          await db.query(
+            `INSERT INTO CodeforcesProfiles (user_id, current_rating, highest_rating, \`rank\`, max_rank, last_profile_sync)
+             VALUES (?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE
+               current_rating = VALUES(current_rating),
+               highest_rating = GREATEST(COALESCE(highest_rating, 0), VALUES(highest_rating)),
+               \`rank\` = VALUES(\`rank\`),
+               max_rank = VALUES(max_rank),
+               last_profile_sync = NOW()`,
+            [userId, rating, maxRating, rank, maxRank]
+          );
+          
+          // Invalidate cache
+          const cache = require('../services/analyticsCacheService');
+          cache.invalidateAll();
+        }
+      }
     } else {
       return res.status(400).json({ success: false, message: 'Invalid platform name.' });
     }

@@ -16,6 +16,7 @@ import {
 import * as XLSX from 'xlsx';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
+import { normalizeHandle } from '../utils/normalization';
 
 function Students() {
   const [students, setStudents] = useState([]);
@@ -70,6 +71,14 @@ function Students() {
   const [importFile, setImportFile] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResults, setImportResults] = useState(null);
+
+  console.count("Students Render");
+  console.log('[Students State Audit]', {
+    platformChecks,
+    formData,
+    selectedStudent,
+    lcVerified
+  });
 
   // Fetch student listings
   const fetchStudents = async () => {
@@ -154,17 +163,49 @@ function Students() {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
+    
     if (name === 'leetcodeUsername') {
-      setLcVerified(null);
+      const isUnchanged = lcCheckedUsername && value.trim().toLowerCase() === lcCheckedUsername.trim().toLowerCase();
+      setLcVerified(isUnchanged ? true : null);
     }
     if (name === 'codechefUsername') {
-      setPlatformChecks(prev => ({ ...prev, codechef: { ...prev.codechef, verified: null, username: '', stats: {} } }));
+      setPlatformChecks(prev => {
+        const isUnchanged = prev.codechef.username && value.trim().toLowerCase() === prev.codechef.username.trim().toLowerCase();
+        return {
+          ...prev,
+          codechef: {
+            ...prev.codechef,
+            verified: isUnchanged ? true : null,
+            verifiedAt: isUnchanged ? prev.codechef.verifiedAt : null
+          }
+        };
+      });
     }
     if (name === 'codeforcesUsername') {
-      setPlatformChecks(prev => ({ ...prev, codeforces: { ...prev.codeforces, verified: null, username: '', stats: {} } }));
+      setPlatformChecks(prev => {
+        const isUnchanged = prev.codeforces.username && normalizeHandle(value) === normalizeHandle(prev.codeforces.username);
+        return {
+          ...prev,
+          codeforces: {
+            ...prev.codeforces,
+            verified: isUnchanged ? true : null,
+            verifiedAt: isUnchanged ? prev.codeforces.verifiedAt : null
+          }
+        };
+      });
     }
     if (name === 'hackerrankUsername') {
-      setPlatformChecks(prev => ({ ...prev, hackerrank: { ...prev.hackerrank, verified: null, username: '', stats: {} } }));
+      setPlatformChecks(prev => {
+        const isUnchanged = prev.hackerrank.username && value.trim().toLowerCase() === prev.hackerrank.username.trim().toLowerCase();
+        return {
+          ...prev,
+          hackerrank: {
+            ...prev.hackerrank,
+            verified: isUnchanged ? true : null,
+            verifiedAt: isUnchanged ? prev.hackerrank.verifiedAt : null
+          }
+        };
+      });
     }
   };
 
@@ -175,7 +216,7 @@ function Students() {
 
     setPlatformChecks(prev => ({
       ...prev,
-      [platform]: { ...prev[platform], checking: true, verified: null, username: '', stats: {} }
+      [platform]: { ...prev[platform], checking: true, verified: null, username: '', platform, verifiedAt: null, stats: {} }
     }));
 
     try {
@@ -187,6 +228,8 @@ function Students() {
           ...prev[platform],
           checking: false,
           verified,
+          platform,
+          verifiedAt: verified ? Date.now() : null,
           username: res.data.username || username,
           stats: { rating: res.data.rating, globalRanking: res.data.globalRanking }
         }
@@ -197,7 +240,7 @@ function Students() {
     } catch (err) {
       setPlatformChecks(prev => ({
         ...prev,
-        [platform]: { ...prev[platform], checking: false, verified: false, username: '', stats: {} }
+        [platform]: { ...prev[platform], checking: false, verified: false, username: '', platform, verifiedAt: null, stats: {} }
       }));
     }
   };
@@ -249,6 +292,11 @@ function Students() {
     setFormError('');
     setLcVerified(null);
     setLcStats({ rating: null, globalRanking: null });
+    setPlatformChecks({
+      codechef: { checking: false, verified: null, username: '', platform: 'codechef', verifiedAt: null, stats: {} },
+      codeforces: { checking: false, verified: null, username: '', platform: 'codeforces', verifiedAt: null, stats: {} },
+      hackerrank: { checking: false, verified: null, username: '', platform: 'hackerrank', verifiedAt: null, stats: {} }
+    });
     setIsAddModalOpen(true);
   };
 
@@ -271,6 +319,22 @@ function Students() {
     setLcVerified(true); // already verified on initial setup
     setLcCheckedUsername(student.leetcode_username);
     setLcStats({ rating: null, globalRanking: null });
+
+    const hasChef = !!student.codechef_username;
+    const hasRank = !!student.hackerrank_username;
+    const isForcesVerified = student.codeforces_verified === 1 || student.codeforces_verified === true;
+    setPlatformChecks({
+      codechef: { checking: false, verified: hasChef ? true : null, username: student.codechef_username || '', platform: 'codechef', verifiedAt: hasChef ? Date.now() : null, stats: {} },
+      codeforces: { 
+        checking: false, 
+        verified: isForcesVerified, 
+        username: student.codeforces_username || '', 
+        platform: 'codeforces', 
+        verifiedAt: student.codeforces_verified_at || null, 
+        stats: { rating: student.codeforces_rating || null, globalRanking: student.codeforces_rank || null } 
+      },
+      hackerrank: { checking: false, verified: hasRank ? true : null, username: student.hackerrank_username || '', platform: 'hackerrank', verifiedAt: hasRank ? Date.now() : null, stats: {} }
+    });
     setIsEditModalOpen(true);
   };
 
@@ -279,14 +343,42 @@ function Students() {
     e.preventDefault();
     setFormError('');
 
+    console.log({
+      codeforcesUsername: formData.codeforcesUsername,
+      codeforcesVerified: platformChecks.codeforces.verified,
+      previousVerifiedUsername: platformChecks.codeforces.username
+    });
+
     if (lcVerified !== true) {
       setFormError('Please verify the LeetCode username before saving.');
       return;
     }
 
+    if (formData.codechefUsername?.trim() && platformChecks.codechef.verified !== true) {
+      setFormError('Please verify the CodeChef username before saving.');
+      return;
+    }
+
+    if (formData.codeforcesUsername?.trim() && platformChecks.codeforces.verified !== true) {
+      setFormError('Please verify the Codeforces handle before saving.');
+      return;
+    }
+
+    if (formData.hackerrankUsername?.trim() && platformChecks.hackerrank.verified !== true) {
+      setFormError('Please verify the HackerRank username before saving.');
+      return;
+    }
+
     setFormLoading(true);
     try {
-      const res = await axios.post('/api/students', formData);
+      const payload = {
+        ...formData,
+        leetcodeVerified: lcVerified === true,
+        codechefVerified: platformChecks.codechef.verified === true,
+        codeforcesVerified: platformChecks.codeforces.verified === true,
+        hackerrankVerified: platformChecks.hackerrank.verified === true
+      };
+      const res = await axios.post('/api/students', payload);
       if (res.data.success) {
         setIsAddModalOpen(false);
         setSuccessMsg('Student added successfully.');
@@ -306,14 +398,44 @@ function Students() {
     e.preventDefault();
     setFormError('');
 
+    console.log({
+      codeforcesUsername: formData.codeforcesUsername,
+      codeforcesVerified: platformChecks.codeforces.verified,
+      previousVerifiedUsername: platformChecks.codeforces.username
+    });
+
     if (lcVerified !== true) {
       setFormError('Please verify the LeetCode username before saving.');
       return;
     }
 
+    if (formData.codechefUsername?.trim() && platformChecks.codechef.verified !== true) {
+      setFormError('Please verify the CodeChef username before saving.');
+      return;
+    }
+
+    if (formData.codeforcesUsername?.trim() && platformChecks.codeforces.verified !== true) {
+      setFormError('Please verify the Codeforces handle before saving.');
+      return;
+    }
+
+    if (formData.hackerrankUsername?.trim() && platformChecks.hackerrank.verified !== true) {
+      setFormError('Please verify the HackerRank username before saving.');
+      return;
+    }
+
     setFormLoading(true);
     try {
-      const res = await axios.put(`/api/students/${selectedStudent.id}`, formData);
+      const payload = {
+        ...formData,
+        leetcodeVerified: lcVerified === true,
+        codechefVerified: platformChecks.codechef.verified === true,
+        codeforcesVerified: platformChecks.codeforces.verified === true,
+        codeforcesRating: platformChecks.codeforces.stats?.rating ?? null,
+        codeforcesRank: platformChecks.codeforces.stats?.globalRanking ?? null,
+        hackerrankVerified: platformChecks.hackerrank.verified === true
+      };
+      const res = await axios.put(`/api/students/${selectedStudent.id}`, payload);
       if (res.data.success) {
         setIsEditModalOpen(false);
         setSuccessMsg('Student details updated.');
@@ -696,10 +818,10 @@ function Students() {
                     <button
                       type="button"
                       onClick={handleVerifyLeetCode}
-                      disabled={lcChecking || !formData.leetcodeUsername.trim()}
+                      disabled={lcChecking || !formData.leetcodeUsername.trim() || lcVerified === true}
                       className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 px-4 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors disabled:opacity-40"
                     >
-                      Verify Handle
+                      {lcVerified === true ? '✓ Verified' : (lcCheckedUsername && formData.leetcodeUsername !== lcCheckedUsername ? 'Verify Again' : 'Verify Handle')}
                     </button>
                   </div>
                   {lcVerified === false && (
@@ -757,14 +879,16 @@ function Students() {
                           <button
                             type="button"
                             onClick={() => handleVerifyPlatform(platform)}
-                            disabled={checkState.checking || !formData[inputName]?.trim()}
+                            disabled={checkState.checking || !formData[inputName]?.trim() || checkState.verified === true}
                             className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 px-4 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors disabled:opacity-40"
                           >
-                            Verify
+                            {checkState.verified === true ? '✓ Verified' : (checkState.username && formData[inputName] !== checkState.username ? 'Verify Again' : 'Verify Handle')}
                           </button>
                         </div>
                         {checkState.verified === false && (
-                          <p className="text-[10px] text-rose-500 font-semibold mt-1">Handle could not be verified on {platform === 'codechef' ? 'CodeChef' : platform === 'codeforces' ? 'Codeforces' : 'HackerRank'}.</p>
+                          <p className="text-[10px] text-rose-500 font-semibold mt-1">
+                            {platform === 'codeforces' ? 'Invalid Codeforces Handle' : `Handle could not be verified on ${platform === 'codechef' ? 'CodeChef' : 'HackerRank'}.`}
+                          </p>
                         )}
                         {checkState.verified === true && checkState.username && (
                           <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold mt-1.5">✓ {label.split(' ')[0]} profile verified{checkState.stats.rating ? ` • Rating ${checkState.stats.rating}` : ''}</p>
@@ -788,7 +912,13 @@ function Students() {
               <button
                 type="submit"
                 form={isAddModalOpen ? 'add-student-form' : 'edit-student-form'}
-                disabled={formLoading || lcVerified !== true}
+                disabled={
+                  formLoading ||
+                  lcVerified !== true ||
+                  (formData.codechefUsername?.trim() && platformChecks.codechef.verified !== true) ||
+                  (formData.codeforcesUsername?.trim() && platformChecks.codeforces.verified !== true) ||
+                  (formData.hackerrankUsername?.trim() && platformChecks.hackerrank.verified !== true)
+                }
                 className="rounded-xl bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white px-5 py-2.5 text-xs font-semibold shadow-md shadow-primary-500/10 flex items-center gap-1.5"
               >
                 {formLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : isAddModalOpen ? 'Add Student' : 'Save Student'}
@@ -895,7 +1025,7 @@ function Students() {
                       <p className="text-slate-400 italic">No duplicates detected.</p>
                     ) : (
                       <ul className="list-disc pl-4 space-y-1 text-slate-500 max-h-36 overflow-y-auto">
-                        {importResults.details.duplicates.map((d, idx) => <li key={idx}>{d}</li>)}
+                        {importResults.details.duplicates.map((d, idx) => <li key={`${d}_${idx}`}>{d}</li>)}
                       </ul>
                     )}
                   </div>
@@ -907,7 +1037,7 @@ function Students() {
                       <p className="text-slate-400 italic">All LeetCode usernames verified.</p>
                     ) : (
                       <ul className="list-disc pl-4 space-y-1 text-slate-500 max-h-36 overflow-y-auto">
-                        {importResults.details.invalidHandles.map((h, idx) => <li key={idx}>{h}</li>)}
+                        {importResults.details.invalidHandles.map((h, idx) => <li key={`${h}_${idx}`}>{h}</li>)}
                       </ul>
                     )}
                   </div>
