@@ -235,10 +235,6 @@ async function getUserLeetCodeStats(username) {
             submissions
           }
         }
-        userCalendar {
-          totalActiveDays
-          submissionCalendar
-        }
         badges {
           id
           name
@@ -258,11 +254,32 @@ async function getUserLeetCodeStats(username) {
     }
   `;
 
+  // Separate query for calendar — some accounts restrict this via privacy settings
+  const calendarQuery = `
+    query userCalendar($username: String!) {
+      matchedUser(username: $username) {
+        userCalendar {
+          totalActiveDays
+          submissionCalendar
+        }
+      }
+    }
+  `;
+
   try {
     const json = await queryLeetCode(statsQuery, { username: trimmedUsername });
     if (json.data && json.data.matchedUser) {
       const submitStats = json.data.matchedUser.submitStats?.acSubmissionNum || [];
-      const userCalendar = json.data.matchedUser.userCalendar || {};
+
+      // Fetch calendar separately — silently skip if permission denied (private profile)
+      let userCalendar = {};
+      try {
+        const calJson = await queryLeetCode(calendarQuery, { username: trimmedUsername });
+        userCalendar = calJson?.data?.matchedUser?.userCalendar || {};
+      } catch (calErr) {
+        console.warn(`[LeetCode Stats] Calendar fetch skipped for ${trimmedUsername}: ${calErr.message}`);
+      }
+
       const contestRanking = json.data.userContestRanking || {};
       const rawBadges = json.data.matchedUser.badges || [];
 

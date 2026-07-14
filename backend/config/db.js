@@ -117,7 +117,8 @@ async function initializeDatabase() {
     password: process.env.DB_PASSWORD === 'your_mysql_password_here' ? '' : process.env.DB_PASSWORD,
     multipleStatements: true,
     ssl: {
-      ca: sslCA
+      ca: sslCA,
+      rejectUnauthorized: false
     }
   };
 
