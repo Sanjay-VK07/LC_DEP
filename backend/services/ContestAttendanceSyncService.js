@@ -52,6 +52,16 @@ class ContestAttendanceSyncService {
       throw new Error(`Contest "${contestId}" not found in database.`);
     }
 
+    const slugToCheck = contestRows[0]?.slug || liveContest?.contestSlug || '';
+    const isMock = slugToCheck.toLowerCase().startsWith('test-') || 
+                   slugToCheck.toLowerCase().startsWith('mock-') || 
+                   slugToCheck.toLowerCase().startsWith('dummy-') || 
+                   slugToCheck.toLowerCase().startsWith('upcoming-live-');
+    if (isMock) {
+      console.log(`[Sync Worker] Skipping mock/test/dummy contest "${slugToCheck}"`);
+      return { success: true, message: 'Mock/test contest skipped' };
+    }
+
     let contest = contestRows[0];
     let realContestId;
     let platform;
@@ -230,7 +240,6 @@ class ContestAttendanceSyncService {
         const platLower = platform.toLowerCase();
         const handle = student[`${platLower}_username`];
 
-        let status = 'Absent';
         let rank = null;
         let score = 0.00;
         let penalty = 0;
@@ -312,24 +321,30 @@ class ContestAttendanceSyncService {
           recoveryReason = 'FinishTime';
         }
 
+        let dbStatus = 'Absent';
+        let legacyStatus = 'ABSENT';
+
         // Safety: Keep as Present if it was previously marked Present
         if (existingIsPresent && !isPresent) {
           isPresent = true;
-          status = 'PRESENT';
+          dbStatus = 'Present';
+          legacyStatus = 'PRESENT';
           rank = existingRank;
           score = existingScore;
           penalty = existingPenalty;
           solved = existingSolved;
           matchedCount++;
         } else if (isPresent) {
-          status = 'PRESENT';
+          dbStatus = 'Present';
+          legacyStatus = 'PRESENT';
           rank = resolvedRank;
           score = resolvedScore;
           penalty = resolvedPenalty;
           solved = resolvedSolved;
           matchedCount++;
         } else {
-          status = 'ABSENT';
+          dbStatus = 'Absent';
+          legacyStatus = 'ABSENT';
           absentCount++;
         }
 
@@ -355,7 +370,7 @@ class ContestAttendanceSyncService {
         }
 
         // Fetch rating before sync if Present
-        if (status === 'Present') {
+        if (dbStatus === 'Present') {
           const profileTable = platform === 'LeetCode' ? 'LeetCodeProfiles' :
                                platform === 'CodeChef' ? 'CodeChefProfiles' :
                                platform === 'Codeforces' ? 'CodeforcesProfiles' : null;
@@ -372,13 +387,13 @@ class ContestAttendanceSyncService {
         // -----------------------------------------------------------------
         if (existingIsPresent) {
           // Unknown must never overwrite Present
-          if (status === 'Unknown') {
+          if (dbStatus === 'Unknown') {
             skippedDowngradeCount++;
             continue; // Skip — preserve the existing Present status
           }
           // If existing record is Present (from a verified or higher-pass sync),
           // and the new status is Absent, skip this update.
-          if (status === 'Absent' && (existingIsVerified || existingHigherPass)) {
+          if (dbStatus === 'Absent' && (existingIsVerified || existingHigherPass)) {
             skippedDowngradeCount++;
             continue; // Skip — preserve the existing Present status
           }
@@ -404,9 +419,9 @@ class ContestAttendanceSyncService {
           liveContestId,
           student.id,
           handle || '',
-          status,
+          dbStatus,
           rank,
-          status === 'Present' ? solved : 0,
+          dbStatus === 'Present' ? solved : 0,
           score,
           penalty,
           ratingBefore,
@@ -415,9 +430,8 @@ class ContestAttendanceSyncService {
         ]);
 
         // B. Insert/Update in AttendanceRecords (legacy dashboard table) if status is not Unknown
-        if (status !== 'Unknown') {
-          const legacyStatus = status === 'PRESENT' ? 'PRESENT' : 'ABSENT';
-          const remarks = status === 'PRESENT' ? `Present via ${platform} Sync` : `Absent from ${platform} contest`;
+        if (dbStatus !== 'Unknown') {
+          const remarks = dbStatus === 'Present' ? `Present via ${platform} Sync` : `Absent from ${platform} contest`;
 
           // Check for MANUAL override — never overwrite manual attendance
           const hasManualOverride = overrideCheck.length > 0 && overrideCheck[0].attendance_source === 'MANUAL';
@@ -450,9 +464,9 @@ class ContestAttendanceSyncService {
             contest.contest_status || 'RATED',
             legacyStatus,
             remarks,
-            status === 'PRESENT' ? rank : null,
-            status === 'PRESENT' ? score : null,
-            status === 'PRESENT' ? solved : 0
+            legacyStatus === 'PRESENT' ? rank : null,
+            legacyStatus === 'PRESENT' ? score : null,
+            legacyStatus === 'PRESENT' ? solved : 0
           ]);
         }
       }

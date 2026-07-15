@@ -44,10 +44,12 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
       SELECT u.id, u.name, u.roll_no as register_number,
              u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username,
              u.department, u.section, u.academic_batch as academic_year,
+             u.academic_start_date, u.academic_end_date,
              ROUND(IFNULL(lp.current_rating, 0)) as lc_current_rating,
              ROUND(IFNULL(lp.highest_rating, 0)) as lc_best_rating,
              lp.global_ranking as lc_best_rank,
              IFNULL(lp.problems_solved, 0) as lc_solved,
+             lp.contest_history as lc_history,
              ROUND(IFNULL(cp.current_rating, 0)) as cc_current_rating,
              ROUND(IFNULL(cp.highest_rating, 0)) as cc_best_rating,
              cp.stars as cc_stars,
@@ -58,7 +60,22 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
              IFNULL(cfp.problems_solved, 0) as cf_solved,
              IFNULL(hrp.problems_solved, 0) as hr_solved,
              IFNULL(hrp.stars, 0) as hr_stars,
-             IFNULL((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id), 0) as contests_attended
+             -- Fix 7a: contests_attended from AttendanceRecords (canonical source, PRESENT, academic period, production only)
+             IFNULL((
+               SELECT COUNT(DISTINCT ar.contest_id)
+               FROM AttendanceRecords ar
+               JOIN Contests c ON ar.contest_id = c.contest_id
+               WHERE ar.user_id = u.id
+                 AND ar.attendance_status = 'PRESENT'
+                 AND c.contest_status = 'Rated'
+                 AND COALESCE(c.is_test, 0) = 0
+                 AND c.start_time >= u.academic_start_date
+                 AND c.start_time <= u.academic_end_date
+                 AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+                 AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%mock-%'
+                 AND c.slug NOT LIKE '%dummy-%' AND c.slug NOT LIKE '%regression-%'
+                 AND c.slug NOT LIKE '%internal-%'
+             ), 0) as contests_attended
       FROM Users u
       LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
       LEFT JOIN CodeChefProfiles cp ON u.id = cp.user_id
@@ -105,28 +122,48 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
     else if (sortBy === 'codeforces') topPerformers.sort((a, b) => b.codeforces_rating - a.codeforces_rating);
     else topPerformers.sort((a, b) => b.current_rating - a.current_rating);
 
-    // Top improvers
+    // Top improvers — Fix 7b: use actual first-contest rating as baseline instead of hardcoded 1500.
+    // This ensures students who started above/below 1500 get accurate improvement scores.
     const topImprovers = [...enriched]
-      .filter(r => Number(r.lc_current_rating) > 1500)
-      .map(r => ({ ...r, rating_gain: Number(r.lc_current_rating) - 1500 }))
+      .filter(r => Number(r.lc_current_rating) > 0)
+      .map(r => {
+        // Parse first attended contest rating from the stored LeetCodeProfiles.contest_history JSON
+        let firstRating = 1500;
+        try {
+          const hist = typeof r.lc_history === 'string' ? JSON.parse(r.lc_history) : (r.lc_history || []);
+          const attended = Array.isArray(hist) ? hist.filter(h => h.attended) : [];
+          if (attended.length > 0 && Number.isFinite(Number(attended[0].rating))) {
+            firstRating = Number(attended[0].rating);
+          }
+        } catch {}
+        return { ...r, rating_gain: Number(r.lc_current_rating) - firstRating };
+      })
+      .filter(r => r.rating_gain > 0)
       .sort((a, b) => b.rating_gain - a.rating_gain)
       .slice(0, 20);
 
-    // Most consistent — rewritten with JOINs instead of correlated subqueries
+    // Most consistent — rewritten with JOINs instead of correlated subqueries and corrected for duplicates
     const mostConsistent = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number,
               u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username,
               u.department,
-              COUNT(DISTINCT r.id) as total_contests,
-              COUNT(DISTINCT p.id) as present_count,
-              ROUND(IFNULL(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100, 0)) as attendance_percentage
+              COUNT(DISTINCT ar.contest_id) as total_contests,
+              COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN ar.contest_id END) as present_count,
+              ROUND(IFNULL(COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN ar.contest_id END) / 
+                    NULLIF(COUNT(DISTINCT ar.contest_id), 0) * 100, 0)) as attendance_percentage
        FROM Users u
-       LEFT JOIN Registrations r ON r.user_id = u.id
-         JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
-           AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW()
-       LEFT JOIN ParticipationLogs p ON p.user_id = u.id
-         JOIN Contests cp2 ON p.contest_id = cp2.contest_id AND cp2.contest_status = 'Rated'
-           AND cp2.start_time + INTERVAL IFNULL(cp2.duration,5400) SECOND <= NOW()
+       LEFT JOIN AttendanceRecords ar ON ar.user_id = u.id
+       LEFT JOIN Contests c ON ar.contest_id = c.contest_id 
+         AND c.contest_status = 'Rated'
+         AND c.start_time >= u.academic_start_date 
+         AND c.start_time <= u.academic_end_date
+         AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+         -- Exclude test/mock/dummy/retry/stale/crashed/regression/internal contests
+         AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+         AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+         AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+         AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+         AND c.slug NOT LIKE '%internal-%'
        WHERE u.status = 'active'${filterSql}
        GROUP BY u.id, u.name, u.roll_no, u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username, u.department
        HAVING total_contests >= 3

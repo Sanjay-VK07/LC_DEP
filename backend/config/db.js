@@ -135,7 +135,6 @@ async function initializeDatabase() {
     console.log(`[DB] Database '${dbName}' ensured.`);
     await tempConnection.end();
 
-    // 2. Setup the connection pool with the database selected
     pool = mysql.createPool({
       ...config,
       database: dbName,
@@ -143,6 +142,17 @@ async function initializeDatabase() {
       connectionLimit: 10,
       queueLimit: 0
     });
+
+    const originalEnd = pool.end;
+    pool.end = async function(...args) {
+      if (retryTimer) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+      }
+      isConnected = false;
+      isConnecting = false;
+      return originalEnd.apply(this, args);
+    };
 
     // 3. Test pool connection
     const testConn = await pool.getConnection();
@@ -393,10 +403,24 @@ async function query(sql, params) {
   }
 }
 
+async function closePool() {
+  if (retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
+  isConnected = false;
+  isConnecting = false;
+}
+
 module.exports = {
   initializeDatabase,
   query,
   getPool: () => pool,
+  closePool,
   getConnectionStatus: () => ({
     isConnected,
     isConnecting,

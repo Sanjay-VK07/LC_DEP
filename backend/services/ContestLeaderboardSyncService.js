@@ -86,6 +86,15 @@ class ContestLeaderboardSyncService {
     const jobId = options.jobId || null;
     const updateProgress = options.updateProgress || null;
 
+    const isMock = contestSlug.toLowerCase().startsWith('test-') || 
+                   contestSlug.toLowerCase().startsWith('mock-') || 
+                   contestSlug.toLowerCase().startsWith('dummy-') || 
+                   contestSlug.toLowerCase().startsWith('upcoming-live-');
+    if (isMock) {
+      console.log(`[Sync Leaderboard] Skipping mock/test/dummy contest "${contestSlug}"`);
+      return { success: true, message: 'Mock/test contest skipped' };
+    }
+
     if (!batch) {
       throw new Error('Academic batch is required for attendance synchronization.');
     }

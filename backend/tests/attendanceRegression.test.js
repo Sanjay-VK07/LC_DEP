@@ -617,8 +617,5 @@ test('Attendance Regression - Casing Normalization Utility checks', async () => 
 });
 
 after(async () => {
-  const pool = db.getPool();
-  if (pool) {
-    await pool.end();
-  }
+  await db.closePool();
 });

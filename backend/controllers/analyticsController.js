@@ -157,12 +157,22 @@ async function getDashboardStats(req, res) {
     // Fetch lowAttendanceStudents and studentsWithoutProfiles directly from DB as they are alert-specific
     const lowAttendanceStudents = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
-              COUNT(DISTINCT r.id) as total_contests,
-              COUNT(DISTINCT p.id) as present_count,
-              ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100) as attendance_percentage
+              COUNT(DISTINCT ar.contest_id) as total_contests,
+              COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN ar.contest_id END) as present_count,
+              ROUND(IFNULL(COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN ar.contest_id END) / 
+                    NULLIF(COUNT(DISTINCT ar.contest_id), 0) * 100, 0)) as attendance_percentage
        FROM Users u
-       LEFT JOIN Registrations r ON r.user_id = u.id
-       LEFT JOIN ParticipationLogs p ON p.user_id = u.id
+       LEFT JOIN AttendanceRecords ar ON ar.user_id = u.id
+       LEFT JOIN Contests c ON ar.contest_id = c.contest_id 
+         AND c.contest_status = 'Rated'
+         AND c.start_time >= u.academic_start_date 
+         AND c.start_time <= u.academic_end_date
+         -- Exclude test/mock/dummy/retry/stale/crashed/regression/internal contests
+         AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+         AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+         AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+         AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+         AND c.slug NOT LIKE '%internal-%'
        WHERE u.status = 'active'
        GROUP BY u.id, u.name, u.roll_no, u.department, u.section
        HAVING total_contests >= 3 AND attendance_percentage < 30

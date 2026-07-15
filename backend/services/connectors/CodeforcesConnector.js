@@ -29,6 +29,20 @@ const CodeforcesConnector = {
     if (!stats || !stats.success) {
       throw new Error(stats?.error || 'Failed to fetch Codeforces profile');
     }
+
+    // Fix 5: Cross-validate maxRating against contest history.
+    // The Codeforces API can occasionally return a stale or incorrect maxRating.
+    // We take the greater of the API-reported value and the history-derived max.
+    if (Array.isArray(stats.contestHistory) && stats.contestHistory.length > 0) {
+      const ratings = stats.contestHistory
+        .map(h => h.newRating)
+        .filter(r => r !== null && r !== undefined && Number.isFinite(Number(r)));
+      if (ratings.length > 0) {
+        const historyMax = Math.max(...ratings);
+        stats.maxRating = Math.max(historyMax, Number(stats.maxRating) || 0);
+      }
+    }
+
     return stats;
   },
 

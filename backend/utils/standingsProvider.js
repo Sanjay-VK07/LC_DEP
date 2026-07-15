@@ -7,6 +7,11 @@ const { normalizeUsername } = require('./usernameNormalizer');
 const standingsCache = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+// Memory Cache for upcoming contests (discovery scans)
+let upcomingContestsCache = null;
+let upcomingContestsCacheTime = 0;
+const UPCOMING_CONTESTS_TTL = 60 * 60 * 1000; // 1 hour
+
 /**
  * Fetch standings from CLIST API or fall back to platform-specific mock/local data.
  * @param {string} platform - leetcode, codechef, codeforces, hackerrank
@@ -114,6 +119,11 @@ async function fetchStandings(platform, contestSlug) {
  * @returns {Promise<Array<{contest_name: string, contest_slug: string, contest_date: string, contest_status: string, contest_url: string}>>}
  */
 async function fetchUpcomingContests() {
+  if (upcomingContestsCache && (Date.now() - upcomingContestsCacheTime < UPCOMING_CONTESTS_TTL)) {
+    console.log('[Standings Provider] [CACHE HIT] Using cached upcoming contests list.');
+    return upcomingContestsCache;
+  }
+
   const clistUser = process.env.CLIST_USERNAME;
   const clistKey = process.env.CLIST_API_KEY;
   let contests = null;
@@ -158,6 +168,10 @@ async function fetchUpcomingContests() {
     }
   }
 
+  if (contests && contests.length > 0) {
+    upcomingContestsCache = contests;
+    upcomingContestsCacheTime = Date.now();
+  }
   return contests || [];
 }
 

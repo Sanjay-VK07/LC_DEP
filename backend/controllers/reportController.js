@@ -56,8 +56,22 @@ async function getDashboardStats(req, res) {
     const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
     const [attendancePercentResult] = await db.query(
       `SELECT 
-         (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as total_regs,
-         (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()) as total_parts`
+         COUNT(*) as total_regs,
+         SUM(CASE WHEN ar.attendance_status = 'PRESENT' THEN 1 ELSE 0 END) as total_parts
+       FROM AttendanceRecords ar
+       JOIN Contests c ON ar.contest_id = c.contest_id
+       JOIN Users u ON ar.user_id = u.id
+       WHERE c.contest_status = 'Rated'${platformFilterStr}
+         AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+         AND u.status = 'active'
+         AND c.start_time >= u.academic_start_date 
+         AND c.start_time <= u.academic_end_date
+         -- Exclude test/mock/dummy/retry/stale/crashed/regression/internal contests
+         AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+         AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+         AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+         AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+         AND c.slug NOT LIKE '%internal-%'`
     );
     const totalRegs = attendancePercentResult ? attendancePercentResult.total_regs : 0;
     const totalParts = attendancePercentResult ? attendancePercentResult.total_parts : 0;
@@ -84,8 +98,41 @@ async function getDashboardStats(req, res) {
     const deptStats = await db.query(
       `SELECT u.department, 
               COUNT(DISTINCT u.id) as total_students,
-              IFNULL((SELECT COUNT(*) FROM Registrations r JOIN Users u2 ON r.user_id = u2.id JOIN Contests c ON r.contest_id = c.contest_id WHERE u2.department = u.department AND u2.status = 'active'${platformFilterStr}), 0) as total_records,
-              IFNULL((SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u3 ON p.user_id = u3.id JOIN Contests c ON p.contest_id = c.contest_id WHERE u3.department = u.department AND u3.status = 'active'${platformFilterStr}), 0) as present_count
+              IFNULL((
+                SELECT COUNT(*) 
+                FROM AttendanceRecords ar 
+                JOIN Users u2 ON ar.user_id = u2.id 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE u2.department = u.department 
+                  AND u2.status = 'active'
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u2.academic_start_date 
+                  AND c.start_time <= u2.academic_end_date
+                  AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ), 0) as total_records,
+              IFNULL((
+                SELECT COUNT(*) 
+                FROM AttendanceRecords ar 
+                JOIN Users u3 ON ar.user_id = u3.id 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE u3.department = u.department 
+                  AND u3.status = 'active'
+                  AND ar.attendance_status = 'PRESENT'
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u3.academic_start_date 
+                  AND c.start_time <= u3.academic_end_date
+                  AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ), 0) as present_count
        FROM Users u
        WHERE u.status = 'active'
        GROUP BY u.department`
@@ -100,16 +147,38 @@ async function getDashboardStats(req, res) {
     // Weekly Participation Trend (last 10 contests)
     let weeklyTrendSql = `
        SELECT c.title as name, c.start_time as date, c.platform,
-              (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as present_count,
-              (SELECT COUNT(*) FROM Users WHERE status = 'active') as total_students
+              (
+                SELECT COUNT(DISTINCT ar.user_id) 
+                FROM AttendanceRecords ar 
+                JOIN Users u ON ar.user_id = u.id
+                WHERE ar.contest_id = c.contest_id 
+                  AND ar.attendance_status = 'PRESENT'
+                  AND u.status = 'active'
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+              ) as present_count,
+              (
+                SELECT COUNT(*) 
+                FROM Users u
+                WHERE u.status = 'active'
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+              ) as total_students
        FROM Contests c
     `;
     const weeklyTrendParams = [];
+    let whereClause = ` WHERE c.contest_status = 'Rated'
+      AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+      AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+      AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+      AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+      AND c.slug NOT LIKE '%internal-%' `;
+
     if (filterPlatform !== 'all') {
-      weeklyTrendSql += ` WHERE c.platform = ? `;
+      whereClause += ` AND c.platform = ? `;
       weeklyTrendParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
     }
-    weeklyTrendSql += ` ORDER BY c.start_time DESC LIMIT 10 `;
+    weeklyTrendSql += whereClause + ` ORDER BY c.start_time DESC LIMIT 10 `;
 
     const weeklyTrend = await db.query(weeklyTrendSql, weeklyTrendParams);
     // Reverse to chronological order for charts
@@ -118,8 +187,37 @@ async function getDashboardStats(req, res) {
     // Top Active Students (highest current rating)
     const topStudents = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number, u.leetcode_username, u.codechef_username, u.department,
-              (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) as present_count,
-              (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) as total_contests,
+              (
+                SELECT COUNT(DISTINCT ar.contest_id) 
+                FROM AttendanceRecords ar 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE ar.user_id = u.id 
+                  AND ar.attendance_status = 'PRESENT'
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+                  -- Exclude test contests
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ) as present_count,
+              (
+                SELECT COUNT(DISTINCT ar.contest_id) 
+                FROM AttendanceRecords ar 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE ar.user_id = u.id 
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+                  -- Exclude test contests
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ) as total_contests,
               ROUND(IFNULL(lp.current_rating, 1500)) as current_rating
        FROM Users u
        LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
@@ -131,13 +229,84 @@ async function getDashboardStats(req, res) {
     // Students with Low Attendance (< 10%)
     const lowAttendanceStudents = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
-              (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) as total_contests,
-              (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) as present_count,
-              ROUND((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) / NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}), 0) * 100) as attendance_percentage
+              (
+                SELECT COUNT(DISTINCT ar.contest_id) 
+                FROM AttendanceRecords ar 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE ar.user_id = u.id 
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ) as total_contests,
+              (
+                SELECT COUNT(DISTINCT ar.contest_id) 
+                FROM AttendanceRecords ar 
+                JOIN Contests c ON ar.contest_id = c.contest_id 
+                WHERE ar.user_id = u.id 
+                  AND ar.attendance_status = 'PRESENT'
+                  AND c.contest_status = 'Rated'${platformFilterStr}
+                  AND c.start_time >= u.academic_start_date 
+                  AND c.start_time <= u.academic_end_date
+                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                  AND c.slug NOT LIKE '%internal-%'
+              ) as present_count,
+              ROUND(
+                (
+                  SELECT COUNT(DISTINCT ar.contest_id) 
+                  FROM AttendanceRecords ar 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE ar.user_id = u.id 
+                    AND ar.attendance_status = 'PRESENT'
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ) / NULLIF(
+                  (
+                    SELECT COUNT(DISTINCT ar.contest_id) 
+                    FROM AttendanceRecords ar 
+                    JOIN Contests c ON ar.contest_id = c.contest_id 
+                    WHERE ar.user_id = u.id 
+                      AND c.contest_status = 'Rated'${platformFilterStr}
+                      AND c.start_time >= u.academic_start_date 
+                      AND c.start_time <= u.academic_end_date
+                      AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                      AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                      AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                      AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                      AND c.slug NOT LIKE '%internal-%'
+                  ), 0
+                ) * 100
+              ) as attendance_percentage
        FROM Users u
        WHERE u.status = 'active' 
-         AND (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}) >= 3 
-         AND (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id${platformFilterStr}) / NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id${platformFilterStr}), 0) * 100 < 10
+         AND (
+           SELECT COUNT(DISTINCT ar.contest_id) 
+           FROM AttendanceRecords ar 
+           JOIN Contests c ON ar.contest_id = c.contest_id 
+           WHERE ar.user_id = u.id 
+             AND c.contest_status = 'Rated'${platformFilterStr}
+             AND c.start_time >= u.academic_start_date 
+             AND c.start_time <= u.academic_end_date
+             AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+             AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+             AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+             AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+             AND c.slug NOT LIKE '%internal-%'
+         ) >= 3 
+       HAVING attendance_percentage < 10
        ORDER BY attendance_percentage ASC
        LIMIT 10`
     );
@@ -196,42 +365,103 @@ async function getContestsReport(req, res) {
   try {
     let sql = '';
     let params = [];
+    const productionFilter = `
+      AND COALESCE(c.is_test, 0) = 0
+      AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+      AND c.slug NOT LIKE 'mock-%' AND c.slug NOT LIKE '%mock-%'
+      AND c.slug NOT LIKE 'dummy-%' AND c.slug NOT LIKE '%dummy-%'
+      AND c.slug NOT LIKE 'retry-%' AND c.slug NOT LIKE 'stale-%'
+      AND c.slug NOT LIKE 'crashed-%' AND c.slug NOT LIKE 'regression-%'
+      AND c.slug NOT LIKE 'internal-%' AND c.slug NOT LIKE 'debug-%'
+      AND c.slug NOT LIKE 'demo-%'`;
 
     if (batch) {
+      // Fix 9: Use AttendanceRecords as the canonical source instead of ParticipationLogs/Registrations.
+      // AR rows have attendance_status IN ('PRESENT','ABSENT') for all eligible students.
       sql = `
         SELECT c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration, c.platform,
                (SELECT COUNT(*) FROM Users WHERE status = 'active' AND academic_batch = ?) as total_students,
-               (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) as present_count,
-               (SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?) - 
-               (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) as absent_count,
+               (
+                 SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                 JOIN Users u ON ar.user_id = u.id
+                 WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'PRESENT'
+                   AND u.academic_batch = ? AND u.status = 'active'
+                   AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+               ) as present_count,
+               (
+                 SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                 JOIN Users u ON ar.user_id = u.id
+                 WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'ABSENT'
+                   AND u.academic_batch = ? AND u.status = 'active'
+                   AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+               ) as absent_count,
                0 as not_applicable_count,
                CASE
                  WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 0
                  WHEN c.contest_status = 'Unrated' THEN 0
                  ELSE IFNULL(ROUND(
-                   (SELECT COUNT(*) FROM ParticipationLogs p JOIN Users u ON p.user_id = u.id WHERE p.contest_id = c.contest_id AND u.academic_batch = ?) / 
-                   NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Users u ON r.user_id = u.id WHERE r.contest_id = c.contest_id AND u.academic_batch = ?), 0) * 100
+                   (
+                     SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                     JOIN Users u ON ar.user_id = u.id
+                     WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'PRESENT'
+                       AND u.academic_batch = ? AND u.status = 'active'
+                       AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+                   ) /
+                   NULLIF((
+                     SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                     JOIN Users u ON ar.user_id = u.id
+                     WHERE ar.contest_id = c.contest_id AND ar.attendance_status IN ('PRESENT','ABSENT')
+                       AND u.academic_batch = ? AND u.status = 'active'
+                       AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+                   ), 0) * 100
                  ), 100)
                END as attendance_percentage
         FROM Contests c
-        WHERE 1=1 ${platformFilterStr}
+        WHERE 1=1 ${platformFilterStr} ${productionFilter}
         ORDER BY c.start_time DESC
       `;
-      params = [batch, batch, batch, batch, batch, batch];
+      params = [batch, batch, batch, batch, batch];
     } else {
       sql = `
         SELECT c.title as name, c.slug as contest_slug, c.contest_status, c.start_time as date, c.duration, c.platform,
                (SELECT COUNT(*) FROM Users WHERE status = 'active') as total_students,
-               (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as present_count,
-               (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) - (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as absent_count,
+               (
+                 SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                 JOIN Users u ON ar.user_id = u.id
+                 WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'PRESENT'
+                   AND u.status = 'active'
+                   AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+               ) as present_count,
+               (
+                 SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                 JOIN Users u ON ar.user_id = u.id
+                 WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'ABSENT'
+                   AND u.status = 'active'
+                   AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+               ) as absent_count,
                0 as not_applicable_count,
                CASE
                  WHEN c.start_time <= NOW() AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND > NOW() THEN 0
                  WHEN c.contest_status = 'Unrated' THEN 0
-                 ELSE IFNULL(ROUND((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) / NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id), 0) * 100), 100)
+                 ELSE IFNULL(ROUND(
+                   (
+                     SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                     JOIN Users u ON ar.user_id = u.id
+                     WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'PRESENT'
+                       AND u.status = 'active'
+                       AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+                   ) /
+                   NULLIF((
+                     SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar
+                     JOIN Users u ON ar.user_id = u.id
+                     WHERE ar.contest_id = c.contest_id AND ar.attendance_status IN ('PRESENT','ABSENT')
+                       AND u.status = 'active'
+                       AND c.start_time >= u.academic_start_date AND c.start_time <= u.academic_end_date
+                   ), 0) * 100
+                 ), 100)
                END as attendance_percentage
         FROM Contests c
-        WHERE 1=1 ${platformFilterStr}
+        WHERE 1=1 ${platformFilterStr} ${productionFilter}
         ORDER BY c.start_time DESC
       `;
     }
@@ -347,19 +577,35 @@ async function getDepartmentReport(req, res) {
   const cacheKey = `report:department:${filterPlatform}`;
   try {
     const data = await cache.getOrCompute(cacheKey, async () => {
+      // Fix 8: Replaced the broken Cartesian JOIN (Registrations × ParticipationLogs) with a clean
+      // AttendanceRecords-based aggregation. AR is the canonical attendance source.
+      const productionSlugs = `
+        AND COALESCE(c.is_test, 0) = 0
+        AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+        AND c.slug NOT LIKE 'mock-%' AND c.slug NOT LIKE '%mock-%'
+        AND c.slug NOT LIKE 'dummy-%' AND c.slug NOT LIKE '%dummy-%'
+        AND c.slug NOT LIKE 'retry-%' AND c.slug NOT LIKE 'stale-%'
+        AND c.slug NOT LIKE 'crashed-%' AND c.slug NOT LIKE 'regression-%'
+        AND c.slug NOT LIKE 'internal-%' AND c.slug NOT LIKE 'debug-%'
+        AND c.slug NOT LIKE 'demo-%'`;
       return await db.query(
         `SELECT u.department,
                 COUNT(DISTINCT u.id) as total_students,
-                COUNT(DISTINCT r.id) as total_records,
-                COUNT(DISTINCT p.id) as present_count,
-                IFNULL(ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100), 100) as attendance_percentage
+                COUNT(DISTINCT CASE WHEN ar.attendance_status IN ('PRESENT','ABSENT') THEN CONCAT(ar.user_id,'-',ar.contest_id) END) as total_records,
+                COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN CONCAT(ar.user_id,'-',ar.contest_id) END) as present_count,
+                IFNULL(ROUND(
+                  COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN CONCAT(ar.user_id,'-',ar.contest_id) END) /
+                  NULLIF(COUNT(DISTINCT CASE WHEN ar.attendance_status IN ('PRESENT','ABSENT') THEN CONCAT(ar.user_id,'-',ar.contest_id) END), 0) * 100
+                ), 100) as attendance_percentage
          FROM Users u
-         LEFT JOIN Registrations r ON r.user_id = u.id
-           JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
-             AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cr.')}
-         LEFT JOIN ParticipationLogs p ON p.user_id = u.id
-           JOIN Contests cp ON p.contest_id = cp.contest_id AND cp.contest_status = 'Rated'
-             AND cp.start_time + INTERVAL IFNULL(cp.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cp.')}
+         LEFT JOIN AttendanceRecords ar ON ar.user_id = u.id
+         LEFT JOIN Contests c ON ar.contest_id = c.contest_id
+           AND c.contest_status = 'Rated'
+           AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+           AND c.start_time >= u.academic_start_date
+           AND c.start_time <= u.academic_end_date
+           ${platformFilterStr.replace(/AND c\./g, 'AND c.')}
+           ${productionSlugs}
          WHERE u.status = 'active'
          GROUP BY u.department
          ORDER BY attendance_percentage DESC`
@@ -381,19 +627,34 @@ async function getSectionReport(req, res) {
   const cacheKey = `report:section:${filterPlatform}`;
   try {
     const data = await cache.getOrCompute(cacheKey, async () => {
+      // Fix 8: Same fix as getDepartmentReport — eliminate Cartesian JOIN, use AttendanceRecords.
+      const productionSlugs = `
+        AND COALESCE(c.is_test, 0) = 0
+        AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+        AND c.slug NOT LIKE 'mock-%' AND c.slug NOT LIKE '%mock-%'
+        AND c.slug NOT LIKE 'dummy-%' AND c.slug NOT LIKE '%dummy-%'
+        AND c.slug NOT LIKE 'retry-%' AND c.slug NOT LIKE 'stale-%'
+        AND c.slug NOT LIKE 'crashed-%' AND c.slug NOT LIKE 'regression-%'
+        AND c.slug NOT LIKE 'internal-%' AND c.slug NOT LIKE 'debug-%'
+        AND c.slug NOT LIKE 'demo-%'`;
       return await db.query(
         `SELECT u.department, u.section,
                 COUNT(DISTINCT u.id) as total_students,
-                COUNT(DISTINCT r.id) as total_records,
-                COUNT(DISTINCT p.id) as present_count,
-                IFNULL(ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100), 100) as attendance_percentage
+                COUNT(DISTINCT CASE WHEN ar.attendance_status IN ('PRESENT','ABSENT') THEN CONCAT(ar.user_id,'-',ar.contest_id) END) as total_records,
+                COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN CONCAT(ar.user_id,'-',ar.contest_id) END) as present_count,
+                IFNULL(ROUND(
+                  COUNT(DISTINCT CASE WHEN ar.attendance_status = 'PRESENT' THEN CONCAT(ar.user_id,'-',ar.contest_id) END) /
+                  NULLIF(COUNT(DISTINCT CASE WHEN ar.attendance_status IN ('PRESENT','ABSENT') THEN CONCAT(ar.user_id,'-',ar.contest_id) END), 0) * 100
+                ), 100) as attendance_percentage
          FROM Users u
-         LEFT JOIN Registrations r ON r.user_id = u.id
-           JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
-             AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cr.')}
-         LEFT JOIN ParticipationLogs p ON p.user_id = u.id
-           JOIN Contests cp ON p.contest_id = cp.contest_id AND cp.contest_status = 'Rated'
-             AND cp.start_time + INTERVAL IFNULL(cp.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cp.')}
+         LEFT JOIN AttendanceRecords ar ON ar.user_id = u.id
+         LEFT JOIN Contests c ON ar.contest_id = c.contest_id
+           AND c.contest_status = 'Rated'
+           AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+           AND c.start_time >= u.academic_start_date
+           AND c.start_time <= u.academic_end_date
+           ${platformFilterStr.replace(/AND c\./g, 'AND c.')}
+           ${productionSlugs}
          WHERE u.status = 'active'
          GROUP BY u.department, u.section
          ORDER BY u.department ASC, u.section ASC`

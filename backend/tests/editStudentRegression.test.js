@@ -92,8 +92,5 @@ test('Codeforces Verification Persistence - Unverified student -> Edit & Verify 
 });
 
 after(async () => {
-  const pool = db.getPool();
-  if (pool) {
-    await pool.end();
-  }
+  await db.closePool();
 });

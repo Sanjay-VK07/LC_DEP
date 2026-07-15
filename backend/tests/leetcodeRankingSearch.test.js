@@ -201,9 +201,6 @@ test('LeetCode Ranking Sync - Matching, Backoff, and Database Upserts', async (t
     throw err;
   } finally {
     NetworkService.request = originalRequest;
-    const pool = db.getPool();
-    if (pool) {
-      await pool.end();
-    }
+    await db.closePool();
   }
 });

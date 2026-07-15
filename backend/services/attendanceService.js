@@ -838,7 +838,7 @@ function buildSummary(presentList, absentList) {
  * A corrupted student stays in the present/absent list; only their metrics are nullified.
  * Attendance counts NEVER change here.
  */
-function validateContestMetrics(presentList, absentList, contest, contestSlug, validationIssues) {
+function validateContestMetrics(presentList, absentList, contest, contestSlug, validationIssues, silent = false) {
   const seenUsernames  = new Set();
   const seenStudentIds = new Set();
   const rankMap        = new Map();
@@ -916,7 +916,10 @@ function validateContestMetrics(presentList, absentList, contest, contestSlug, v
     }
   }
 
-  console.log(`[AUDIT] Stage: Validation | Invalid Metrics=${invalidCount} Valid Metrics=${validCount}`);
+  if (!silent) {
+    console.log(`[AUDIT] Stage: Validation | Invalid Metrics=${invalidCount} Valid Metrics=${validCount}`);
+  }
+  return { invalidCount, validCount };
 }
 
 /**
@@ -1335,6 +1338,8 @@ async function backfillAttendance(userId = null, updateProgress = () => {}) {
 }
 
 async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
+  let totalInvalid = 0;
+  let totalValid = 0;
   let { batch, department, section } = filters;
   batch = normalizeBatchToShort(batch);
   const normalizedFilters = { batch, department, section };
@@ -1482,9 +1487,22 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
 
       let isPresent = false;
       let status = 'absent';
-      if (username && username.trim() && !isDuplicate && attRec && attRec.attendance_status === 'PRESENT') {
-        isPresent = true;
-        status = 'present';
+      if (username && username.trim() && !isDuplicate) {
+        const existsInContestParticipants = normUsername ? finishTimeMapForContest.has(normUsername) : false;
+        const finishTime = normUsername ? (finishTimeMapForContest.get(normUsername) ?? null) : null;
+
+        const recordObj = {
+          attendance_status: attRec?.attendance_status || null,
+          attendance_source: attRec?.attendance_source || null,
+          contest_rank: attRec?.rank || null,
+          score: attRec?.score || null,
+          finish_time: finishTime,
+          exists_in_contest_participants: existsInContestParticipants
+        };
+
+        const resolved = resolveCanonicalStatus(student, c, recordObj);
+        isPresent = resolved.status === 'PRESENT';
+        status = isPresent ? 'present' : 'absent';
       }
 
       if (isPresent) {
@@ -1527,7 +1545,11 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
 
     const validationIssues = [];
     let validationStatus = 'PASSED';
-    validateContestMetrics(presentListForContest, absentListForContest, c, c.contest_slug, validationIssues);
+    const counts = validateContestMetrics(presentListForContest, absentListForContest, c, c.contest_slug, validationIssues, true);
+    if (counts) {
+      totalInvalid += counts.invalidCount;
+      totalValid += counts.validCount;
+    }
     if (validationIssues.length > 0) {
       validationStatus = 'INVALID_METRICS';
     }
@@ -1654,6 +1676,7 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
     });
   }
 
+  console.log(`[AUDIT] Stage: Validation | Invalid Metrics=${totalInvalid} Valid Metrics=${totalValid}`);
   return resultContests;
 }
 

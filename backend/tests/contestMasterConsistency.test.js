@@ -779,8 +779,5 @@ test('Contest Records Type Mapping and Single Source of Truth', async () => {
 });
 
 after(async () => {
-  const pool = db.getPool();
-  if (pool) {
-    await pool.end();
-  }
+  await db.closePool();
 });

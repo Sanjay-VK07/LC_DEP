@@ -8,7 +8,46 @@ const NetworkService = require('./networkService');
  * @param {object} variables - Query variables
  * @returns {Promise<object>} - Parse JSON response
  */
-function queryLeetCode(query, variables = {}) {
+const CONCURRENCY_LIMIT = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10) || 2;
+const PAGE_DELAY = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 500;
+const MAX_RETRIES = parseInt(process.env.LEETCODE_MAX_RETRIES, 10) || 4;
+const BACKOFF_BASE = parseInt(process.env.LEETCODE_BACKOFF_BASE_MS, 10) || 2000;
+
+let activeRequestCount = 0;
+const pendingQueue = [];
+
+function throttleRequest(fn) {
+  return new Promise((resolve, reject) => {
+    pendingQueue.push({ fn, resolve, reject });
+    processPendingQueue();
+  });
+}
+
+function processPendingQueue() {
+  if (activeRequestCount >= CONCURRENCY_LIMIT || pendingQueue.length === 0) {
+    return;
+  }
+  const { fn, resolve, reject } = pendingQueue.shift();
+  activeRequestCount++;
+  
+  fn().then(async (res) => {
+    resolve(res);
+    activeRequestCount--;
+    if (PAGE_DELAY > 0) {
+      await new Promise(r => setTimeout(r, PAGE_DELAY));
+    }
+    processPendingQueue();
+  }).catch(async (err) => {
+    reject(err);
+    activeRequestCount--;
+    if (PAGE_DELAY > 0) {
+      await new Promise(r => setTimeout(r, PAGE_DELAY));
+    }
+    processPendingQueue();
+  });
+}
+
+function queryLeetCodeRaw(query, variables = {}) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ query, variables });
     
@@ -35,15 +74,22 @@ function queryLeetCode(query, variables = {}) {
           try {
             const json = JSON.parse(data);
             if (json.errors && json.errors.length > 0) {
-              reject(new Error(json.errors[0].message));
+              const errMsg = json.errors[0].message;
+              const err = new Error(errMsg);
+              err.status = res.statusCode;
+              reject(err);
             } else {
               resolve(json);
             }
           } catch (e) {
-            reject(new Error(`Failed to parse LeetCode response: ${e.message}`));
+            const err = new Error(`Failed to parse LeetCode response: ${e.message}`);
+            err.status = res.statusCode;
+            reject(err);
           }
         } else {
-          reject(new Error(`LeetCode API returned status code ${res.statusCode}`));
+          const err = new Error(`LeetCode API returned status code ${res.statusCode}`);
+          err.status = res.statusCode;
+          reject(err);
         }
       });
     });
@@ -60,6 +106,30 @@ function queryLeetCode(query, variables = {}) {
     req.write(postData);
     req.end();
   });
+}
+
+async function queryLeetCode(query, variables = {}, attempt = 1) {
+  try {
+    return await throttleRequest(() => queryLeetCodeRaw(query, variables));
+  } catch (err) {
+    const isRateLimit = err.status === 429 ||
+                        (err.message && (
+                          err.message.includes('429') ||
+                          err.message.toLowerCase().includes('rate limit') ||
+                          err.message.toLowerCase().includes('too many requests')
+                        ));
+
+    if (isRateLimit && attempt <= MAX_RETRIES + 1) {
+      const baseDelay = BACKOFF_BASE * Math.pow(2, attempt - 1);
+      const jitter = Math.floor(Math.random() * 1000) + 500;
+      const delay = baseDelay + jitter;
+
+      console.warn(`[LeetCode API] Rate limit hit (Attempt ${attempt}/${MAX_RETRIES + 1}). Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return queryLeetCode(query, variables, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 /**

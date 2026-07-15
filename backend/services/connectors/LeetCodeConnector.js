@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { verifyLeetCodeUsername, getUserLeetCodeStats, getUserContestRankingAndHistory } = require('../../utils/leetcode');
 const { normalizeLeetCodeProfile } = require('../normalizationService');
 
@@ -23,25 +25,68 @@ const LeetCodeConnector = {
    * Fetch full profile.
    */
   async fetchProfile(username) {
-    const stats = await getUserLeetCodeStats(username);
-    if (!stats || !stats.success) {
-      throw new Error(stats?.error || 'Failed to fetch LeetCode profile');
-    }
-    
-    // Fetch and merge LeetCode contest history
-    try {
-      const historyData = await getUserContestRankingAndHistory(username);
-      if (historyData && historyData.userContestRankingHistory) {
-        stats.contestHistory = historyData.userContestRankingHistory;
-      } else {
-        stats.contestHistory = [];
-      }
-    } catch (err) {
-      console.warn(`[LeetCodeConnector] Failed to fetch contest history for ${username}:`, err.message);
-      stats.contestHistory = [];
+    const cacheDir = path.resolve(__dirname, '../../cache/leetcode');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cacheFile = path.join(cacheDir, `profile_${username}.json`);
+    const TTL = 6 * 60 * 60 * 1000; // 6 hours TTL
+
+    // Check if fresh cache exists
+    if (fs.existsSync(cacheFile)) {
+      try {
+        const stats = fs.statSync(cacheFile);
+        if (Date.now() - stats.mtimeMs < TTL) {
+          console.log(`[LeetCodeConnector] [Cache Hit] Returning fresh profile cache for ${username}.`);
+          return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        }
+      } catch (e) {}
     }
 
-    return stats;
+    try {
+      const stats = await getUserLeetCodeStats(username);
+      if (!stats || !stats.success) {
+        throw new Error(stats?.error || 'Failed to fetch LeetCode profile');
+      }
+      
+      // Fetch and merge LeetCode contest history
+      try {
+        const historyData = await getUserContestRankingAndHistory(username);
+        if (historyData && historyData.userContestRankingHistory) {
+          stats.contestHistory = historyData.userContestRankingHistory;
+          // Fix 4: maxRating must be the historical peak, not the current contestRating.
+          // This ensures Best Rating stays correct for users whose rating has dropped.
+          const ratings = stats.contestHistory
+            .map(h => h.rating)
+            .filter(r => r !== null && r !== undefined && Number.isFinite(Number(r)));
+          if (ratings.length > 0) {
+            stats.maxRating = Math.max(...ratings);
+          } else {
+            // No history entries with valid ratings — fall back to current rating
+            stats.maxRating = stats.contestRating ?? stats.rating ?? 1500;
+          }
+        } else {
+          stats.contestHistory = [];
+          stats.maxRating = stats.contestRating ?? stats.rating ?? 1500;
+        }
+      } catch (err) {
+        console.warn(`[LeetCodeConnector] Failed to fetch contest history for ${username}:`, err.message);
+        stats.contestHistory = [];
+        stats.maxRating = stats.contestRating ?? stats.rating ?? 1500;
+      }
+
+      // Save to cache
+      fs.writeFileSync(cacheFile, JSON.stringify(stats, null, 2));
+      console.log(`[LeetCodeConnector] [GraphQL] Fetched and cached profile for ${username}.`);
+      return stats;
+    } catch (err) {
+      console.warn(`[LeetCodeConnector] Failed to fetch profile for ${username}: ${err.message}. Attempting stale cache fallback...`);
+      if (fs.existsSync(cacheFile)) {
+        try {
+          console.log(`[LeetCodeConnector] [Fallback Success] Returning stale profile cache for ${username}.`);
+          return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        } catch (e) {}
+      }
+      throw err;
+    }
   },
 
   /**

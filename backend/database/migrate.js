@@ -1770,6 +1770,47 @@ async function run() {
       console.log('[Migration] Migration "add_rating_columns_to_attendance" completed successfully.');
     }
 
+    // ==========================================
+    // MIGRATION 20: add_foreign_key_constraints
+    // ==========================================
+    const rows20 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'add_foreign_key_constraints'"
+    );
+
+    if (rows20.length > 0) {
+      console.log('[Migration] Migration "add_foreign_key_constraints" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "add_foreign_key_constraints"...');
+
+      // 1. Delete orphan ContestParticipants
+      console.log('[Migration] Cleaning up orphan ContestParticipants...');
+      await db.query(`
+        DELETE cp FROM ContestParticipants cp
+        LEFT JOIN Contests c ON cp.contest_slug = c.slug
+        WHERE c.slug IS NULL
+      `);
+
+      // 2. Add foreign key to ContestParticipants
+      console.log('[Migration] Adding foreign key constraint to ContestParticipants...');
+      try {
+        await db.query(`
+          ALTER TABLE ContestParticipants 
+          ADD CONSTRAINT fk_contest_participants_contest 
+          FOREIGN KEY (contest_slug) REFERENCES Contests(slug) ON DELETE CASCADE
+        `);
+      } catch (err) {
+        console.warn('[Migration] Warning adding CP foreign key:', err.message);
+      }
+
+      // Step 5: Record Migration
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('add_foreign_key_constraints')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "add_foreign_key_constraints" completed successfully.');
+    }
+
     process.exit(0);
   } catch (err) {
     console.error('[Migration] Migration failed:', err.message);

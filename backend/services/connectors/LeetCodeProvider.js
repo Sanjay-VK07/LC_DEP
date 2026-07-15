@@ -254,9 +254,76 @@ class LeetCodeProvider extends ContestProvider {
   }
 
   // --- Provider interfaces implementations ---
-
+  
   async detectContest() {
-    return await this.resolver.resolve('contestDetection', this._getSources(), 'fetchContests');
+    const cacheFile = path.join(this.cacheDir, 'contests_cache.json');
+    const TTL = 60 * 60 * 1000; // 1 hour TTL
+    
+    // Check if fresh cache exists
+    if (fs.existsSync(cacheFile)) {
+      try {
+        const stats = fs.statSync(cacheFile);
+        if (Date.now() - stats.mtimeMs < TTL) {
+          const data = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          console.log('[LeetCodeProvider] [Cache Hit] Returning fresh contests cache.');
+          return data.map(c => ({
+            ...c,
+            startTime: new Date(c.startTime),
+            endTime: new Date(c.endTime)
+          }));
+        }
+      } catch (e) {
+        console.warn('[LeetCodeProvider] Failed to parse contests cache:', e.message);
+      }
+    }
+
+    // Fetch from GraphQL
+    try {
+      const list = await leetcodeUtils.getRecentContests();
+      const mapped = list.map(c => {
+        const startTimeMs = c.startTime * 1000;
+        const durationMs = c.duration * 1000;
+        const startTime = new Date(startTimeMs);
+        const endTime = new Date(startTimeMs + durationMs);
+
+        let status = 'Upcoming';
+        const now = Date.now();
+        if (now >= startTimeMs && now <= startTimeMs + durationMs) {
+          status = 'Live';
+        } else if (now > startTimeMs + durationMs) {
+          status = 'Completed';
+        }
+
+        return {
+          contestSlug: c.titleSlug,
+          contestName: c.title,
+          contestType: c.title.toLowerCase().includes('biweekly') ? 'Biweekly' : 'Weekly',
+          startTime,
+          endTime,
+          platform: 'LeetCode',
+          status
+        };
+      });
+
+      // Save to cache
+      fs.writeFileSync(cacheFile, JSON.stringify(mapped, null, 2));
+      console.log('[LeetCodeProvider] [GraphQL] Fetched and cached recent contests.');
+      return mapped;
+    } catch (err) {
+      console.warn(`[LeetCodeProvider] Failed to fetch contests from GraphQL: ${err.message}. Attempting stale cache fallback...`);
+      if (fs.existsSync(cacheFile)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          console.log('[LeetCodeProvider] [Fallback Success] Returning stale contests cache.');
+          return data.map(c => ({
+            ...c,
+            startTime: new Date(c.startTime),
+            endTime: new Date(c.endTime)
+          }));
+        } catch (e) {}
+      }
+      throw err;
+    }
   }
 
   async getCurrentContest() {
@@ -278,12 +345,74 @@ class LeetCodeProvider extends ContestProvider {
   }
 
   async getStudentRating(username) {
-    const res = await this.resolver.resolve('ratingHistory', this._getSources(), 'fetchRatings', [username]);
-    return res.userContestRankingHistory || [];
+    const cacheFile = path.join(this.cacheDir, `rating_${username}.json`);
+    const TTL = 12 * 60 * 60 * 1000; // 12 hours TTL
+
+    // Check if fresh cache exists
+    if (fs.existsSync(cacheFile)) {
+      try {
+        const stats = fs.statSync(cacheFile);
+        if (Date.now() - stats.mtimeMs < TTL) {
+          const cachedData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          console.log(`[LeetCodeProvider] [Cache Hit] Returning fresh ratings cache for ${username}.`);
+          return cachedData.userContestRankingHistory || [];
+        }
+      } catch (e) {}
+    }
+
+    // Fetch from GraphQL
+    try {
+      const res = await leetcodeUtils.getUserContestRankingAndHistory(username);
+      if (res) {
+        fs.writeFileSync(cacheFile, JSON.stringify(res, null, 2));
+        console.log(`[LeetCodeProvider] [GraphQL] Fetched and cached ratings for ${username}.`);
+        return res.userContestRankingHistory || [];
+      }
+      throw new Error(`Empty ratings response for ${username}`);
+    } catch (err) {
+      console.warn(`[LeetCodeProvider] Failed to fetch ratings for ${username}: ${err.message}. Attempting stale cache fallback...`);
+      if (fs.existsSync(cacheFile)) {
+        try {
+          const cachedData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          console.log(`[LeetCodeProvider] [Fallback Success] Returning stale ratings cache for ${username}.`);
+          return cachedData.userContestRankingHistory || [];
+        } catch (e) {}
+      }
+      throw err;
+    }
   }
 
   async getStudentContestHistory(username) {
-    return await this.resolver.resolve('contestHistory', this._getSources(), 'fetchContestHistory', [username]);
+    const cacheFile = path.join(this.cacheDir, `history_${username}.json`);
+    const TTL = 12 * 60 * 60 * 1000; // 12 hours TTL
+
+    // Check if fresh cache exists
+    if (fs.existsSync(cacheFile)) {
+      try {
+        const stats = fs.statSync(cacheFile);
+        if (Date.now() - stats.mtimeMs < TTL) {
+          console.log(`[LeetCodeProvider] [Cache Hit] Returning fresh contest history cache for ${username}.`);
+          return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        }
+      } catch (e) {}
+    }
+
+    // Fetch from GraphQL
+    try {
+      const history = await leetcodeUtils.getUserContestHistory(username);
+      fs.writeFileSync(cacheFile, JSON.stringify(history, null, 2));
+      console.log(`[LeetCodeProvider] [GraphQL] Fetched and cached history for ${username}.`);
+      return history;
+    } catch (err) {
+      console.warn(`[LeetCodeProvider] Failed to fetch contest history for ${username}: ${err.message}. Attempting stale cache fallback...`);
+      if (fs.existsSync(cacheFile)) {
+        try {
+          console.log(`[LeetCodeProvider] [Fallback Success] Returning stale contest history cache for ${username}.`);
+          return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        } catch (e) {}
+      }
+      throw err;
+    }
   }
 
   clearContestCache(contestSlug) {

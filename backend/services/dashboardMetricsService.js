@@ -39,14 +39,28 @@ async function getDashboardStats() {
     // 2. Contest breakdown
     const contestStats = await contestAnalytics.getContestSummaryStats();
 
-    // 3. Overall attendance across all rated ended contests using AttendanceRecords
+    // 3. Overall attendance across all rated, ended, production contests within academic dates
+    //    Using COUNT(DISTINCT user_id+contest_id) to avoid any double-counting.
     const [attendanceRow] = await db.query(
       `SELECT 
-         COUNT(*) as total_regs,
+         COUNT(DISTINCT CONCAT(ar.user_id, '-', ar.contest_id)) as total_regs,
          SUM(CASE WHEN ar.attendance_status = 'PRESENT' THEN 1 ELSE 0 END) as total_parts
        FROM AttendanceRecords ar
        JOIN Contests c ON ar.contest_id = c.contest_id
-       WHERE c.contest_status = 'Rated'`
+       JOIN Users u ON ar.user_id = u.id
+       WHERE c.contest_status = 'Rated'
+         AND u.status = 'active'
+         AND c.start_time >= u.academic_start_date
+         AND c.start_time <= u.academic_end_date
+         AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+         AND COALESCE(c.is_test, 0) = 0
+         AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+         AND c.slug NOT LIKE 'mock-%' AND c.slug NOT LIKE '%mock-%'
+         AND c.slug NOT LIKE 'dummy-%' AND c.slug NOT LIKE '%dummy-%'
+         AND c.slug NOT LIKE 'retry-%' AND c.slug NOT LIKE 'stale-%'
+         AND c.slug NOT LIKE 'crashed-%' AND c.slug NOT LIKE 'regression-%'
+         AND c.slug NOT LIKE 'internal-%' AND c.slug NOT LIKE 'debug-%'
+         AND c.slug NOT LIKE 'demo-%'`
     );
     const totalRegs = Number(attendanceRow?.total_regs || 0);
     const totalParts = Number(attendanceRow?.total_parts || 0);

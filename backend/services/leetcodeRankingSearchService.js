@@ -226,10 +226,12 @@ const LeetCodeRankingSearchService = {
       // 3. Ensure Contest exists in Contests table
       let contestId;
       let contestDate = new Date();
-      const contestCheck = await db.query("SELECT contest_id, start_time FROM Contests WHERE slug = ?", [slug]);
+      let contestTitle = '';
+      const contestCheck = await db.query("SELECT contest_id, title, start_time FROM Contests WHERE slug = ?", [slug]);
       if (contestCheck.length > 0) {
         contestId = contestCheck[0].contest_id;
         contestDate = new Date(contestCheck[0].start_time);
+        contestTitle = contestCheck[0].title || '';
         
         const totalProblems = page1Data?.questions?.length || 4;
         await db.query("UPDATE Contests SET total_problems = ? WHERE contest_id = ?", [totalProblems, contestId]);
@@ -237,7 +239,7 @@ const LeetCodeRankingSearchService = {
         const contestType = slug.includes('biweekly') ? 'Biweekly' : 'Weekly';
         const match = slug.match(/contest-(\d+)/);
         const contestNumber = match ? parseInt(match[1], 10) : 0;
-        const contestTitle = contestType + ' Contest ' + contestNumber;
+        contestTitle = contestType + ' Contest ' + contestNumber;
         const totalProblems = page1Data?.questions?.length || 4;
         
         const insertRes = await db.query(
@@ -450,13 +452,16 @@ const LeetCodeRankingSearchService = {
             }
 
             await connection.query(`
-              INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, remarks)
-              VALUES (?, ?, ?, 'AUTO', ?)
+              INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, contest_status, attendance_status, attendance_source, \`rank\`, score, problems_solved, remarks)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
                 attendance_status = VALUES(attendance_status),
                 attendance_source = 'AUTO',
+                \`rank\` = VALUES(\`rank\`),
+                score = VALUES(score),
+                problems_solved = VALUES(problems_solved),
                 remarks = VALUES(remarks)
-            `, [student.id, contestId, legacyStatus, finishTime ? JSON.stringify({ finish_time: finishTime }) : null]);
+            `, [student.id, contestId, contestTitle, slug, contestDate, 'RATED', legacyStatus, safeRank, safeScore, safeSolved, finishTime ? JSON.stringify({ finish_time: finishTime }) : null]);
           }
 
           await connection.commit();

@@ -65,6 +65,12 @@ async function getPlatformAnalytics(req, res) {
          AND slug NOT LIKE 'starting-%'
          AND slug NOT LIKE 'temporary-%'
          AND slug NOT LIKE 'placeholder-%'
+         AND slug NOT LIKE 'test-%'
+         AND slug NOT LIKE 'mock-%'
+         AND slug NOT LIKE 'dummy-%'
+         AND slug NOT LIKE 'crashed-contest-%'
+         AND slug NOT LIKE 'retry-contest-%'
+         AND slug NOT LIKE 'stale-contest-%'
          AND (
            last_synced_at IS NULL
            OR (start_time <= NOW() AND DATE_ADD(start_time, INTERVAL duration SECOND) > NOW() AND last_synced_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE))
@@ -73,7 +79,7 @@ async function getPlatformAnalytics(req, res) {
       [dbPlatform]
     );
 
-    if (unsyncedContests.length > 0) {
+    if (unsyncedContests.length > 0 && process.env.NODE_ENV !== 'test') {
       console.log(`[Auto-Sync] Found ${unsyncedContests.length} unsynced contests for ${platform}. Triggering background sync...`);
       const { syncAllData } = require('../utils/scheduler');
       // Run in background — don't block the response

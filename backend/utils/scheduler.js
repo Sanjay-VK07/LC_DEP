@@ -35,11 +35,19 @@ function formatDate(dateInput) {
   return `${year}-${month}-${day}`;
 }
 
+let isSyncing = false;
+
 /**
  * Perform synchronization of contest data for all active students.
  * Uses EntrantHub as the primary source of contest metadata.
  */
 async function syncAllData() {
+  if (isSyncing) {
+    console.warn('[Sync] Overlapping synchronization job blocked. syncAllData is already running.');
+    return { success: false, message: 'Synchronization already in progress' };
+  }
+  isSyncing = true;
+
   const startedAt = new Date();
   console.log(`[Sync] Starting EnthraHub contest synchronization at ${startedAt.toISOString()}...`);
 
@@ -305,6 +313,8 @@ async function syncAllData() {
       );
     }
     throw error;
+  } finally {
+    isSyncing = false;
   }
 }
 
@@ -484,6 +494,14 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
     const { getAdapter } = require('../services/adapters/AdapterFactory');
     const adapter = getAdapter(plat);
     profileResult = await platformHealthSvc.trackCall(plat, () => adapter.getProfile(username));
+
+    // Fix 2b: Propagate "user not found" from adapters that return {verified: false}
+    // instead of throwing, so it is correctly classified as invalid_username (not parsing_failure).
+    if (profileResult && profileResult.verified === false) {
+      const reason = profileResult.message || profileResult.error || `${username} not found on ${plat}`;
+      throw new Error(reason);
+    }
+
     rawData = profileResult.rawData;
     
     // Validate Sync Data structure
@@ -494,10 +512,12 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
   } catch (err) {
     syncError = err;
     const msg = err.message || String(err);
-    // Categorize failure
-    if (msg.includes('not found') || msg.includes('404') || msg.includes('does not exist') || msg.includes('invalid username')) {
+    // Categorize failure — order matters: check most specific first.
+    if (msg.includes('not found') || msg.includes('404') || msg.includes('does not exist') || msg.includes('invalid username') || msg.includes('No such user') || msg.includes('User does not exist')) {
       failureCategory = 'invalid_username';
-    } else if (msg.includes('429') || msg.includes('rate limit') || msg.includes('Too Many Requests')) {
+    } else if (msg.includes('429') || msg.includes('rate limit') || msg.includes('Too Many Requests')
+            || msg.includes('403') || msg.toLowerCase().includes('cloudflare') || msg.includes('Forbidden')) {
+      // Fix 2a: Cloudflare blocks (403/Forbidden) treated as rate_limiting to trigger backoff
       failureCategory = 'rate_limiting';
     } else if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('timed out')) {
       failureCategory = 'timeout';
