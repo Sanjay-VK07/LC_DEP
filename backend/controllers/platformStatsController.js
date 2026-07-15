@@ -97,13 +97,14 @@ async function getPlatformStats(req, res) {
       let lcWeekly = 0, lcBiweekly = 0, lcWeeklyMonth = 0, lcBiweeklyMonth = 0;
 
       lcHistory.forEach(entry => {
-        if (!entry.attended && entry.attended !== undefined) return;
+        // attended field: if explicitly false, skip. If true or missing, count it.
+        if (entry.attended === false) return;
         const slug = (entry.contest?.titleSlug || entry.contestSlug || '').toLowerCase();
         const ts   = entry.contest?.startTime ? new Date(entry.contest.startTime * 1000)
                    : entry.contestDate        ? new Date(entry.contestDate) : null;
         if (!ts || isNaN(ts)) return;
-        const isWeekly    = slug.includes('weekly') && !slug.includes('biweekly');
-        const isBiweekly  = slug.includes('biweekly');
+        const isWeekly    = slug.includes('weekly-contest') || (slug.includes('weekly') && !slug.includes('biweekly'));
+        const isBiweekly  = slug.includes('biweekly-contest') || slug.includes('biweekly');
         const inThisWeek  = ts >= wStart && ts <= wEnd;
         const inThisMonth = ts >= mStart && ts <= mEnd;
         if (isWeekly  && inThisWeek)  lcWeekly++;

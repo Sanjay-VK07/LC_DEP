@@ -215,8 +215,7 @@ async function syncAllData() {
           );
         }
 
-        // Diagnostics output as requested
-        console.log(`[Username Normalization Diagnostic] Original Username: "${rawUsername}" | Normalized Username: "${usernameNorm}" | Match Found: ${attended}`);
+        // Diagnostics output — removed from hot path to avoid log spam
 
         // Check if we already have a record in AttendanceRecords
         const existingRecord = await db.query(
@@ -653,17 +652,6 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
   // Write profile database record
   if (plat === 'leetcode') {
     console.log('[Sync Diagnostics] Saving LeetCodeProfile to DB. User ID:', userId);
-    console.log('[Sync Diagnostics] Values before save:', {
-      userId,
-      rating: profile.rating || 1500,
-      maxRating: profile.maxRating || profile.rating || 1500,
-      rank: profile.rank || null,
-      problemsSolved: profile.problemsSolved || 0,
-      easySolved: profile.metadata?.easySolved || 0,
-      mediumSolved: profile.metadata?.mediumSolved || 0,
-      hardSolved: profile.metadata?.hardSolved || 0,
-      acceptanceRate: rawData.acceptanceRate || null
-    });
 
     await db.query(`
       INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved, contest_history, active_days, submission_calendar, badges, language_stats, topic_stats, recent_submissions, easy_solved, medium_solved, hard_solved, acceptance_rate, last_synced)
@@ -705,10 +693,10 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
     ]);
 
     const afterSave = await db.query(
-      "SELECT user_id, problems_solved, easy_solved, medium_solved, hard_solved FROM LeetCodeProfiles WHERE user_id = ?",
+      "SELECT user_id, problems_solved FROM LeetCodeProfiles WHERE user_id = ?",
       [userId]
     );
-    console.log('[Sync Diagnostics] Values after save:', afterSave[0]);
+    console.log('[Sync] LeetCode profile saved for user', userId, '| problems_solved:', afterSave[0]?.problems_solved);
   } else if (plat === 'codechef') {
     const ratingHistory = rawData.ratingHistory || [];
     console.log('[AUDIT][DB SAVE] currentRating =', profile.rating, 'highestRating =', profile.maxRating, 'lowestRating =', profile.lowestRating, 'ratingHistory.length =', ratingHistory.length);

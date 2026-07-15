@@ -112,30 +112,24 @@ async function getLeaderboards({ department, section, academicBatch, sortBy = 'r
       .sort((a, b) => b.rating_gain - a.rating_gain)
       .slice(0, 20);
 
-    // Most consistent (highest attendance)
+    // Most consistent — rewritten with JOINs instead of correlated subqueries
     const mostConsistent = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number,
               u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username,
               u.department,
-              (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id
-               WHERE r.user_id = u.id AND c.contest_status = 'Rated'
-                 AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW()) as total_contests,
-              (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id
-               WHERE p.user_id = u.id AND c.contest_status = 'Rated'
-                 AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW()) as present_count,
-              ROUND(IFNULL(
-                (SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id
-                 WHERE p.user_id = u.id AND c.contest_status = 'Rated'
-                   AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW()) /
-                NULLIF((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id
-                 WHERE r.user_id = u.id AND c.contest_status = 'Rated'
-                   AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW()), 0) * 100, 0)
-              ) as attendance_percentage
+              COUNT(DISTINCT r.id) as total_contests,
+              COUNT(DISTINCT p.id) as present_count,
+              ROUND(IFNULL(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100, 0)) as attendance_percentage
        FROM Users u
+       LEFT JOIN Registrations r ON r.user_id = u.id
+         JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
+           AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW()
+       LEFT JOIN ParticipationLogs p ON p.user_id = u.id
+         JOIN Contests cp2 ON p.contest_id = cp2.contest_id AND cp2.contest_status = 'Rated'
+           AND cp2.start_time + INTERVAL IFNULL(cp2.duration,5400) SECOND <= NOW()
        WHERE u.status = 'active'${filterSql}
-         AND (SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id
-              WHERE r.user_id = u.id AND c.contest_status = 'Rated'
-                AND c.start_time + INTERVAL IFNULL(c.duration,5400) SECOND <= NOW()) >= 3
+       GROUP BY u.id, u.name, u.roll_no, u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username, u.department
+       HAVING total_contests >= 3
        ORDER BY attendance_percentage DESC, present_count DESC
        LIMIT 20`,
       params
@@ -259,8 +253,7 @@ async function getUnifiedStudentProfile(userId) {
     const ccStatus = row.cc_status || (ccCurrentRating !== null ? 'RATED' : 'UNRATED');
     const ccIsRated = ccCurrentRating !== null;
 
-    console.log('[AUDIT][DB READ] currentRating =', ccCurrentRating, 'highestRating =', ccHighestRating, 'lowestRating =', ccLowestRating, 'ratingHistory.length =', ccRatingHistory.length);
-    console.log('[AUDIT LOG][Database Read] currentRating (row.cc_rating) =', row.cc_rating);
+    // CodeChef rating history parsed from DB
 
     const lcHistory = parseContestHistory(row.lc_history).map(normalizeLeetCodeEntry).filter(e => e.attended);
     const ccHistory = parseContestHistory(row.cc_history).map(normalizeCodeChefEntry).filter(e => e.attended);

@@ -74,10 +74,11 @@ async function getPlatformAnalytics(req, res) {
     );
 
     if (unsyncedContests.length > 0) {
-      console.log(`[Auto-Sync] Found ${unsyncedContests.length} unsynced past/ongoing contests for ${platform}. Triggering sync...`);
+      console.log(`[Auto-Sync] Found ${unsyncedContests.length} unsynced contests for ${platform}. Triggering background sync...`);
       const { syncAllData } = require('../utils/scheduler');
-      await syncAllData();
-      console.log('[Auto-Sync] Synchronization complete.');
+      // Run in background — don't block the response
+      syncAllData().catch(err => console.error('[Auto-Sync] Background sync failed:', err.message));
+      console.log('[Auto-Sync] Background sync started (non-blocking).');
     }
   } catch (syncErr) {
     console.error('[Auto-Sync Error] Automatic check failed:', syncErr.message);

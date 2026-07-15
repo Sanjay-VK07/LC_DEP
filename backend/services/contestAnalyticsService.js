@@ -225,13 +225,12 @@ async function getContestAttendanceReport({ type, startDate, endDate, contestId 
     SELECT 
       c.contest_id, c.title as contest_name, c.slug as contest_slug,
       c.start_time as contest_date, c.contest_status, c.contest_type,
-      (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) as registered,
-      (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) as participated,
-      ROUND(
-        IFNULL((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) /
-        NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id), 0) * 100, 0)
-      ) as attendance_pct
+      COUNT(DISTINCT r.id) as registered,
+      COUNT(DISTINCT p.id) as participated,
+      ROUND(IFNULL(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100, 0)) as attendance_pct
     FROM Contests c
+    LEFT JOIN Registrations r ON r.contest_id = c.contest_id
+    LEFT JOIN ParticipationLogs p ON p.contest_id = c.contest_id
     WHERE 1=1
   `;
   const params = [];
@@ -241,7 +240,7 @@ async function getContestAttendanceReport({ type, startDate, endDate, contestId 
   if (startDate) { sql += ' AND c.start_time >= ?'; params.push(startDate); }
   if (endDate) { sql += ' AND c.start_time <= ?'; params.push(endDate); }
 
-  sql += ' ORDER BY c.start_time DESC';
+  sql += ' GROUP BY c.contest_id, c.title, c.slug, c.start_time, c.contest_status, c.contest_type ORDER BY c.start_time DESC';
 
   return await db.query(sql, params);
 }

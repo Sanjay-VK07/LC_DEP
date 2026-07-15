@@ -40,13 +40,15 @@ async function getStudents(req, res) {
            u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at,
            u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
            cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank,
-           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) AS total_contests,
-           (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS attended_contests,
-           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) - (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS missed_contests,
+           COUNT(DISTINCT r.id) AS total_contests,
+           COUNT(DISTINCT p.id) AS attended_contests,
+           COUNT(DISTINCT r.id) - COUNT(DISTINCT p.id) AS missed_contests,
            lp.highest_rating, lp.current_rating, lp.global_ranking AS highest_rank
     FROM Users u
     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
     LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
+    LEFT JOIN Registrations r ON r.user_id = u.id
+    LEFT JOIN ParticipationLogs p ON p.user_id = u.id
     WHERE 1=1
   `;
   const params = [];
@@ -79,6 +81,7 @@ async function getStudents(req, res) {
     params.push(academicBatch);
   }
 
+  sql += ' GROUP BY u.id, u.name, u.roll_no, u.department, u.section, u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username, u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at, u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source, cfp.current_rating, cfp.rank, lp.highest_rating, lp.current_rating, lp.global_ranking';
   sql += ' ORDER BY u.roll_no ASC';
 
   try {

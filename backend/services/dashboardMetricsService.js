@@ -193,14 +193,19 @@ async function getPortalSummary() {
        WHERE u.status = 'active'`
     );
 
+    // Compute avg attendance using a JOIN-based approach instead of correlated subqueries
     const [avgAttRow] = await db.query(
-      `SELECT IFNULL(ROUND(AVG(
-         (SELECT COUNT(*) FROM AttendanceRecords ar JOIN Contests c ON ar.contest_id = c.contest_id
-          WHERE ar.user_id = u.id AND c.contest_status = 'Rated' AND ar.attendance_status = 'PRESENT') /
-         NULLIF((SELECT COUNT(*) FROM AttendanceRecords ar JOIN Contests c ON ar.contest_id = c.contest_id
-          WHERE ar.user_id = u.id AND c.contest_status = 'Rated' AND ar.attendance_status IN ('PRESENT', 'ABSENT')), 0) * 100
-       )), 0) as avg_attendance
-       FROM Users u WHERE u.status = 'active'`
+      `SELECT IFNULL(ROUND(AVG(student_att.pct)), 0) as avg_attendance
+       FROM (
+         SELECT ar.user_id,
+           IFNULL(SUM(CASE WHEN ar.attendance_status = 'PRESENT' THEN 1 ELSE 0 END) /
+             NULLIF(SUM(CASE WHEN ar.attendance_status IN ('PRESENT','ABSENT') THEN 1 ELSE 0 END), 0) * 100, 0) as pct
+         FROM AttendanceRecords ar
+         JOIN Contests c ON ar.contest_id = c.contest_id
+         JOIN Users u ON ar.user_id = u.id
+         WHERE c.contest_status = 'Rated' AND u.status = 'active'
+         GROUP BY ar.user_id
+       ) student_att`
     );
 
     const batchStats = await db.query(

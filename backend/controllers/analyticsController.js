@@ -157,15 +157,15 @@ async function getDashboardStats(req, res) {
     // Fetch lowAttendanceStudents and studentsWithoutProfiles directly from DB as they are alert-specific
     const lowAttendanceStudents = await db.query(
       `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
-              (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) as total_contests,
-              (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) as present_count,
-              ROUND((SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
-                NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100) as attendance_percentage
+              COUNT(DISTINCT r.id) as total_contests,
+              COUNT(DISTINCT p.id) as present_count,
+              ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100) as attendance_percentage
        FROM Users u
+       LEFT JOIN Registrations r ON r.user_id = u.id
+       LEFT JOIN ParticipationLogs p ON p.user_id = u.id
        WHERE u.status = 'active'
-         AND (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) >= 3
-         AND (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) /
-             NULLIF((SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id), 0) * 100 < 30
+       GROUP BY u.id, u.name, u.roll_no, u.department, u.section
+       HAVING total_contests >= 3 AND attendance_percentage < 30
        ORDER BY attendance_percentage ASC
        LIMIT 10`
     );

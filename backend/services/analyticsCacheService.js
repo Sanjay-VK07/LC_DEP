@@ -8,7 +8,7 @@
  * - Never serves stale attendance records after a completed sync
  */
 
-const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 const cache = new Map(); // key -> { data, expiresAt }
 let hits = 0;

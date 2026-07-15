@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const cache = require('../services/analyticsCacheService');
 
 // Helper to parse dates timezone-independently
 function parseDateOnly(dateInput) {
@@ -343,19 +344,28 @@ async function getDepartmentReport(req, res) {
   const filterPlatform = platform ? platform.toLowerCase() : 'all';
   const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
 
+  const cacheKey = `report:department:${filterPlatform}`;
   try {
-    const report = await db.query(
-      `SELECT u.department,
-              COUNT(DISTINCT u.id) as total_students,
-              IFNULL(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as total_records,
-              IFNULL(SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as present_count,
-              IFNULL(ROUND((SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())) / NULLIF(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0)) * 100), 100) as attendance_percentage
-       FROM Users u
-       WHERE u.status = 'active'
-       GROUP BY u.department
-       ORDER BY attendance_percentage DESC`
-    );
-    return res.json({ success: true, data: report });
+    const data = await cache.getOrCompute(cacheKey, async () => {
+      return await db.query(
+        `SELECT u.department,
+                COUNT(DISTINCT u.id) as total_students,
+                COUNT(DISTINCT r.id) as total_records,
+                COUNT(DISTINCT p.id) as present_count,
+                IFNULL(ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100), 100) as attendance_percentage
+         FROM Users u
+         LEFT JOIN Registrations r ON r.user_id = u.id
+           JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
+             AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cr.')}
+         LEFT JOIN ParticipationLogs p ON p.user_id = u.id
+           JOIN Contests cp ON p.contest_id = cp.contest_id AND cp.contest_status = 'Rated'
+             AND cp.start_time + INTERVAL IFNULL(cp.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cp.')}
+         WHERE u.status = 'active'
+         GROUP BY u.department
+         ORDER BY attendance_percentage DESC`
+      );
+    }, 15 * 60 * 1000);
+    return res.json({ success: true, data });
   } catch (error) {
     console.error('Error generating department report:', error);
     return res.status(500).json({ success: false, message: 'Failed to generate report' });
@@ -368,19 +378,28 @@ async function getSectionReport(req, res) {
   const filterPlatform = platform ? platform.toLowerCase() : 'all';
   const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
 
+  const cacheKey = `report:section:${filterPlatform}`;
   try {
-    const report = await db.query(
-      `SELECT u.department, u.section,
-              COUNT(DISTINCT u.id) as total_students,
-              IFNULL(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as total_records,
-              IFNULL(SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0) as present_count,
-              IFNULL(ROUND((SUM((SELECT COUNT(*) FROM ParticipationLogs p JOIN Contests c ON p.contest_id = c.contest_id WHERE p.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())) / NULLIF(SUM((SELECT COUNT(*) FROM Registrations r JOIN Contests c ON r.contest_id = c.contest_id WHERE r.user_id = u.id AND c.contest_status = 'Rated'${platformFilterStr} AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW())), 0)) * 100), 100) as attendance_percentage
-       FROM Users u
-       WHERE u.status = 'active'
-       GROUP BY u.department, u.section
-       ORDER BY u.department ASC, u.section ASC`
-    );
-    return res.json({ success: true, data: report });
+    const data = await cache.getOrCompute(cacheKey, async () => {
+      return await db.query(
+        `SELECT u.department, u.section,
+                COUNT(DISTINCT u.id) as total_students,
+                COUNT(DISTINCT r.id) as total_records,
+                COUNT(DISTINCT p.id) as present_count,
+                IFNULL(ROUND(COUNT(DISTINCT p.id) / NULLIF(COUNT(DISTINCT r.id), 0) * 100), 100) as attendance_percentage
+         FROM Users u
+         LEFT JOIN Registrations r ON r.user_id = u.id
+           JOIN Contests cr ON r.contest_id = cr.contest_id AND cr.contest_status = 'Rated'
+             AND cr.start_time + INTERVAL IFNULL(cr.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cr.')}
+         LEFT JOIN ParticipationLogs p ON p.user_id = u.id
+           JOIN Contests cp ON p.contest_id = cp.contest_id AND cp.contest_status = 'Rated'
+             AND cp.start_time + INTERVAL IFNULL(cp.duration,5400) SECOND <= NOW() ${platformFilterStr.replace(/AND c\./g, 'AND cp.')}
+         WHERE u.status = 'active'
+         GROUP BY u.department, u.section
+         ORDER BY u.department ASC, u.section ASC`
+      );
+    }, 15 * 60 * 1000);
+    return res.json({ success: true, data });
   } catch (error) {
     console.error('Error generating section report:', error);
     return res.status(500).json({ success: false, message: 'Failed to generate report' });

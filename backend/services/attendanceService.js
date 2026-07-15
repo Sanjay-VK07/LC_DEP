@@ -67,18 +67,18 @@ function resolveCanonicalStatus(student, contest, record = {}) {
     return { status: 'PRESENT', reason: 'Attended' };
   }
 
-  // Priority 2: Rank
-  if (record.contest_rank !== null && record.contest_rank !== undefined) {
+  // Priority 2: Rank — must be a positive number (rank 0 = not ranked/not attended)
+  if (record.contest_rank !== null && record.contest_rank !== undefined && Number(record.contest_rank) > 0) {
     return { status: 'PRESENT', reason: 'Attended' };
   }
 
-  // Priority 3: Score
-  if (record.score !== null && record.score !== undefined && record.score > 0) {
+  // Priority 3: Score — must be positive
+  if (record.score !== null && record.score !== undefined && Number(record.score) > 0) {
     return { status: 'PRESENT', reason: 'Attended' };
   }
 
-  // Priority 4: Finish Time
-  if (record.finish_time !== null && record.finish_time !== undefined) {
+  // Priority 4: Finish Time — must be positive (0 = default, not attended)
+  if (record.finish_time !== null && record.finish_time !== undefined && Number(record.finish_time) > 0) {
     return { status: 'PRESENT', reason: 'Attended' };
   }
 
@@ -155,6 +155,7 @@ async function getStudentAttendance(userId) {
   );
   if (!student) throw new Error('Student not found');
 
+  // Fetch base contest + attendance data with JOINs (no correlated subqueries)
   const history = await db.query(
     `SELECT c.contest_id, c.title as contest_name, c.slug as contest_slug,
             c.start_time as contest_date, c.contest_status, c.duration,
@@ -162,40 +163,56 @@ async function getStudentAttendance(userId) {
             ar.attendance_status as stored_status, ar.attendance_source,
             ar.remarks, ar.last_updated, ar.rank, ar.score, ar.problems_solved,
             ar.rating_before, ar.rating_after, ar.rating_change, ar.participated,
-            (SELECT join_time FROM ParticipationLogs p WHERE p.contest_id = c.contest_id AND p.user_id = ?) as join_time,
-            (SELECT registration_time FROM Registrations r WHERE r.contest_id = c.contest_id AND r.user_id = ?) as registration_time,
-            (SELECT ca.attendanceStatus FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_status,
-            (SELECT ca.solved FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_solved,
-            (SELECT ca.score FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_score,
-            (SELECT ca.rank FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_rank,
-            (SELECT ca.penalty FROM ContestAttendance ca JOIN LiveContests lc ON ca.contestId = lc.id WHERE ca.studentId = ? AND lc.contestSlug = c.slug LIMIT 1) as sync_penalty,
-            (SELECT COUNT(*) FROM ContestParticipants cp 
-             WHERE cp.contest_slug = c.slug 
-               AND (
-                 (LOWER(c.platform) = 'leetcode' AND LOWER(cp.username) = LOWER(?)) OR
-                 (LOWER(c.platform) = 'codeforces' AND LOWER(cp.username) = LOWER(?)) OR
-                 (LOWER(c.platform) = 'codechef' AND LOWER(cp.username) = LOWER(?)) OR
-                 (LOWER(c.platform) = 'hackerrank' AND LOWER(cp.username) = LOWER(?))
-               )
-            ) as exists_in_contest_participants
+            pl.join_time,
+            rg.registration_time,
+            ca.attendanceStatus as sync_status,
+            ca.solved as sync_solved,
+            ca.score as sync_score,
+            ca.rank as sync_rank,
+            ca.penalty as sync_penalty
      FROM Contests c
      LEFT JOIN AttendanceRecords ar ON c.contest_id = ar.contest_id AND ar.user_id = ?
+     LEFT JOIN ParticipationLogs pl ON pl.contest_id = c.contest_id AND pl.user_id = ?
+     LEFT JOIN Registrations rg ON rg.contest_id = c.contest_id AND rg.user_id = ?
+     LEFT JOIN (
+       SELECT ca2.attendanceStatus, ca2.solved, ca2.score, ca2.rank, ca2.penalty, lc2.contestSlug
+       FROM ContestAttendance ca2
+       JOIN LiveContests lc2 ON ca2.contestId = lc2.id
+       WHERE ca2.studentId = ?
+     ) ca ON ca.contestSlug = c.slug
      ORDER BY c.start_time ASC`,
-    [
-      userId,
-      userId,
-      userId,
-      userId,
-      userId,
-      userId,
-      userId,
-      student.leetcode_username || '',
-      student.codeforces_username || '',
-      student.codechef_username || '',
-      student.hackerrank_username || '',
-      userId
-    ]
+    [userId, userId, userId, userId]
   );
+
+  // Fetch ContestParticipants matches in one query instead of per-row subquery
+  const lcUsername = (student.leetcode_username || '').toLowerCase();
+  const cfUsername = (student.codeforces_username || '').toLowerCase();
+  const ccUsername = (student.codechef_username || '').toLowerCase();
+  const hrUsername = (student.hackerrank_username || '').toLowerCase();
+  const contestSlugs = history.map(h => h.contest_slug).filter(Boolean);
+  const matchedSlugs = new Set();
+  if (contestSlugs.length > 0) {
+    const placeholders = contestSlugs.map(() => '?').join(',');
+    const cpRows = await db.query(
+      `SELECT DISTINCT cp.contest_slug, LOWER(c.platform) as platform
+       FROM ContestParticipants cp
+       JOIN Contests c ON cp.contest_slug = c.slug
+       WHERE cp.contest_slug IN (${placeholders})
+         AND (
+           (LOWER(c.platform) = 'leetcode' AND LOWER(cp.username) = ?) OR
+           (LOWER(c.platform) = 'codeforces' AND LOWER(cp.username) = ?) OR
+           (LOWER(c.platform) = 'codechef' AND LOWER(cp.username) = ?) OR
+           (LOWER(c.platform) = 'hackerrank' AND LOWER(cp.username) = ?)
+         )`,
+      [...contestSlugs, lcUsername, cfUsername, ccUsername, hrUsername]
+    );
+    cpRows.forEach(r => matchedSlugs.add(r.contest_slug));
+  }
+
+  // Attach exists_in_contest_participants from the pre-fetched set
+  history.forEach(h => {
+    h.exists_in_contest_participants = matchedSlugs.has(h.contest_slug) ? 1 : 0;
+  });
 
   const formattedHistory = history.map(h => {
     const platformKey = h.platform ? h.platform.toLowerCase() : 'leetcode';

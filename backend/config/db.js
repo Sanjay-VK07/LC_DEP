@@ -355,13 +355,15 @@ async function query(sql, params) {
   const placeholderCount = (sql.match(/\?/g) || []).length;
   const paramCount = (params || []).length;
 
-  // Diagnostic logging
-  console.log('--- DB Query Audit ---');
-  console.log('SQL Statement:', sql.trim());
-  console.log('Placeholders Count:', placeholderCount);
-  console.log('Supplied Values Count:', paramCount);
-  console.log('Supplied Values:', JSON.stringify(params || []));
-  console.log('----------------------');
+  // Diagnostic logging (only in dev/debug mode)
+  if (process.env.DB_QUERY_DEBUG === 'true') {
+    console.log('--- DB Query Audit ---');
+    console.log('SQL Statement:', sql.trim());
+    console.log('Placeholders Count:', placeholderCount);
+    console.log('Supplied Values Count:', paramCount);
+    console.log('Supplied Values:', JSON.stringify(params || []));
+    console.log('----------------------');
+  }
 
   if (placeholderCount !== paramCount) {
     const auditError = new Error(`Column count / Placeholder count mismatch. SQL has ${placeholderCount} placeholders but ${paramCount} values were supplied.`);
