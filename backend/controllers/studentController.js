@@ -765,8 +765,29 @@ async function bulkImportStudents(req, res) {
 
   const duplicateStrategy = (req.body.duplicateStrategy || 'skip').toLowerCase();
   const dryRun = req.body.dryRun === true || req.body.dryRun === 'true';
+  const importBatch = (req.body.academicBatch || '').trim();
   const importSessionId = req.body.importSessionId;
   const batchIndex = Number(req.body.batchIndex || 0);
+
+  // Idempotency: if this exact batch of this session was already committed (e.g. a client-side
+  // retry after a network drop reused the same session/batch id), skip reprocessing it entirely.
+  if (importSessionId && !dryRun) {
+    try {
+      const already = await db.query(
+        "SELECT 1 FROM ImportSessionBatches WHERE session_id = ? AND batch_index = ?",
+        [importSessionId, batchIndex]
+      );
+      if (already.length > 0) {
+        return res.json({
+          success: true,
+          message: `Batch ${batchIndex} already processed for this session — skipped duplicate submission.`,
+          details: { importedCount: 0, skippedCount: 0, duplicates: [], invalidHandles: [], errors: [], alreadyProcessed: true }
+        });
+      }
+    } catch (idemErr) {
+      console.error('[Bulk Import] Idempotency check failed, proceeding without it:', idemErr.message);
+    }
+  }
 
   const imported = [];
   const duplicates = [];
@@ -778,7 +799,7 @@ async function bulkImportStudents(req, res) {
   const getVal = (row, fields) => {
     // If it is direct JSON object, check properties directly (case-insensitive)
     const rowKeys = Object.keys(row);
-    const matchedKey = rowKeys.find(k => fields.includes(k.toLowerCase().trim().replace(/[\s_-]/g, '')));
+    const matchedKey = rowKeys.find(k => fields.includes(k.toLowerCase().trim().replace(/[\s_./-]/g, '')));
     if (matchedKey) return String(row[matchedKey]).trim();
     return '';
   };
@@ -814,6 +835,7 @@ async function bulkImportStudents(req, res) {
     }
 
     let shouldAbort = false;
+    const pendingSyncEnqueues = [];
 
     // We can process in sequence to handle abort rollback properly
     for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
@@ -824,10 +846,10 @@ async function bulkImportStudents(req, res) {
       const name = getVal(row, ['studentname', 'name', 'fullname', 'username']);
       const dept = getVal(row, ['department', 'dept', 'branch']);
       const sec = getVal(row, ['section', 'sec', 'class']);
-      const academicBatch = getVal(row, ['academicbatch', 'batch', 'academicyear', 'year']);
-      const lcUsername = getVal(row, ['leetcodeusername', 'leetcode', 'leetcodehandle', 'handle']);
-      const codechefUsername = getVal(row, ['codechefusername', 'codechef', 'codechefhandle']);
-      const codeforcesUsername = getVal(row, ['codeforcesusername', 'codeforces', 'codeforceshandle']);
+      const academicBatch = getVal(row, ['academicbatch', 'batch', 'academicyear', 'year']) || importBatch;
+      const lcUsername = getVal(row, ['leetcodeusername', 'leetcode', 'leetcodehandle', 'handle', 'leetcodeid']);
+      const codechefUsername = getVal(row, ['codechefusername', 'codechef', 'codechefhandle', 'codechefid']);
+      const codeforcesUsername = getVal(row, ['codeforcesusername', 'codeforces', 'codeforceshandle', 'codeforcesid', 'codeforceusername', 'codeforce', 'codeforcehandle', 'codeforceid', 'cfusername', 'cfid', 'cfhandle', 'cf']);
       const hackerrankUsername = getVal(row, ['hackerrankusername', 'hackerrank', 'hackerrankhandle']);
 
       const email = getVal(row, ['email', 'emailid', 'emailaddress']);
@@ -839,7 +861,7 @@ async function bulkImportStudents(req, res) {
       let academicEndDate = getVal(row, ['academicenddate', 'enddate', 'graduationdate']);
 
       // Check if the row is completely empty (all required fields empty)
-      if (!rollNo && !name && !dept && !sec && !academicBatch && !lcUsername) {
+      if (!rollNo && !name && !dept && !sec && !lcUsername) {
         skippedCount++;
         continue;
       }
@@ -1019,11 +1041,12 @@ async function bulkImportStudents(req, res) {
           if (finalForces) forcesCache.add(finalForces.toLowerCase());
           if (finalRank) rankCache.add(finalRank.toLowerCase());
 
-          // Trigger historical sync in the background
-          if (verifyResult.username) syncQueue.enqueue(newStudentId, 'leetcode', verifyResult.username);
-          if (finalChef) syncQueue.enqueue(newStudentId, 'codechef', finalChef);
-          if (finalForces) syncQueue.enqueue(newStudentId, 'codeforces', finalForces);
-          if (finalRank) syncQueue.enqueue(newStudentId, 'hackerrank', finalRank);
+          // Defer sync-queue enqueueing until after the transaction commits (see below) —
+          // enqueueing here would block on the still-uncommitted Users row's FK/row lock.
+          if (verifyResult.username) pendingSyncEnqueues.push([newStudentId, 'leetcode', verifyResult.username]);
+          if (finalChef) pendingSyncEnqueues.push([newStudentId, 'codechef', finalChef]);
+          if (finalForces) pendingSyncEnqueues.push([newStudentId, 'codeforces', finalForces]);
+          if (finalRank) pendingSyncEnqueues.push([newStudentId, 'hackerrank', finalRank]);
 
           imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: verifyResult.username });
         } catch (dbErr) {
@@ -1057,6 +1080,12 @@ async function bulkImportStudents(req, res) {
 
       await transactionConnection.commit();
       transactionConnection.release();
+
+      // Now that new Users rows are committed and visible, it's safe to enqueue their syncs
+      // (enqueue() writes to StudentPlatformSync via the shared pool, on a separate connection).
+      for (const [studentId, platform, username] of pendingSyncEnqueues) {
+        syncQueue.enqueue(studentId, platform, username);
+      }
 
       // Log successful import session batch
       if (importSessionId) {

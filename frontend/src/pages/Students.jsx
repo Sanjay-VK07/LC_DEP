@@ -69,8 +69,11 @@ function Students() {
 
   // Import states
   const [importFile, setImportFile] = useState(null);
+  const [importBatch, setImportBatch] = useState('');
+  const [updateExisting, setUpdateExisting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResults, setImportResults] = useState(null);
+  const [importProgress, setImportProgress] = useState(null); // { batch, totalBatches, rowsDone, totalRows }
 
   console.count("Students Render");
   console.log('[Students State Audit]', {
@@ -466,38 +469,96 @@ function Students() {
     }
   };
 
-  // File import
+  // File import — parsed client-side and sent in small batches so a single network drop
+  // only costs one batch's progress instead of the whole file (each batch is its own
+  // DB transaction on the backend).
+  const IMPORT_BATCH_SIZE = 100;
+  const IMPORT_BATCH_RETRIES = 2;
+
   const handleImportSubmit = async (e) => {
     e.preventDefault();
-    if (!importFile) return;
+    if (!importFile || !importBatch.trim()) return;
 
     setImporting(true);
     setImportResults(null);
     setError('');
 
-    const form = new FormData();
-    form.append('file', importFile);
-
+    let rows;
     try {
-      const res = await axios.post('/api/students/import', form, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      if (res.data.success) {
-        setImportResults(res.data);
-        fetchStudents();
-        fetchAvailableBatches();
-      }
-    } catch (err) {
-      setError(err.response?.data?.message || 'Import failed. Check Excel structure.');
-    } finally {
+      const buffer = await importFile.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } catch (parseErr) {
+      setError('Could not read the Excel file. Check its structure.');
       setImporting(false);
+      return;
     }
+
+    if (rows.length === 0) {
+      setError('Excel file is empty.');
+      setImporting(false);
+      return;
+    }
+
+    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const totalBatches = Math.ceil(rows.length / IMPORT_BATCH_SIZE);
+    const aggregate = { importedCount: 0, skippedCount: 0, duplicates: [], invalidHandles: [], errors: [] };
+
+    setImportProgress({ batch: 0, totalBatches, rowsDone: 0, totalRows: rows.length });
+
+    for (let b = 0; b < totalBatches; b++) {
+      const chunk = rows.slice(b * IMPORT_BATCH_SIZE, (b + 1) * IMPORT_BATCH_SIZE);
+      let lastErr = null;
+      let succeeded = false;
+
+      for (let attempt = 0; attempt <= IMPORT_BATCH_RETRIES && !succeeded; attempt++) {
+        try {
+          const res = await axios.post('/api/students/import', {
+            students: chunk,
+            academicBatch: importBatch.trim(),
+            duplicateStrategy: updateExisting ? 'update' : 'skip',
+            importSessionId: sessionId,
+            batchIndex: b
+          });
+          if (res.data.success) {
+            const d = res.data.details || {};
+            aggregate.importedCount += d.importedCount || 0;
+            aggregate.skippedCount += d.skippedCount || 0;
+            aggregate.duplicates.push(...(d.duplicates || []));
+            aggregate.invalidHandles.push(...(d.invalidHandles || []));
+            aggregate.errors.push(...(d.errors || []));
+            succeeded = true;
+          } else {
+            lastErr = res.data.message || 'Unknown error';
+          }
+        } catch (err) {
+          lastErr = err.response?.data?.message || err.message || 'Network error';
+        }
+      }
+
+      if (!succeeded) {
+        aggregate.errors.push(`Batch ${b + 1} (rows ${b * IMPORT_BATCH_SIZE + 1}-${Math.min((b + 1) * IMPORT_BATCH_SIZE, rows.length)}): ${lastErr}`);
+      }
+
+      setImportProgress({ batch: b + 1, totalBatches, rowsDone: Math.min((b + 1) * IMPORT_BATCH_SIZE, rows.length), totalRows: rows.length });
+    }
+
+    setImportResults({
+      success: true,
+      message: `Processed ${rows.length} rows across ${totalBatches} batch(es). Imported: ${aggregate.importedCount}, Duplicates: ${aggregate.duplicates.length}, Invalid Handles: ${aggregate.invalidHandles.length}, Errors: ${aggregate.errors.length}`,
+      details: aggregate
+    });
+    fetchStudents();
+    fetchAvailableBatches();
+    setImportProgress(null);
+    setImporting(false);
   };
 
   // Download template
   const downloadTemplate = () => {
     const headers = [
-      { 'Roll Number': '311520104001', 'Name': 'John Doe', 'Department': 'CSE', 'Section': 'A', 'Academic Batch': '2024-2028', 'LeetCode Username': 'johndoe_lc', 'Academic Start Date': '2024-07-01', 'Academic End Date': '2028-06-30' }
+      { 'S.No.': 1, 'Reg No.': '311520104001', 'Student Name': 'John Doe', 'Dept': 'CSE', 'Sec': 'A', 'LeetCode ID': 'johndoe_lc', 'CodeChef ID': 'johndoe_cc', 'Codeforces ID': 'johndoe_cf' }
     ];
     const ws = XLSX.utils.json_to_sheet(headers);
     const wb = XLSX.utils.book_new();
@@ -938,8 +999,8 @@ function Students() {
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white">Bulk Import Student Profiles</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Upload a sheet to import multiple students at once.</p>
               </div>
-              <button 
-                onClick={() => { setIsImportModalOpen(false); setImportFile(null); setImportResults(null); }}
+              <button
+                onClick={() => { setIsImportModalOpen(false); setImportFile(null); setImportBatch(''); setUpdateExisting(false); setImportResults(null); }}
                 className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 <X className="h-5 w-5" />
@@ -970,11 +1031,36 @@ function Students() {
                   </div>
                 )}
 
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Academic Batch (applies to all rows in this file)</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="2024-2028"
+                    value={importBatch}
+                    onChange={(e) => setImportBatch(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-700 dark:text-slate-200"
+                  />
+                </div>
+
+                <label className="flex items-start gap-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={updateExisting}
+                    onChange={(e) => setUpdateExisting(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-xs text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold block">Update existing students instead of skipping them</span>
+                    Re-imports rows whose Reg No. already exists, overwriting their stored fields with this file's values. Use this to backfill/correct data from a re-run (e.g. after fixing a column mapping) — leave unchecked for a normal first-time import.
+                  </span>
+                </label>
+
                 <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8 hover:bg-slate-50/40 dark:hover:bg-slate-800/10 transition-colors">
                   <Upload className="h-8 w-8 text-slate-400 mb-2" />
                   <span className="text-sm font-semibold text-slate-600 dark:text-slate-400 block">Select Excel File</span>
                   <span className="text-xs text-slate-400 mt-1 mb-4">Supports .xlsx, .xls formats up to 5MB</span>
-                  
+
                   <input
                     type="file"
                     accept=".xlsx, .xls"
@@ -987,20 +1073,37 @@ function Students() {
                   )}
                 </div>
 
+                {importProgress && (
+                  <div className="rounded-xl border border-primary-100 dark:border-primary-900/40 bg-primary-50/50 dark:bg-primary-950/20 p-3.5">
+                    <div className="flex items-center justify-between text-xs font-semibold text-primary-800 dark:text-primary-400 mb-1.5">
+                      <span>Batch {importProgress.batch} of {importProgress.totalBatches}</span>
+                      <span>{importProgress.rowsDone} / {importProgress.totalRows} rows</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-primary-100 dark:bg-primary-900/40 overflow-hidden">
+                      <div
+                        className="h-full bg-primary-500 transition-all duration-300"
+                        style={{ width: `${Math.round((importProgress.rowsDone / importProgress.totalRows) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">Each batch commits independently — a network drop only costs the current batch, not what's already imported.</p>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-4 mt-6">
                   <button
                     type="button"
-                    onClick={() => { setIsImportModalOpen(false); setImportFile(null); }}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                    disabled={importing}
+                    onClick={() => { setIsImportModalOpen(false); setImportFile(null); setImportBatch(''); setUpdateExisting(false); }}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-600 dark:text-slate-300 disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    disabled={importing || !importFile}
+                    disabled={importing || !importFile || !importBatch.trim()}
                     className="rounded-xl bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white px-5 py-2.5 text-xs font-semibold shadow-md shadow-primary-500/10 flex items-center gap-1.5"
                   >
-                    {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Run Import'}
+                    {importing ? <><Loader2 className="h-4 w-4 animate-spin" /> Importing...</> : 'Run Import'}
                   </button>
                 </div>
               </form>
