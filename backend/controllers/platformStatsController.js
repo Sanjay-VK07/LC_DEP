@@ -68,12 +68,15 @@ async function getPlatformStats(req, res) {
              lp.contest_history  AS lc_history,
              lp.current_rating   AS lc_rating,
              lp.highest_rating   AS lc_best_rating,
+             lp.problems_solved  AS lc_total_solved,
              cp.contest_history  AS cc_history,
              cp.current_rating   AS cc_rating,
              cp.stars            AS cc_stars,
+             cp.problems_solved  AS cc_total_solved,
              cfp.contest_history AS cf_history,
              cfp.current_rating  AS cf_rating,
-             cfp.rank            AS cf_rank
+             cfp.rank            AS cf_rank,
+             cfp.problems_solved AS cf_total_solved
       FROM Users u
       LEFT JOIN LeetCodeProfiles  lp  ON lp.user_id  = u.id
       LEFT JOIN CodeChefProfiles  cp  ON cp.user_id  = u.id
@@ -99,7 +102,7 @@ async function getPlatformStats(req, res) {
       lcHistory.forEach(entry => {
         // attended field: if explicitly false, skip. If true or missing, count it.
         if (entry.attended === false) return;
-        const slug = (entry.contest?.titleSlug || entry.contestSlug || '').toLowerCase();
+        const slug = (entry.contest?.titleSlug || entry.contestSlug || entry.contest?.title || '').toLowerCase();
         const ts   = entry.contest?.startTime ? new Date(entry.contest.startTime * 1000)
                    : entry.contestDate        ? new Date(entry.contestDate) : null;
         if (!ts || isNaN(ts)) return;
@@ -160,6 +163,7 @@ async function getPlatformStats(req, res) {
           username: s.leetcode_username || null,
           rating: s.lc_rating ? Number(s.lc_rating) : null,
           bestRating: s.lc_best_rating ? Number(s.lc_best_rating) : null,
+          totalSolved: s.lc_total_solved || 0,
           weeklyThisWeek: lcWeekly,
           biweeklyThisWeek: lcBiweekly,
           weeklyThisMonth: lcWeeklyMonth,
@@ -170,6 +174,7 @@ async function getPlatformStats(req, res) {
           rating: s.cc_rating ? Number(s.cc_rating) : null,
           stars: s.cc_stars || null,
           starColor: ccStarColor,
+          totalSolved: s.cc_total_solved || 0,
           wednesdayContestsThisWeek: ccWedWeek,
           wednesdayContestsThisMonth: ccWedMonth
         },
@@ -179,6 +184,7 @@ async function getPlatformStats(req, res) {
           rank: cfBadge.rank,
           rankColor: cfBadge.color,
           rankBg: cfBadge.bg,
+          totalSolved: s.cf_total_solved || 0,
           contestsThisWeek: cfWeek,
           contestsThisMonth: cfMonth
         }

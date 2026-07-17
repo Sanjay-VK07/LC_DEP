@@ -45,6 +45,9 @@ async function getStudents(req, res) {
            (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS attended_contests,
            (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) -
            (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS missed_contests,
+           (SELECT COUNT(*) FROM ParticipationLogs p
+              JOIN Contests c ON c.contest_id = p.contest_id
+              WHERE p.user_id = u.id AND c.platform = 'LeetCode') AS leetcode_contests_attended,
            lp.highest_rating, lp.current_rating, lp.global_ranking AS highest_rank
     FROM Users u
     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id

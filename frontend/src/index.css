@@ -8,6 +8,13 @@
   }
 }
 
+/* Tell the browser to render native controls (select dropdown popups, scrollbars, etc.)
+   using its dark theme when our dark mode is active — Tailwind's dark: classes on
+   <option> elements are ignored by most browsers' native dropdown popups. */
+.dark {
+  color-scheme: dark;
+}
+
 /* Glassmorphism utility */
 .glass {
   background: rgba(255, 255, 255, 0.7);

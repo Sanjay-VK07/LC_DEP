@@ -175,50 +175,53 @@ function DataHealth() {
 
   const handleExportPlatformStats = () => {
     if (!platformStats?.length) return;
-    const rows = platformStats.map(s => ({
-      'Roll No': s.rollNo, 'Name': s.name, 'Dept': s.department, 'Section': s.section||'', 'Batch': s.batch,
-      'LC Username': s.leetcode.username||'', 'LC Rating': s.leetcode.rating||'', 'LC Best': s.leetcode.bestRating||'',
-      'LC Weekly This Week': s.leetcode.weeklyThisWeek, 'LC Biweekly This Week': s.leetcode.biweeklyThisWeek,
-      'LC Weekly This Month': s.leetcode.weeklyThisMonth, 'LC Biweekly This Month': s.leetcode.biweeklyThisMonth,
-      'CC Username': s.codechef.username||'', 'CC Rating': s.codechef.rating||'', 'CC Stars': s.codechef.stars||'',
-      'CC Wed This Week': s.codechef.wednesdayContestsThisWeek, 'CC Wed This Month': s.codechef.wednesdayContestsThisMonth,
-      'CF Username': s.codeforces.username||'', 'CF Rating': s.codeforces.rating||'', 'CF Rank': s.codeforces.rank||'',
-      'CF This Week': s.codeforces.contestsThisWeek, 'CF This Month': s.codeforces.contestsThisMonth
-    }));
+    const rows = buildPlatformStatsRows(platformStats);
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Platform Stats');
     XLSX.writeFile(wb, 'platform_stats_' + new Date().toISOString().split('T')[0] + '.xlsx');
   };
 
-  const handleExportCSV = () => {
-    if (!data || !data.students) return;
-    const headers = ['Name', 'Roll No', 'Department', 'Section', 'Batch', 'Health Score', 'Status',
-      'LeetCode Username', 'LeetCode Synced', 'CodeChef Username', 'CodeChef Synced',
-      'Codeforces Username', 'Codeforces Synced', 'HackerRank Username', 'HackerRank Synced',
-      'Missing Fields', 'Sync Errors'];
-    const rows = data.students.map(s => [
-      s.name, s.rollNo, s.department, s.section || '', s.batch, s.healthScore, s.healthIndicator,
-      s.connections.leetcode.username || '',
-      s.connections.leetcode.synced ? 'Yes' : (s.connections.leetcode.connected ? 'Failed' : 'No'),
-      s.connections.codechef.username || '',
-      s.connections.codechef.synced ? 'Yes' : (s.connections.codechef.connected ? 'Failed' : 'No'),
-      s.connections.codeforces.username || '',
-      s.connections.codeforces.synced ? 'Yes' : (s.connections.codeforces.connected ? 'Failed' : 'No'),
-      s.connections.hackerrank.username || '',
-      s.connections.hackerrank.synced ? 'Yes' : (s.connections.hackerrank.connected ? 'Failed' : 'No'),
-      s.missingFields.join('; '),
-      s.syncErrors.join('; ')
-    ]);
-    const csvContent = "data:text/csv;charset=utf-8,"
-      + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `student_data_health_audit_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const [exportingSpreadsheet, setExportingSpreadsheet] = useState(false);
+
+  const buildPlatformStatsRows = (stats) => stats.map(s => ({
+    'Name': s.name,
+    'Student Roll No': s.rollNo,
+
+    'LC Account': s.leetcode.username || '',
+    'LC Rating': s.leetcode.rating || '',
+    'LC Biweekly': s.leetcode.biweeklyThisMonth,
+    'LC Weekly': s.leetcode.weeklyThisMonth,
+    'LC Monthly': s.leetcode.weeklyThisMonth + s.leetcode.biweeklyThisMonth,
+    'LC Total Solved': s.leetcode.totalSolved,
+
+    'CC Account': s.codechef.username || '',
+    'CC Rating': s.codechef.rating || '',
+    'CC Total Solved': s.codechef.totalSolved,
+
+    'CF Account': s.codeforces.username || '',
+    'CF Rating': s.codeforces.rating || '',
+    'CF Total Solved': s.codeforces.totalSolved
+  }));
+
+  const handleExportCSV = async () => {
+    setExportingSpreadsheet(true);
+    try {
+      let stats = platformStats;
+      if (!stats?.length) {
+        const res = await axios.get('/api/analytics/platform-stats');
+        stats = res.data.success ? res.data.data : [];
+      }
+      if (!stats?.length) return;
+
+      const rows = buildPlatformStatsRows(stats);
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Student Stats');
+      XLSX.writeFile(wb, `student_data_health_export_${Date.now()}.xlsx`);
+    } finally {
+      setExportingSpreadsheet(false);
+    }
   };
 
   const toggleRow = (id) => {
@@ -529,9 +532,10 @@ function DataHealth() {
                 </button>
                 <button
                   onClick={handleExportCSV}
-                  className="flex items-center justify-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-md transition-all"
+                  disabled={exportingSpreadsheet}
+                  className="flex items-center justify-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 disabled:opacity-50 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-md transition-all"
                 >
-                  <Download className="h-4 w-4" /> Export Spreadsheet
+                  <Download className="h-4 w-4" /> {exportingSpreadsheet ? 'Exporting...' : 'Export Spreadsheet'}
                 </button>
               </div>
             </div>

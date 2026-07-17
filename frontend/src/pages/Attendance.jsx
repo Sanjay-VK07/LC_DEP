@@ -50,6 +50,7 @@ function Attendance() {
   const [selectedContestId, setSelectedContestId] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('');
   const [students, setStudents] = useState([]);
+  const [leaderboardStudents, setLeaderboardStudents] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -186,10 +187,11 @@ function Attendance() {
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
-        const [contestsRes, deptsRes, batchesRes] = await Promise.all([
+        const [contestsRes, deptsRes, batchesRes, leaderboardRes] = await Promise.all([
           axios.get('/api/contests'),
           axios.get('/api/departments?status=active'),
-          axios.get('/api/students/batches')
+          axios.get('/api/students/batches'),
+          axios.get('/api/students?status=active')
         ]);
         if (contestsRes.data.success) {
           setContests(contestsRes.data.data);
@@ -202,6 +204,9 @@ function Attendance() {
         }
         if (batchesRes.data.success) {
           setAvailableBatches(batchesRes.data.data);
+        }
+        if (leaderboardRes.data.success) {
+          setLeaderboardStudents(leaderboardRes.data.data);
         }
       } catch (err) {
         setError('Failed to fetch initial configuration data.');
@@ -420,9 +425,9 @@ function Attendance() {
     ? Math.round(students.reduce((acc, s) => acc + Number(s.current_rating || 1500), 0) / totalStudentsInBatch) 
     : 0;
 
-  // Contest Leaderboard Calculations (Ranked by LeetCode current rating)
-  const leaderboardData = students
-    .filter(s => normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST')
+  // Contest Leaderboard Calculations (Ranked by LeetCode current rating, across all contests)
+  const leaderboardData = leaderboardStudents
+    .filter(s => !selectedBatch || s.academic_batch === selectedBatch)
     .sort((a, b) => Number(b.current_rating || 1500) - Number(a.current_rating || 1500))
     .slice(0, 10);
 
@@ -878,19 +883,19 @@ function Attendance() {
                     </tr>
                   ) : (
                     leaderboardData.map((item, idx) => (
-                      <tr key={item.student_id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
                         <td className="py-3 pl-1 font-extrabold text-slate-400">
                           {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : idx + 1}
                         </td>
                         <td>
                           <span className="font-bold text-slate-800 dark:text-slate-200 block truncate max-w-[120px]" title={item.name}>{item.name}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">{item.register_number}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">{item.roll_no}</span>
                         </td>
                         <td className="text-right font-extrabold text-primary-600 dark:text-primary-400">
                           {Math.round(item.current_rating || 1500)}
                         </td>
                         <td className="text-center font-semibold text-slate-500 pr-1">
-                          {item.contests_attended || 0}
+                          {item.leetcode_contests_attended || 0}
                         </td>
                       </tr>
                     ))
