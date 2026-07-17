@@ -36,20 +36,19 @@ async function getStudents(req, res) {
   const { search, department, section, academicBatch, status } = req.query;
   
   let sql = `
-    SELECT u.id, u.name, u.roll_no, u.department, u.section, u.leetcode_username, 
+    SELECT u.id, u.name, u.roll_no, u.department, u.section, u.leetcode_username,
            u.codechef_username, u.codeforces_username, u.hackerrank_username,
            u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at,
            u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
            cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank,
-           COUNT(DISTINCT r.id) AS total_contests,
-           COUNT(DISTINCT p.id) AS attended_contests,
-           COUNT(DISTINCT r.id) - COUNT(DISTINCT p.id) AS missed_contests,
+           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) AS total_contests,
+           (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS attended_contests,
+           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) -
+           (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS missed_contests,
            lp.highest_rating, lp.current_rating, lp.global_ranking AS highest_rank
     FROM Users u
     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
     LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
-    LEFT JOIN Registrations r ON r.user_id = u.id
-    LEFT JOIN ParticipationLogs p ON p.user_id = u.id
     WHERE 1=1
   `;
   const params = [];
@@ -82,7 +81,6 @@ async function getStudents(req, res) {
     params.push(academicBatch);
   }
 
-  sql += ' GROUP BY u.id, u.name, u.roll_no, u.department, u.section, u.leetcode_username, u.codechef_username, u.codeforces_username, u.hackerrank_username, u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at, u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source, cfp.current_rating, cfp.rank, lp.highest_rating, lp.current_rating, lp.global_ranking';
   sql += ' ORDER BY u.roll_no ASC';
 
   try {
@@ -1134,6 +1132,61 @@ async function bulkImportStudents(req, res) {
   }
 }
 
+// 5b. Bulk permanent delete — by explicit student IDs or by department/batch(/section) filter
+async function bulkDeleteStudents(req, res) {
+  // Defensive RBAC Check
+  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
+  }
+
+  const { studentIds, department, academicBatch, academicYear, section } = req.body;
+  const batch = academicBatch || academicYear;
+
+  try {
+    let idsToDelete;
+
+    if (Array.isArray(studentIds) && studentIds.length > 0) {
+      idsToDelete = studentIds.map(id => parseInt(id, 10)).filter(id => Number.isInteger(id));
+      if (idsToDelete.length === 0) {
+        return res.status(400).json({ success: false, message: 'No valid student IDs provided.' });
+      }
+    } else if (department && batch) {
+      let sql = "SELECT id FROM Users WHERE department = ? AND academic_batch = ?";
+      const params = [department, batch];
+      if (section) {
+        sql += " AND section = ?";
+        params.push(section);
+      }
+      const matches = await db.query(sql, params);
+      idsToDelete = matches.map(m => m.id);
+      if (idsToDelete.length === 0) {
+        return res.status(404).json({ success: false, message: 'No students found matching the filters.' });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: 'Provide either studentIds or department + academicBatch (optionally section).' });
+    }
+
+    const placeholders = idsToDelete.map(() => '?').join(',');
+    const result = await db.query(`DELETE FROM Users WHERE id IN (${placeholders})`, idsToDelete);
+
+    const cache = require('../services/analyticsCacheService');
+    idsToDelete.forEach(id => {
+      cache.invalidate(cache.KEYS.STUDENT_ANALYTICS(id));
+      cache.invalidate(cache.KEYS.PLACEMENT_STUDENT(id));
+      cache.invalidate(cache.KEYS.AI_INSIGHTS(id));
+    });
+
+    return res.json({
+      success: true,
+      message: `Permanently deleted ${idsToDelete.length} student(s).`,
+      deletedCount: idsToDelete.length
+    });
+  } catch (error) {
+    console.error('Error bulk deleting students:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+}
+
 // 6. Batch Graduated Archive Students
 async function archiveStudents(req, res) {
   // Defensive RBAC Check
@@ -1758,6 +1811,7 @@ module.exports = {
   addStudent,
   editStudent,
   deleteStudent,
+  bulkDeleteStudents,
   bulkImportStudents,
   archiveStudents,
   restoreStudents,
