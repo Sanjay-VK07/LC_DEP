@@ -1002,6 +1002,10 @@ async function bulkImportStudents(req, res) {
             const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
             if (verifyForces.verified) finalForces = verifyForces.username;
           } catch (err) {}
+          // Codeforces enforces ~1 request/2s per IP; without this pacing, bulk imports fire
+          // requests back-to-back and Codeforces silently stops responding after the first few,
+          // causing verification to fail/hang for most subsequent rows.
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
         if (trimmedRank) {
