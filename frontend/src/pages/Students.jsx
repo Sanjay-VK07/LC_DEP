@@ -609,6 +609,9 @@ function Students() {
       }
 
       setImportProgress({ batch: b + 1, totalBatches, rowsDone: Math.min((b + 1) * IMPORT_BATCH_SIZE, rows.length), totalRows: rows.length });
+      // Refresh the directory table after every batch (not just at the end) so newly-imported
+      // students become visible immediately, even if this modal has been closed in the meantime.
+      fetchStudents();
     }
 
     setImportResults({

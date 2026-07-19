@@ -608,6 +608,7 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
 
         let rank = null;
         let score = null;
+        let solved = null;
         let oldRatingVal = null;
         let newRatingVal = null;
         let ratingChangeVal = null;
@@ -615,6 +616,7 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
         if (plat === 'leetcode') {
           rank = entry.ranking || null;
           score = entry.problemsSolved || null;
+          solved = entry.problemsSolved != null ? entry.problemsSolved : null;
           newRatingVal = entry.rating ? Math.round(entry.rating) : null;
           if (entry.rating && entry.oldRating) {
             oldRatingVal = Math.round(entry.oldRating);
@@ -633,18 +635,19 @@ async function syncStudentPlatform(userId, platform, forceSync = false) {
         }
 
         await db.query(`
-          INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, attendance_status, attendance_source, \`rank\`, score, rating_before, rating_after, rating_change, participated)
-          VALUES (?, ?, ?, ?, ?, 'PRESENT', 'AUTO', ?, ?, ?, ?, ?, 1)
+          INSERT INTO AttendanceRecords (user_id, contest_id, contest_name, contest_slug, contest_date, attendance_status, attendance_source, \`rank\`, score, problems_solved, rating_before, rating_after, rating_change, participated)
+          VALUES (?, ?, ?, ?, ?, 'PRESENT', 'AUTO', ?, ?, ?, ?, ?, ?, 1)
           ON DUPLICATE KEY UPDATE
             attendance_status = 'PRESENT',
             attendance_source = 'AUTO',
             \`rank\` = VALUES(\`rank\`),
             score = VALUES(score),
+            problems_solved = VALUES(problems_solved),
             rating_before = VALUES(rating_before),
             rating_after = VALUES(rating_after),
             rating_change = VALUES(rating_change),
             participated = 1
-        `, [userId, dbContest.contest_id, dbContest.title, dbContest.slug, dbContest.start_time, rank, score, oldRatingVal, newRatingVal, ratingChangeVal]);
+        `, [userId, dbContest.contest_id, dbContest.title, dbContest.slug, dbContest.start_time, rank, score, solved, oldRatingVal, newRatingVal, ratingChangeVal]);
       }
     }
   }

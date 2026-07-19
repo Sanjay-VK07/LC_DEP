@@ -948,14 +948,33 @@ async function bulkImportStudents(req, res) {
           // Update strategy - perform update on active transaction
           if (!dryRun) {
             try {
+              // Re-verify Codeforces on update too, since this branch previously saved the raw
+              // handle with no verification at all, leaving codeforces_verified perpetually unset
+              // (which is what the Codeforces Progress widget requires to show any data).
+              let updateCfVerified = 0, updateCfVerifiedAt = null, updateCfVerifiedSource = null, updateCfNormalized = null;
+              if (trimmedForces && process.env.NODE_ENV !== 'test') {
+                try {
+                  const verifyForcesUpd = await getAdapter('codeforces').getProfile(trimmedForces);
+                  if (verifyForcesUpd.verified) {
+                    updateCfVerified = 1;
+                    updateCfVerifiedAt = new Date();
+                    updateCfVerifiedSource = 'BULK_IMPORT';
+                    updateCfNormalized = normalizeHandle(trimmedForces);
+                  }
+                } catch (err) {}
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+
               // Update student details
               await transactionConnection.query(
-                `UPDATE Users 
-                 SET name = ?, department = ?, section = ?, leetcode_username = ?, codechef_username = ?, 
-                     codeforces_username = ?, hackerrank_username = ?, academic_batch = ?, 
+                `UPDATE Users
+                 SET name = ?, department = ?, section = ?, leetcode_username = ?, codechef_username = ?,
+                     codeforces_username = ?, codeforces_username_normalized = ?, codeforces_verified = ?,
+                     codeforces_verified_at = ?, codeforces_verified_source = ?, hackerrank_username = ?, academic_batch = ?,
                      academic_start_date = ?, academic_end_date = ?, email = ?, phone_number = ?, remarks = ?, college_code = ?
                  WHERE roll_no = ?`,
-                [name, dept, sec.toUpperCase(), trimmedLC, trimmedChef, trimmedForces, trimmedRank, academicBatch, 
+                [name, dept, sec.toUpperCase(), trimmedLC, trimmedChef, trimmedForces, updateCfNormalized, updateCfVerified,
+                 updateCfVerifiedAt, updateCfVerifiedSource, trimmedRank, academicBatch,
                  formatDateForSql(academicStartDate), formatDateForSql(academicEndDate), email || null, phoneNumber || null, remarks || null, collegeCode, trimmedRoll]
               );
               imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: trimmedLC, status: 'updated' });
@@ -974,6 +993,7 @@ async function bulkImportStudents(req, res) {
       let finalChef = trimmedChef;
       let finalForces = trimmedForces;
       let finalRank = trimmedRank;
+      let cfVerified = 0, cfVerifiedAt = null, cfVerifiedSource = null, cfNormalized = null;
 
       if (process.env.NODE_ENV !== 'test') {
         try {
@@ -1000,7 +1020,13 @@ async function bulkImportStudents(req, res) {
         if (trimmedForces) {
           try {
             const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
-            if (verifyForces.verified) finalForces = verifyForces.username;
+            if (verifyForces.verified) {
+              finalForces = verifyForces.username;
+              cfVerified = 1;
+              cfVerifiedAt = new Date();
+              cfVerifiedSource = 'BULK_IMPORT';
+              cfNormalized = normalizeHandle(finalForces);
+            }
           } catch (err) {}
           // Codeforces enforces ~1 request/2s per IP; without this pacing, bulk imports fire
           // requests back-to-back and Codeforces silently stops responding after the first few,
@@ -1022,9 +1048,9 @@ async function bulkImportStudents(req, res) {
           const sqlEndDate = formatDateForSql(academicEndDate);
 
           const result = await transactionConnection.query(
-            `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status, email, phone_number, remarks, college_code) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-            [name, trimmedRoll, dept, sec.toUpperCase(), verifyResult.username, finalChef, finalForces, finalRank, academicBatch, sqlStartDate, sqlEndDate, email || null, phoneNumber || null, remarks || null, collegeCode]
+            `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, codeforces_username_normalized, codeforces_verified, codeforces_verified_at, codeforces_verified_source, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status, email, phone_number, remarks, college_code)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+            [name, trimmedRoll, dept, sec.toUpperCase(), verifyResult.username, finalChef, finalForces, cfNormalized, cfVerified, cfVerifiedAt, cfVerifiedSource, finalRank, academicBatch, sqlStartDate, sqlEndDate, email || null, phoneNumber || null, remarks || null, collegeCode]
           );
 
           const newStudentId = result.insertId || result[0]?.insertId;
