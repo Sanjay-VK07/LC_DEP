@@ -204,25 +204,6 @@ function DataHealth() {
     'CF Total Solved': s.codeforces.totalSolved
   }));
 
-  const handleExportCSV = async () => {
-    setExportingSpreadsheet(true);
-    try {
-      let stats = platformStats;
-      if (!stats?.length) {
-        const res = await axios.get('/api/analytics/platform-stats');
-        stats = res.data.success ? res.data.data : [];
-      }
-      if (!stats?.length) return;
-
-      const rows = buildPlatformStatsRows(stats);
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Student Stats');
-      XLSX.writeFile(wb, `student_data_health_export_${Date.now()}.xlsx`);
-    } finally {
-      setExportingSpreadsheet(false);
-    }
-  };
 
   const toggleRow = (id) => {
     setExpandedStudents(prev => ({ ...prev, [id]: !prev[id] }));
@@ -261,6 +242,31 @@ function DataHealth() {
     const matchesHealth = !filterHealth || s.healthIndicator === filterHealth;
     return matchesSearch && matchesDept && matchesBatch && matchesHealth;
   });
+
+  const handleExportCSV = async () => {
+    setExportingSpreadsheet(true);
+    try {
+      if (!filteredStudents || !filteredStudents.length) return;
+
+      const rows = filteredStudents.map(s => {
+        const leetcode = s.connections?.leetcode || {};
+        return {
+          'Name': s.name !== undefined ? s.name : '',
+          'Roll Number': s.rollNo !== undefined ? s.rollNo : '',
+          'Rating': leetcode.connected && leetcode.currentRating !== undefined && leetcode.currentRating !== null ? leetcode.currentRating : '',
+          'Hard': leetcode.connected && leetcode.hardSolved !== undefined && leetcode.hardSolved !== null ? leetcode.hardSolved : '',
+          'Total': leetcode.connected && leetcode.problemsSolved !== undefined && leetcode.problemsSolved !== null ? leetcode.problemsSolved : ''
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Exported Stats');
+      XLSX.writeFile(wb, 'Diagnostic_Center_Report.xlsx');
+    } finally {
+      setExportingSpreadsheet(false);
+    }
+  };
 
   return (
     <>

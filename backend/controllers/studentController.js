@@ -1547,7 +1547,7 @@ async function getStudentsDataHealth(req, res) {
     );
 
     // 3. Fetch profiles from all platforms
-    const lcRows = await db.query("SELECT user_id, current_rating, problems_solved, last_synced FROM LeetCodeProfiles");
+    const lcRows = await db.query("SELECT user_id, current_rating, problems_solved, hard_solved, last_synced FROM LeetCodeProfiles");
     const ccRows = await db.query("SELECT user_id, current_rating, problems_solved, last_synced FROM CodeChefProfiles");
     const cfRows = await db.query("SELECT user_id, current_rating, problems_solved, last_synced FROM CodeforcesProfiles");
     const hrRows = await db.query("SELECT user_id, problems_solved, last_synced FROM HackerRankProfiles");
@@ -1665,7 +1665,8 @@ async function getStudentsDataHealth(req, res) {
           dataCompleteness: syncState ? syncState.data_completeness : 0,
           nextRetry: syncState ? syncState.next_retry : null,
           problemsSolved: profile ? (profile.problems_solved || 0) : 0,
-          currentRating: profile ? (profile.current_rating || 0) : 0
+          currentRating: profile ? (profile.current_rating || 0) : 0,
+          hardSolved: profile && profile.hard_solved !== undefined ? profile.hard_solved : 0
         };
       };
 
