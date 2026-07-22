@@ -47,6 +47,7 @@ function Attendance() {
   const [lcSearchText, setLcSearchText] = useState('');
   const [lcAvailableSections, setLcAvailableSections] = useState([]);
 
+  // Attendance Sheet state & refs
   const [contests, setContests] = useState([]);
   const [selectedContestId, setSelectedContestId] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('');
@@ -54,6 +55,7 @@ function Attendance() {
   const [leaderboardStudents, setLeaderboardStudents] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [exportingContest, setExportingContest] = useState(false);
+  const listAbortControllerRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [search, setSearch] = useState('');
@@ -80,6 +82,57 @@ function Attendance() {
   const [overrideStatus, setOverrideStatus] = useState('present');
   const [overrideRemarks, setOverrideRemarks] = useState('');
   const [savingOverride, setSavingOverride] = useState(false);
+
+  // Fetch attendance list when selected contest changes or filters change
+  const fetchAttendanceList = useCallback(async () => {
+    if (!selectedContestId) return;
+
+    if (listAbortControllerRef.current) {
+      listAbortControllerRef.current.abort();
+    }
+    listAbortControllerRef.current = new AbortController();
+
+    const fetchStart = Date.now();
+    setLoadingList(true);
+    setUploadSummary(null);
+    setError('');
+    try {
+      const params = {};
+      if (selectedBatch) params.batch = selectedBatch;
+      if (selectedDept) params.department = selectedDept;
+      if (selectedSection) params.section = selectedSection;
+
+      console.log(`[Frontend Telemetry] Fetching attendance for contest ${selectedContestId}...`);
+      const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, {
+        params,
+        signal: listAbortControllerRef.current.signal
+      });
+
+      const fetchTime = Date.now() - fetchStart;
+      
+      if (res.data && res.data.success && Array.isArray(res.data.data)) {
+        logger.debug('Received contest attendance students:', res.data.data);
+        setStudents(res.data.data);
+        setCurrentPage(1);
+        const heapMem = window.performance?.memory ? `${(window.performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(2)} MB` : 'N/A';
+        console.log(`[Frontend Telemetry] Attendance loaded: ${res.data.data.length} records | Duration: ${fetchTime}ms | Heap: ${heapMem}`);
+      } else {
+        const errorMsg = res.data?.message || 'Invalid API response payload.';
+        console.error('[Frontend Fetch Failure]:', errorMsg);
+        setError(errorMsg);
+      }
+    } catch (err) {
+      if (axios.isCancel(err)) {
+        console.log('[Frontend Telemetry] Attendance request canceled cleanly.');
+        return;
+      }
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to fetch attendance sheet.';
+      console.error('[Frontend Fetch Exception]:', err);
+      setError(errorMsg);
+    } finally {
+      setLoadingList(false);
+    }
+  }, [selectedContestId, selectedBatch, selectedDept, selectedSection]);
 
   const fetchSystemHealth = async () => {
     setLoadingHealth(true);
@@ -240,57 +293,6 @@ function Attendance() {
     };
     fetchAvailableSections();
   }, [selectedDept, selectedBatch]);
-
-  // Fetch attendance list when selected contest changes or filters change
-  const fetchAttendanceList = useCallback(async () => {
-    if (!selectedContestId) return;
-
-    if (listAbortControllerRef.current) {
-      listAbortControllerRef.current.abort();
-    }
-    listAbortControllerRef.current = new AbortController();
-
-    const fetchStart = Date.now();
-    setLoadingList(true);
-    setUploadSummary(null);
-    setError('');
-    try {
-      const params = {};
-      if (selectedBatch) params.batch = selectedBatch;
-      if (selectedDept) params.department = selectedDept;
-      if (selectedSection) params.section = selectedSection;
-
-      console.log(`[Frontend Telemetry] Fetching attendance for contest ${selectedContestId}...`);
-      const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, {
-        params,
-        signal: listAbortControllerRef.current.signal
-      });
-
-      const fetchTime = Date.now() - fetchStart;
-      
-      if (res.data && res.data.success && Array.isArray(res.data.data)) {
-        logger.debug('Received contest attendance students:', res.data.data);
-        setStudents(res.data.data);
-        setCurrentPage(1);
-        const heapMem = window.performance?.memory ? `${(window.performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(2)} MB` : 'N/A';
-        console.log(`[Frontend Telemetry] Attendance loaded: ${res.data.data.length} records | Duration: ${fetchTime}ms | Heap: ${heapMem}`);
-      } else {
-        const errorMsg = res.data?.message || 'Invalid API response payload.';
-        console.error('[Frontend Fetch Failure]:', errorMsg);
-        setError(errorMsg);
-      }
-    } catch (err) {
-      if (axios.isCancel(err)) {
-        console.log('[Frontend Telemetry] Attendance request canceled cleanly.');
-        return;
-      }
-      const errorMsg = err.response?.data?.message || err.message || 'Failed to fetch attendance sheet.';
-      console.error('[Frontend Fetch Exception]:', err);
-      setError(errorMsg);
-    } finally {
-      setLoadingList(false);
-    }
-  }, [selectedContestId, selectedBatch, selectedDept, selectedSection]);
 
   useEffect(() => {
     fetchAttendanceList();
