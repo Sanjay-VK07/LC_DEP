@@ -74,36 +74,40 @@ class LiveContestScheduler {
       );
 
       for (const contest of liveContests) {
-        if (isMockContestSlug(contest.contestSlug)) {
-          continue;
-        }
-
-        const endTime = new Date(contest.endTime);
-        const lastSync = contest.lastSyncAt ? new Date(contest.lastSyncAt) : null;
-        const timeSinceLastSync = lastSync ? (now - lastSync) : Infinity;
-        const pass = contest.currentSyncPass || 0;
-
-        if (now > endTime) {
-          // Contest ended: coordinate multi-pass synchronization stages
-          if (pass === 0) {
-            console.log(`[LiveContestScheduler] Contest "${contest.contestName}" ended. Initiating Sync Pass #1...`);
-            await this._triggerSyncPass(contest.id, 1);
-          } else if (pass === 1 && timeSinceLastSync >= 10 * 60 * 1000) {
-            console.log(`[LiveContestScheduler] 10 minutes elapsed since Pass 1. Initiating Sync Pass #2...`);
-            await this._triggerSyncPass(contest.id, 2);
-          } else if (pass === 2 && timeSinceLastSync >= 30 * 60 * 1000) {
-            console.log(`[LiveContestScheduler] 30 minutes elapsed since Pass 2. Initiating Sync Pass #3...`);
-            await this._triggerSyncPass(contest.id, 3);
-          } else if (pass === 3 && timeSinceLastSync >= 120 * 60 * 1000) {
-            console.log(`[LiveContestScheduler] 2 hours elapsed since Pass 3. Initiating Sync Pass #4 (Final Verification)...`);
-            await this._triggerSyncPass(contest.id, 4);
+        try {
+          if (isMockContestSlug(contest.contestSlug)) {
+            continue;
           }
-        } else {
-          // Contest running: sync periodically every 5 minutes
-          if (timeSinceLastSync >= 5 * 60 * 1000) {
-            console.log(`[LiveContestScheduler] Live sync interval reached. Triggering Sync Pass #0 for: "${contest.contestName}"`);
-            await this._triggerSyncPass(contest.id, 0);
+
+          const endTime = new Date(contest.endTime);
+          const lastSync = contest.lastSyncAt ? new Date(contest.lastSyncAt) : null;
+          const timeSinceLastSync = lastSync ? (now - lastSync) : Infinity;
+          const pass = contest.currentSyncPass || 0;
+
+          if (now > endTime) {
+            // Contest ended: coordinate multi-pass synchronization stages
+            if (pass === 0) {
+              console.log(`[LiveContestScheduler] Contest "${contest.contestName}" ended. Initiating Sync Pass #1...`);
+              await this._triggerSyncPass(contest.id, 1);
+            } else if (pass === 1 && timeSinceLastSync >= 10 * 60 * 1000) {
+              console.log(`[LiveContestScheduler] 10 minutes elapsed since Pass 1. Initiating Sync Pass #2...`);
+              await this._triggerSyncPass(contest.id, 2);
+            } else if (pass === 2 && timeSinceLastSync >= 30 * 60 * 1000) {
+              console.log(`[LiveContestScheduler] 30 minutes elapsed since Pass 2. Initiating Sync Pass #3...`);
+              await this._triggerSyncPass(contest.id, 3);
+            } else if (pass === 3 && timeSinceLastSync >= 120 * 60 * 1000) {
+              console.log(`[LiveContestScheduler] 2 hours elapsed since Pass 3. Initiating Sync Pass #4 (Final Verification)...`);
+              await this._triggerSyncPass(contest.id, 4);
+            }
+          } else {
+            // Contest running: sync periodically every 5 minutes
+            if (timeSinceLastSync >= 5 * 60 * 1000) {
+              console.log(`[LiveContestScheduler] Live sync interval reached. Triggering Sync Pass #0 for: "${contest.contestName}"`);
+              await this._triggerSyncPass(contest.id, 0);
+            }
           }
+        } catch (itemErr) {
+          console.error(`[LiveContestScheduler] Error processing live contest ID ${contest?.id}:`, itemErr.message);
         }
       }
 
@@ -113,13 +117,17 @@ class LiveContestScheduler {
       );
 
       for (const contest of upcomingContests) {
-        if (isMockContestSlug(contest.contestSlug)) {
-          continue;
-        }
+        try {
+          if (isMockContestSlug(contest.contestSlug)) {
+            continue;
+          }
 
-        console.log(`[LiveContestScheduler] Upcoming contest "${contest.contestName}" is starting. Transitioning state to Live.`);
-        await db.query("UPDATE LiveContests SET status = 'Live', currentSyncPass = 0 WHERE id = ?", [contest.id]);
-        await this._triggerSyncPass(contest.id, 0);
+          console.log(`[LiveContestScheduler] Upcoming contest "${contest.contestName}" is starting. Transitioning state to Live.`);
+          await db.query("UPDATE LiveContests SET status = 'Live', currentSyncPass = 0 WHERE id = ?", [contest.id]);
+          await this._triggerSyncPass(contest.id, 0);
+        } catch (itemErr) {
+          console.error(`[LiveContestScheduler] Error processing upcoming contest ID ${contest?.id}:`, itemErr.message);
+        }
       }
     } catch (err) {
       console.error('[LiveContestScheduler] State check loop exception:', err.message);

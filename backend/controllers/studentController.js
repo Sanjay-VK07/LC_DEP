@@ -41,17 +41,27 @@ async function getStudents(req, res) {
            u.academic_batch, u.academic_start_date, u.academic_end_date, u.status, u.created_at,
            u.codeforces_verified, u.codeforces_verified_at, u.codeforces_verified_source,
            cfp.current_rating AS codeforces_rating, cfp.rank AS codeforces_rank,
-           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) AS total_contests,
-           (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS attended_contests,
-           (SELECT COUNT(*) FROM Registrations r WHERE r.user_id = u.id) -
-           (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.user_id = u.id) AS missed_contests,
-           (SELECT COUNT(*) FROM ParticipationLogs p
-              JOIN Contests c ON c.contest_id = p.contest_id
-              WHERE p.user_id = u.id AND c.platform = 'LeetCode') AS leetcode_contests_attended,
+           IFNULL(reg.total_contests, 0) AS total_contests,
+           IFNULL(part.attended_contests, 0) AS attended_contests,
+           IFNULL(reg.total_contests, 0) - IFNULL(part.attended_contests, 0) AS missed_contests,
+           IFNULL(part_lc.lc_attended, 0) AS leetcode_contests_attended,
            lp.highest_rating, lp.current_rating, lp.global_ranking AS highest_rank
     FROM Users u
     LEFT JOIN LeetCodeProfiles lp ON u.id = lp.user_id
     LEFT JOIN CodeforcesProfiles cfp ON u.id = cfp.user_id
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) AS total_contests FROM Registrations GROUP BY user_id
+    ) reg ON u.id = reg.user_id
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) AS attended_contests FROM ParticipationLogs GROUP BY user_id
+    ) part ON u.id = part.user_id
+    LEFT JOIN (
+      SELECT p.user_id, COUNT(*) AS lc_attended
+      FROM ParticipationLogs p
+      JOIN Contests c ON c.contest_id = p.contest_id
+      WHERE c.platform = 'LeetCode'
+      GROUP BY p.user_id
+    ) part_lc ON u.id = part_lc.user_id
     WHERE 1=1
   `;
   const params = [];

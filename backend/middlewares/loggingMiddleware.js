@@ -29,6 +29,10 @@ function requestLogger(req, res, next) {
   const sanitizedBody = sanitize(req.body);
 
   res.on('finish', () => {
+    // In production, only log warnings (4xx) and errors (5xx) to minimize I/O overhead
+    const isProd = process.env.NODE_ENV === 'production';
+    if (isProd && res.statusCode < 400) return;
+
     const user = req.user ? `${req.user.username} (${req.user.role})` : 'Anonymous';
     console.log(
       `[HTTP Request] ${method} ${originalUrl} - Status: ${res.statusCode} - User: ${user} - Body: ${JSON.stringify(

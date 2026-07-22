@@ -10,6 +10,7 @@
 
 const db = require('../config/db');
 const contestAnalytics = require('../services/contestAnalyticsService');
+const cache = require('../services/analyticsCacheService');
 
 // ─── Codeforces rating → rank + badge color ─────────────────────────────────
 function getCodeforcesRank(rating) {
@@ -60,143 +61,149 @@ function getMonthRange(date = new Date()) {
 async function getPlatformStats(req, res) {
   try {
     const { department, section, academicBatch } = req.query;
+    const cacheKey = `analytics:platform_stats:${department || 'all'}:${section || 'all'}:${academicBatch || 'all'}`;
 
-    // Fetch all active students with their platform profiles
-    let sql = `
-      SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch,
-             u.leetcode_username, u.codechef_username, u.codeforces_username,
-             lp.contest_history  AS lc_history,
-             lp.current_rating   AS lc_rating,
-             lp.highest_rating   AS lc_best_rating,
-             lp.problems_solved  AS lc_total_solved,
-             cp.contest_history  AS cc_history,
-             cp.current_rating   AS cc_rating,
-             cp.stars            AS cc_stars,
-             cp.problems_solved  AS cc_total_solved,
-             cfp.contest_history AS cf_history,
-             cfp.current_rating  AS cf_rating,
-             cfp.rank            AS cf_rank,
-             cfp.problems_solved AS cf_total_solved
-      FROM Users u
-      LEFT JOIN LeetCodeProfiles  lp  ON lp.user_id  = u.id
-      LEFT JOIN CodeChefProfiles  cp  ON cp.user_id  = u.id
-      LEFT JOIN CodeforcesProfiles cfp ON cfp.user_id = u.id
-      WHERE u.status = 'active'
-    `;
-    const params = [];
-    if (department)   { sql += ' AND u.department = ?';    params.push(department); }
-    if (section)      { sql += ' AND u.section = ?';       params.push(section); }
-    if (academicBatch){ sql += ' AND u.academic_batch = ?'; params.push(academicBatch); }
-    sql += ' ORDER BY u.roll_no ASC';
-
-    const students = await db.query(sql, params);
     const now = new Date();
     const { start: wStart, end: wEnd } = getWeekRange(now);
     const { start: mStart, end: mEnd } = getMonthRange(now);
 
-    const result = students.map(s => {
-      // ── LeetCode ─────────────────────────────────────────────────────────
-      const lcHistory = contestAnalytics.parseContestHistory(s.lc_history);
-      let lcWeekly = 0, lcBiweekly = 0, lcWeeklyMonth = 0, lcBiweeklyMonth = 0;
+    const data = await cache.getOrCompute(cacheKey, async () => {
+      // Fetch all active students with their platform profiles
+      let sql = `
+        SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch,
+               u.leetcode_username, u.codechef_username, u.codeforces_username,
+               lp.contest_history  AS lc_history,
+               lp.current_rating   AS lc_rating,
+               lp.highest_rating   AS lc_best_rating,
+               lp.problems_solved  AS lc_total_solved,
+               cp.contest_history  AS cc_history,
+               cp.current_rating   AS cc_rating,
+               cp.stars            AS cc_stars,
+               cp.problems_solved  AS cc_total_solved,
+               cfp.contest_history AS cf_history,
+               cfp.current_rating  AS cf_rating,
+               cfp.rank            AS cf_rank,
+               cfp.problems_solved AS cf_total_solved
+        FROM Users u
+        LEFT JOIN LeetCodeProfiles  lp  ON lp.user_id  = u.id
+        LEFT JOIN CodeChefProfiles  cp  ON cp.user_id  = u.id
+        LEFT JOIN CodeforcesProfiles cfp ON cfp.user_id = u.id
+        WHERE u.status = 'active'
+      `;
+      const params = [];
+      if (department)   { sql += ' AND u.department = ?';    params.push(department); }
+      if (section)      { sql += ' AND u.section = ?';       params.push(section); }
+      if (academicBatch){ sql += ' AND u.academic_batch = ?'; params.push(academicBatch); }
+      sql += ' ORDER BY u.roll_no ASC';
 
-      lcHistory.forEach(entry => {
-        // attended field: if explicitly false, skip. If true or missing, count it.
-        if (entry.attended === false) return;
-        const slug = (entry.contest?.titleSlug || entry.contestSlug || entry.contest?.title || '').toLowerCase();
-        const ts   = entry.contest?.startTime ? new Date(entry.contest.startTime * 1000)
-                   : entry.contestDate        ? new Date(entry.contestDate) : null;
-        if (!ts || isNaN(ts)) return;
-        const isWeekly    = slug.includes('weekly-contest') || (slug.includes('weekly') && !slug.includes('biweekly'));
-        const isBiweekly  = slug.includes('biweekly-contest') || slug.includes('biweekly');
-        const inThisWeek  = ts >= wStart && ts <= wEnd;
-        const inThisMonth = ts >= mStart && ts <= mEnd;
-        if (isWeekly  && inThisWeek)  lcWeekly++;
-        if (isBiweekly && inThisWeek)  lcBiweekly++;
-        if (isWeekly  && inThisMonth) lcWeeklyMonth++;
-        if (isBiweekly && inThisMonth) lcBiweeklyMonth++;
+      const students = await db.query(sql, params);
+
+      const result = students.map(s => {
+        // ── LeetCode ─────────────────────────────────────────────────────────
+        const lcHistory = contestAnalytics.parseContestHistory(s.lc_history);
+        let lcWeekly = 0, lcBiweekly = 0, lcWeeklyMonth = 0, lcBiweeklyMonth = 0;
+
+        lcHistory.forEach(entry => {
+          // attended field: if explicitly false, skip. If true or missing, count it.
+          if (entry.attended === false) return;
+          const slug = (entry.contest?.titleSlug || entry.contestSlug || entry.contest?.title || '').toLowerCase();
+          const ts   = entry.contest?.startTime ? new Date(entry.contest.startTime * 1000)
+                     : entry.contestDate        ? new Date(entry.contestDate) : null;
+          if (!ts || isNaN(ts)) return;
+          const isWeekly    = slug.includes('weekly-contest') || (slug.includes('weekly') && !slug.includes('biweekly'));
+          const isBiweekly  = slug.includes('biweekly-contest') || slug.includes('biweekly');
+          const inThisWeek  = ts >= wStart && ts <= wEnd;
+          const inThisMonth = ts >= mStart && ts <= mEnd;
+          if (isWeekly  && inThisWeek)  lcWeekly++;
+          if (isBiweekly && inThisWeek)  lcBiweekly++;
+          if (isWeekly  && inThisMonth) lcWeeklyMonth++;
+          if (isBiweekly && inThisMonth) lcBiweeklyMonth++;
+        });
+
+        // ── CodeChef ──────────────────────────────────────────────────────────
+        const ccHistory = contestAnalytics.parseContestHistory(s.cc_history);
+        let ccWedWeek = 0, ccWedMonth = 0;
+
+        ccHistory.forEach(entry => {
+          const name = (entry.contestName || entry.contest?.title || '').toLowerCase();
+          const dateStr = entry.contestDate || entry.contest?.startTime || null;
+          if (!dateStr) return;
+          const ts = new Date(dateStr);
+          if (isNaN(ts)) return;
+          // CodeChef Starters = Wednesday contests
+          const isWednesday = ts.getDay() === 3;
+          const isStarter   = name.includes('starters') || isWednesday;
+          const inThisWeek  = ts >= wStart && ts <= wEnd;
+          const inThisMonth = ts >= mStart && ts <= mEnd;
+          if (isStarter && inThisWeek)  ccWedWeek++;
+          if (isStarter && inThisMonth) ccWedMonth++;
+        });
+
+        // ── Codeforces ────────────────────────────────────────────────────────
+        const cfRating = s.cf_rating ? Number(s.cf_rating) : 0;
+        const cfBadge  = getCodeforcesRank(cfRating);
+        const cfHistory = contestAnalytics.parseContestHistory(s.cf_history);
+        let cfWeek = 0, cfMonth = 0;
+
+        cfHistory.forEach(entry => {
+          const ts = entry.ratingUpdateTimeSeconds
+            ? new Date(entry.ratingUpdateTimeSeconds * 1000)
+            : null;
+          if (!ts || isNaN(ts)) return;
+          if (ts >= wStart && ts <= wEnd)  cfWeek++;
+          if (ts >= mStart && ts <= mEnd) cfMonth++;
+        });
+
+        const ccStarColor = getCodeChefStarColor(s.cc_stars);
+
+        return {
+          id: s.id,
+          name: s.name,
+          rollNo: s.roll_no,
+          department: s.department,
+          section: s.section,
+          batch: s.academic_batch,
+          leetcode: {
+            username: s.leetcode_username || null,
+            rating: s.lc_rating ? Number(s.lc_rating) : null,
+            bestRating: s.lc_best_rating ? Number(s.lc_best_rating) : null,
+            totalSolved: s.lc_total_solved || 0,
+            weeklyThisWeek: lcWeekly,
+            biweeklyThisWeek: lcBiweekly,
+            weeklyThisMonth: lcWeeklyMonth,
+            biweeklyThisMonth: lcBiweeklyMonth
+          },
+          codechef: {
+            username: s.codechef_username || null,
+            rating: s.cc_rating ? Number(s.cc_rating) : null,
+            stars: s.cc_stars || null,
+            starColor: ccStarColor,
+            totalSolved: s.cc_total_solved || 0,
+            wednesdayContestsThisWeek: ccWedWeek,
+            wednesdayContestsThisMonth: ccWedMonth
+          },
+          codeforces: {
+            username: s.codeforces_username || null,
+            rating: cfRating || null,
+            rank: cfBadge.rank,
+            rankColor: cfBadge.color,
+            rankBg: cfBadge.bg,
+            totalSolved: s.cf_total_solved || 0,
+            contestsThisWeek: cfWeek,
+            contestsThisMonth: cfMonth
+          }
+        };
       });
 
-      // ── CodeChef ──────────────────────────────────────────────────────────
-      const ccHistory = contestAnalytics.parseContestHistory(s.cc_history);
-      let ccWedWeek = 0, ccWedMonth = 0;
-
-      ccHistory.forEach(entry => {
-        const name = (entry.contestName || entry.contest?.title || '').toLowerCase();
-        const dateStr = entry.contestDate || entry.contest?.startTime || null;
-        if (!dateStr) return;
-        const ts = new Date(dateStr);
-        if (isNaN(ts)) return;
-        // CodeChef Starters = Wednesday contests
-        const isWednesday = ts.getDay() === 3;
-        const isStarter   = name.includes('starters') || isWednesday;
-        const inThisWeek  = ts >= wStart && ts <= wEnd;
-        const inThisMonth = ts >= mStart && ts <= mEnd;
-        if (isStarter && inThisWeek)  ccWedWeek++;
-        if (isStarter && inThisMonth) ccWedMonth++;
-      });
-
-      // ── Codeforces ────────────────────────────────────────────────────────
-      const cfRating = s.cf_rating ? Number(s.cf_rating) : 0;
-      const cfBadge  = getCodeforcesRank(cfRating);
-      const cfHistory = contestAnalytics.parseContestHistory(s.cf_history);
-      let cfWeek = 0, cfMonth = 0;
-
-      cfHistory.forEach(entry => {
-        const ts = entry.ratingUpdateTimeSeconds
-          ? new Date(entry.ratingUpdateTimeSeconds * 1000)
-          : null;
-        if (!ts || isNaN(ts)) return;
-        if (ts >= wStart && ts <= wEnd)  cfWeek++;
-        if (ts >= mStart && ts <= mEnd) cfMonth++;
-      });
-
-      const ccStarColor = getCodeChefStarColor(s.cc_stars);
-
-      return {
-        id: s.id,
-        name: s.name,
-        rollNo: s.roll_no,
-        department: s.department,
-        section: s.section,
-        batch: s.academic_batch,
-        leetcode: {
-          username: s.leetcode_username || null,
-          rating: s.lc_rating ? Number(s.lc_rating) : null,
-          bestRating: s.lc_best_rating ? Number(s.lc_best_rating) : null,
-          totalSolved: s.lc_total_solved || 0,
-          weeklyThisWeek: lcWeekly,
-          biweeklyThisWeek: lcBiweekly,
-          weeklyThisMonth: lcWeeklyMonth,
-          biweeklyThisMonth: lcBiweeklyMonth
-        },
-        codechef: {
-          username: s.codechef_username || null,
-          rating: s.cc_rating ? Number(s.cc_rating) : null,
-          stars: s.cc_stars || null,
-          starColor: ccStarColor,
-          totalSolved: s.cc_total_solved || 0,
-          wednesdayContestsThisWeek: ccWedWeek,
-          wednesdayContestsThisMonth: ccWedMonth
-        },
-        codeforces: {
-          username: s.codeforces_username || null,
-          rating: cfRating || null,
-          rank: cfBadge.rank,
-          rankColor: cfBadge.color,
-          rankBg: cfBadge.bg,
-          totalSolved: s.cf_total_solved || 0,
-          contestsThisWeek: cfWeek,
-          contestsThisMonth: cfMonth
-        }
-      };
+      return result;
     });
 
     return res.json({
       success: true,
-      count: result.length,
+      count: data ? data.length : 0,
       week: { start: wStart.toISOString(), end: wEnd.toISOString() },
       month: { start: mStart.toISOString(), end: mEnd.toISOString() },
-      data: result
+      data
     });
   } catch (err) {
     console.error('[PlatformStats] Error:', err);

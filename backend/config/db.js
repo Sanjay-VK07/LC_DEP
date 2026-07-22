@@ -139,8 +139,10 @@ async function initializeDatabase() {
       ...config,
       database: dbName,
       waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0
+      connectionLimit: process.env.DB_CONNECTION_LIMIT ? parseInt(process.env.DB_CONNECTION_LIMIT, 10) : 10,
+      queueLimit: 0,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 0
     });
 
     const originalEnd = pool.end;
@@ -326,80 +328,126 @@ async function initializeDatabase() {
   }
 }
 
-// Helper function to query the pool
-async function query(sql, params) {
-  if (!pool || !isConnected) {
-    const errorMsg = 'Database connection is currently unavailable. Please verify your credentials in backend/.env and ensure the MySQL service is running.';
-    console.error(`[DB QUERY ERROR] ${errorMsg}`);
-    throw new Error(errorMsg);
-  }
+function isTransientDbError(err) {
+  if (!err) return false;
+  const code = err.code || '';
+  const message = err.message || '';
+  const transientCodes = [
+    'ECONNRESET',
+    'PROTOCOL_CONNECTION_LOST',
+    'ETIMEDOUT',
+    'ECONNREFUSED',
+    'ER_CON_COUNT_ERROR',
+    'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+    'PROTOCOL_UNHANDLED_ERROR',
+    'EPIPE',
+    'EHOSTUNREACH',
+    'ENOTFOUND'
+  ];
+  return (
+    transientCodes.includes(code) ||
+    err.fatal === true ||
+    message.includes('read ECONNRESET') ||
+    message.includes('Connection lost') ||
+    message.includes('connect ECONNREFUSED')
+  );
+}
 
-  // Production Safety Firewall for Contests
-  const isTestOrDevEnv = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'dev';
-  if (!isTestOrDevEnv) {
-    const isContestInsert = /insert\s+into\s+contests/i.test(sql);
-    if (isContestInsert) {
-      const testPatterns = [
-        /\btest\b/i,
-        /\bfail\b/i,
-        /\bdummy\b/i,
-        /\bmock\b/i,
-        /\bsample\b/i,
-        /\bdemo\b/i,
-        /\bdebug\b/i,
-        /\bfake\b/i,
-        /\bseed\b/i,
-        /\btemporary\b/i
-      ];
-      for (const param of (params || [])) {
-        if (typeof param === 'string') {
-          const isMatch = testPatterns.some(pat => pat.test(param));
-          if (isMatch) {
-            throw new Error(`Production Database Safety Rule: Rejecting contest creation/modification with test-only keywords: "${param}"`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Helper function to query the pool with automatic retry for transient errors
+async function query(sql, params, options = {}) {
+  const maxRetries = options.maxRetries ?? 3;
+  let attempt = 0;
+
+  while (true) {
+    if (!pool || !isConnected) {
+      const errorMsg = 'Database connection is currently unavailable. Please verify your credentials in backend/.env and ensure the MySQL service is running.';
+      console.error(`[DB QUERY ERROR] ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
+
+    // Production Safety Firewall for Contests
+    const isTestOrDevEnv = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'dev';
+    if (!isTestOrDevEnv) {
+      const isContestInsert = /insert\s+into\s+contests/i.test(sql);
+      if (isContestInsert) {
+        const testPatterns = [
+          /\btest\b/i,
+          /\bfail\b/i,
+          /\bdummy\b/i,
+          /\bmock\b/i,
+          /\bsample\b/i,
+          /\bdemo\b/i,
+          /\bdebug\b/i,
+          /\bfake\b/i,
+          /\bseed\b/i,
+          /\btemporary\b/i
+        ];
+        for (const param of (params || [])) {
+          if (typeof param === 'string') {
+            const isMatch = testPatterns.some(pat => pat.test(param));
+            if (isMatch) {
+              throw new Error(`Production Database Safety Rule: Rejecting contest creation/modification with test-only keywords: "${param}"`);
+            }
           }
         }
       }
     }
-  }
 
-  const placeholderCount = (sql.match(/\?/g) || []).length;
-  const paramCount = (params || []).length;
+    // Perform diagnostic placeholder count audit only when DB_QUERY_DEBUG is enabled
+    if (process.env.DB_QUERY_DEBUG === 'true') {
+      const placeholderCount = (sql.match(/\?/g) || []).length;
+      const paramCount = (params || []).length;
 
-  // Diagnostic logging (only in dev/debug mode)
-  if (process.env.DB_QUERY_DEBUG === 'true') {
-    console.log('--- DB Query Audit ---');
-    console.log('SQL Statement:', sql.trim());
-    console.log('Placeholders Count:', placeholderCount);
-    console.log('Supplied Values Count:', paramCount);
-    console.log('Supplied Values:', JSON.stringify(params || []));
-    console.log('----------------------');
-  }
+      console.log('--- DB Query Audit ---');
+      console.log('SQL Statement:', sql.trim());
+      console.log('Placeholders Count:', placeholderCount);
+      console.log('Supplied Values Count:', paramCount);
+      console.log('Supplied Values:', JSON.stringify(params || []));
+      console.log('----------------------');
 
-  if (placeholderCount !== paramCount) {
-    const auditError = new Error(`Column count / Placeholder count mismatch. SQL has ${placeholderCount} placeholders but ${paramCount} values were supplied.`);
-    console.error('======================================================================');
-    console.error('DIAGNOSTIC REPORT: QUERY PRE-VALIDATION FAILURE');
-    console.error('SQL:', sql);
-    console.error('Placeholder Count:', placeholderCount);
-    console.error('Value Count:', paramCount);
-    console.error('Values:', params);
-    console.error('======================================================================');
-    throw auditError;
-  }
-  
-  try {
-    const [results] = await pool.execute(sql, params);
-    return results;
-  } catch (err) {
-    console.error('======================================================================');
-    console.error('DIAGNOSTIC REPORT: DATABASE QUERY EXECUTION FAILURE');
-    console.error('SQL:', sql);
-    console.error('Placeholder Count:', placeholderCount);
-    console.error('Value Count:', paramCount);
-    console.error('Values:', params);
-    console.error('Database Error:', err);
-    console.error('======================================================================');
-    throw err;
+      if (placeholderCount !== paramCount) {
+        const auditError = new Error(`Column count / Placeholder count mismatch. SQL has ${placeholderCount} placeholders but ${paramCount} values were supplied.`);
+        console.error('======================================================================');
+        console.error('DIAGNOSTIC REPORT: QUERY PRE-VALIDATION FAILURE');
+        console.error('SQL:', sql);
+        console.error('Placeholder Count:', placeholderCount);
+        console.error('Value Count:', paramCount);
+        console.error('Values:', params);
+        console.error('======================================================================');
+        throw auditError;
+      }
+    }
+
+    try {
+      const [results] = await pool.execute(sql, params);
+      return results;
+    } catch (err) {
+      if (isTransientDbError(err) && attempt < maxRetries) {
+        attempt++;
+        const backoffMs = Math.min(100 * Math.pow(2, attempt) + Math.floor(Math.random() * 50), 2000);
+        const sqlSnippet = sql.trim().replace(/\s+/g, ' ').substring(0, 100);
+        console.warn(`[DB RETRY] Transient database error detected (Code: ${err.code || 'N/A'}, Message: "${err.message}"). SQL: "${sqlSnippet}...". Retry attempt ${attempt}/${maxRetries} after ${backoffMs}ms...`);
+        await sleep(backoffMs);
+        continue;
+      }
+
+      const placeholderCount = (sql.match(/\?/g) || []).length;
+      const paramCount = (params || []).length;
+      console.error('======================================================================');
+      console.error(`DIAGNOSTIC REPORT: DATABASE QUERY EXECUTION FAILURE (Attempt ${attempt + 1}/${maxRetries + 1})`);
+      console.error('SQL:', sql);
+      console.error('Placeholder Count:', placeholderCount);
+      console.error('Value Count:', paramCount);
+      console.error('Values:', params);
+      console.error('Database Error Code:', err.code || 'N/A');
+      console.error('Database Error Message:', err.message);
+      console.error('Fatal:', err.fatal || false);
+      console.error('Total Retry Count:', attempt);
+      console.error('======================================================================');
+      throw err;
+    }
   }
 }
 

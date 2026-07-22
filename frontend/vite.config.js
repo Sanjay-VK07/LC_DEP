@@ -13,5 +13,24 @@ export default defineConfig({
         secure: false,
       }
     }
+  },
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('chart.js') || id.includes('recharts') || id.includes('react-chartjs-2')) {
+              return 'charts-vendor';
+            }
+            if (id.includes('xlsx') || id.includes('jspdf') || id.includes('file-saver')) {
+              return 'export-vendor';
+            }
+            return 'vendor';
+          }
+        }
+      }
+    }
   }
 })

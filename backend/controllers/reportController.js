@@ -28,237 +28,165 @@ function parseDateOnly(dateInput) {
 async function getDashboardStats(req, res) {
   const { platform } = req.query;
   const filterPlatform = platform ? platform.toLowerCase() : 'all';
+  const cacheKey = `dashboard:stats:${filterPlatform}`;
 
   try {
-    // Total Students (Active)
-    const [totalStudentsResult] = await db.query(
-      "SELECT COUNT(*) as count FROM Users WHERE status = 'active'"
-    );
-    const totalStudents = totalStudentsResult ? totalStudentsResult.count : 0;
+    const data = await cache.getOrCompute(cacheKey, async () => {
+      // Total Students (Active)
+      const [totalStudentsResult] = await db.query(
+        "SELECT COUNT(*) as count FROM Users WHERE status = 'active'"
+      );
+      const totalStudents = totalStudentsResult ? totalStudentsResult.count : 0;
 
-    // Fetch all contests counts
-    let contestsSql = "SELECT contest_status, contest_type FROM Contests";
-    const contestsParams = [];
-    if (filterPlatform !== 'all') {
-      contestsSql += " WHERE platform = ?";
-      contestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
-    }
-    const contestsResult = await db.query(contestsSql, contestsParams);
-    
-    const totalContests = contestsResult.length;
-    const ratedContests = contestsResult.filter(c => c.contest_status === 'Rated').length;
-    const unratedContests = contestsResult.filter(c => c.contest_status === 'Unrated').length;
-    const cancelledContests = contestsResult.filter(c => c.contest_status === 'Cancelled').length;
-    const weeklyContests = contestsResult.filter(c => c.contest_type === 'Weekly').length;
-    const biweeklyContests = contestsResult.filter(c => c.contest_type === 'Biweekly').length;
+      // Fetch all contests counts
+      let contestsSql = "SELECT contest_status, contest_type FROM Contests";
+      const contestsParams = [];
+      if (filterPlatform !== 'all') {
+        contestsSql += " WHERE platform = ?";
+        contestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+      }
+      const contestsResult = await db.query(contestsSql, contestsParams);
+      
+      const totalContests = contestsResult.length;
+      const ratedContests = contestsResult.filter(c => c.contest_status === 'Rated').length;
+      const unratedContests = contestsResult.filter(c => c.contest_status === 'Unrated').length;
+      const cancelledContests = contestsResult.filter(c => c.contest_status === 'Cancelled').length;
+      const weeklyContests = contestsResult.filter(c => c.contest_type === 'Weekly').length;
+      const biweeklyContests = contestsResult.filter(c => c.contest_type === 'Biweekly').length;
 
-    // Overall Attendance Percentage
-    const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
-    const [attendancePercentResult] = await db.query(
-      `SELECT 
-         COUNT(*) as total_regs,
-         SUM(CASE WHEN ar.attendance_status = 'PRESENT' THEN 1 ELSE 0 END) as total_parts
-       FROM AttendanceRecords ar
-       JOIN Contests c ON ar.contest_id = c.contest_id
-       JOIN Users u ON ar.user_id = u.id
-       WHERE c.contest_status = 'Rated'${platformFilterStr}
-         AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
-         AND u.status = 'active'
-         AND c.start_time >= u.academic_start_date 
-         AND c.start_time <= u.academic_end_date
-         -- Exclude test/mock/dummy/retry/stale/crashed/regression/internal contests
-         AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-         AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-         AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-         AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-         AND c.slug NOT LIKE '%internal-%'`
-    );
-    const totalRegs = attendancePercentResult ? attendancePercentResult.total_regs : 0;
-    const totalParts = attendancePercentResult ? attendancePercentResult.total_parts : 0;
-    const overallAttendance = totalRegs > 0 ? Math.round((totalParts / totalRegs) * 100) : 0;
+      // Overall Attendance Percentage
+      const platformFilterStr = filterPlatform === 'all' ? '' : (filterPlatform === 'codechef' ? " AND c.platform = 'CodeChef'" : " AND c.platform = 'LeetCode'");
+      const [attendancePercentResult] = await db.query(
+        `SELECT 
+           COUNT(*) as total_regs,
+           SUM(CASE WHEN ar.attendance_status = 'PRESENT' THEN 1 ELSE 0 END) as total_parts
+         FROM AttendanceRecords ar
+         JOIN Contests c ON ar.contest_id = c.contest_id
+         JOIN Users u ON ar.user_id = u.id
+         WHERE c.contest_status = 'Rated'${platformFilterStr}
+           AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+           AND u.status = 'active'
+           AND c.start_time >= u.academic_start_date 
+           AND c.start_time <= u.academic_end_date
+           AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+           AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+           AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+           AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+           AND c.slug NOT LIKE '%internal-%'`
+      );
+      const totalRegs = attendancePercentResult ? attendancePercentResult.total_regs : 0;
+      const totalParts = attendancePercentResult ? attendancePercentResult.total_parts : 0;
+      const overallAttendance = totalRegs > 0 ? Math.round((totalParts / totalRegs) * 100) : 0;
 
-    // Average Rating
-    const profileTable = filterPlatform === 'codechef' ? 'CodeChefProfiles' : 'LeetCodeProfiles';
-    const [avgRatingResult] = await db.query(
-      `SELECT AVG(current_rating) as avgRating FROM ${profileTable} lp JOIN Users u ON lp.user_id = u.id WHERE u.status = 'active'`
-    );
-    const averageRating = avgRatingResult && avgRatingResult.avgRating ? Math.round(avgRatingResult.avgRating) : 1500;
+      // Average Rating
+      const profileTable = filterPlatform === 'codechef' ? 'CodeChefProfiles' : 'LeetCodeProfiles';
+      const [avgRatingResult] = await db.query(
+        `SELECT AVG(current_rating) as avgRating FROM ${profileTable} lp JOIN Users u ON lp.user_id = u.id WHERE u.status = 'active'`
+      );
+      const averageRating = avgRatingResult && avgRatingResult.avgRating ? Math.round(avgRatingResult.avgRating) : 1500;
 
-    // Recently Synced Records
-    const [latestSyncResult] = await db.query(
-      "SELECT completed_at, contests_synced, students_processed FROM sync_logs WHERE status = 'success' ORDER BY started_at DESC LIMIT 1"
-    );
-    const recentlySynced = latestSyncResult ? {
-      time: latestSyncResult.completed_at,
-      contests: latestSyncResult.contests_synced,
-      students: latestSyncResult.students_processed
-    } : null;
+      // Recently Synced Records
+      const [latestSyncResult] = await db.query(
+        "SELECT completed_at, contests_synced, students_processed FROM sync_logs WHERE status = 'success' ORDER BY started_at DESC LIMIT 1"
+      );
+      const recentlySynced = latestSyncResult ? {
+        time: latestSyncResult.completed_at,
+        contests: latestSyncResult.contests_synced,
+        students: latestSyncResult.students_processed
+      } : null;
 
-    // Department-wise Stats
-    const deptStats = await db.query(
-      `SELECT u.department, 
-              COUNT(DISTINCT u.id) as total_students,
-              IFNULL((
-                SELECT COUNT(*) 
-                FROM AttendanceRecords ar 
-                JOIN Users u2 ON ar.user_id = u2.id 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE u2.department = u.department 
-                  AND u2.status = 'active'
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u2.academic_start_date 
-                  AND c.start_time <= u2.academic_end_date
-                  AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ), 0) as total_records,
-              IFNULL((
-                SELECT COUNT(*) 
-                FROM AttendanceRecords ar 
-                JOIN Users u3 ON ar.user_id = u3.id 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE u3.department = u.department 
-                  AND u3.status = 'active'
-                  AND ar.attendance_status = 'PRESENT'
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u3.academic_start_date 
-                  AND c.start_time <= u3.academic_end_date
-                  AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ), 0) as present_count
-       FROM Users u
-       WHERE u.status = 'active'
-       GROUP BY u.department`
-    );
+      // Department-wise Stats
+      const deptStats = await db.query(
+        `SELECT u.department, 
+                COUNT(DISTINCT u.id) as total_students,
+                IFNULL((
+                  SELECT COUNT(*) 
+                  FROM AttendanceRecords ar 
+                  JOIN Users u2 ON ar.user_id = u2.id 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE u2.department = u.department 
+                    AND u2.status = 'active'
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u2.academic_start_date 
+                    AND c.start_time <= u2.academic_end_date
+                    AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ), 0) as total_records,
+                IFNULL((
+                  SELECT COUNT(*) 
+                  FROM AttendanceRecords ar 
+                  JOIN Users u3 ON ar.user_id = u3.id 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE u3.department = u.department 
+                    AND u3.status = 'active'
+                    AND ar.attendance_status = 'PRESENT'
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u3.academic_start_date 
+                    AND c.start_time <= u3.academic_end_date
+                    AND c.start_time + INTERVAL IFNULL(c.duration, 5400) SECOND <= NOW()
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ), 0) as present_count
+         FROM Users u
+         WHERE u.status = 'active'
+         GROUP BY u.department`
+      );
 
-    const departmentStats = deptStats.map(d => ({
-      department: d.department,
-      totalStudents: d.total_students,
-      attendancePercentage: d.total_records > 0 ? Math.round((d.present_count / d.total_records) * 100) : 100
-    }));
+      const departmentStats = deptStats.map(d => ({
+        department: d.department,
+        totalStudents: d.total_students,
+        attendancePercentage: d.total_records > 0 ? Math.round((d.present_count / d.total_records) * 100) : 100
+      }));
 
-    // Weekly Participation Trend (last 10 contests)
-    let weeklyTrendSql = `
-       SELECT c.title as name, c.start_time as date, c.platform,
-              (
-                SELECT COUNT(DISTINCT ar.user_id) 
-                FROM AttendanceRecords ar 
-                JOIN Users u ON ar.user_id = u.id
-                WHERE ar.contest_id = c.contest_id 
-                  AND ar.attendance_status = 'PRESENT'
-                  AND u.status = 'active'
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-              ) as present_count,
-              (
-                SELECT COUNT(*) 
-                FROM Users u
-                WHERE u.status = 'active'
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-              ) as total_students
-       FROM Contests c
-    `;
-    const weeklyTrendParams = [];
-    let whereClause = ` WHERE c.contest_status = 'Rated'
-      AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-      AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-      AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-      AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-      AND c.slug NOT LIKE '%internal-%' `;
+      // Weekly Participation Trend (last 10 contests)
+      let weeklyTrendSql = `
+         SELECT c.title as name, c.start_time as date, c.platform,
+                (
+                  SELECT COUNT(DISTINCT ar.user_id) 
+                  FROM AttendanceRecords ar 
+                  JOIN Users u ON ar.user_id = u.id
+                  WHERE ar.contest_id = c.contest_id 
+                    AND ar.attendance_status = 'PRESENT'
+                    AND u.status = 'active'
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                ) as present_count,
+                (
+                  SELECT COUNT(*) 
+                  FROM Users u
+                  WHERE u.status = 'active'
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                ) as total_students
+         FROM Contests c
+      `;
+      const weeklyTrendParams = [];
+      let whereClause = ` WHERE c.contest_status = 'Rated'
+        AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+        AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+        AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+        AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+        AND c.slug NOT LIKE '%internal-%' `;
 
-    if (filterPlatform !== 'all') {
-      whereClause += ` AND c.platform = ? `;
-      weeklyTrendParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
-    }
-    weeklyTrendSql += whereClause + ` ORDER BY c.start_time DESC LIMIT 10 `;
+      if (filterPlatform !== 'all') {
+        whereClause += ` AND c.platform = ? `;
+        weeklyTrendParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
+      }
+      weeklyTrendSql += whereClause + ` ORDER BY c.start_time DESC LIMIT 10 `;
 
-    const weeklyTrend = await db.query(weeklyTrendSql, weeklyTrendParams);
-    // Reverse to chronological order for charts
-    weeklyTrend.reverse();
+      const weeklyTrend = await db.query(weeklyTrendSql, weeklyTrendParams);
+      weeklyTrend.reverse();
 
-    // Top Active Students (highest current rating)
-    const topStudents = await db.query(
-      `SELECT u.id, u.name, u.roll_no as register_number, u.leetcode_username, u.codechef_username, u.department,
-              (
-                SELECT COUNT(DISTINCT ar.contest_id) 
-                FROM AttendanceRecords ar 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE ar.user_id = u.id 
-                  AND ar.attendance_status = 'PRESENT'
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-                  -- Exclude test contests
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ) as present_count,
-              (
-                SELECT COUNT(DISTINCT ar.contest_id) 
-                FROM AttendanceRecords ar 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE ar.user_id = u.id 
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-                  -- Exclude test contests
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ) as total_contests,
-              ROUND(IFNULL(lp.current_rating, 1500)) as current_rating
-       FROM Users u
-       LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
-       WHERE u.status = 'active'
-       ORDER BY current_rating DESC, present_count DESC
-       LIMIT 5`
-    );
-
-    // Students with Low Attendance (< 10%)
-    const lowAttendanceStudents = await db.query(
-      `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
-              (
-                SELECT COUNT(DISTINCT ar.contest_id) 
-                FROM AttendanceRecords ar 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE ar.user_id = u.id 
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ) as total_contests,
-              (
-                SELECT COUNT(DISTINCT ar.contest_id) 
-                FROM AttendanceRecords ar 
-                JOIN Contests c ON ar.contest_id = c.contest_id 
-                WHERE ar.user_id = u.id 
-                  AND ar.attendance_status = 'PRESENT'
-                  AND c.contest_status = 'Rated'${platformFilterStr}
-                  AND c.start_time >= u.academic_start_date 
-                  AND c.start_time <= u.academic_end_date
-                  AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-                  AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-                  AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-                  AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-                  AND c.slug NOT LIKE '%internal-%'
-              ) as present_count,
-              ROUND(
+      // Top Active Students (highest current rating)
+      const topStudents = await db.query(
+        `SELECT u.id, u.name, u.roll_no as register_number, u.leetcode_username, u.codechef_username, u.department,
                 (
                   SELECT COUNT(DISTINCT ar.contest_id) 
                   FROM AttendanceRecords ar 
@@ -273,12 +201,68 @@ async function getDashboardStats(req, res) {
                     AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
                     AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
                     AND c.slug NOT LIKE '%internal-%'
-                ) / NULLIF(
+                ) as present_count,
+                (
+                  SELECT COUNT(DISTINCT ar.contest_id) 
+                  FROM AttendanceRecords ar 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE ar.user_id = u.id 
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ) as total_contests,
+                ROUND(IFNULL(lp.current_rating, 1500)) as current_rating
+         FROM Users u
+         LEFT JOIN ${profileTable} lp ON u.id = lp.user_id
+         WHERE u.status = 'active'
+         ORDER BY current_rating DESC, present_count DESC
+         LIMIT 5`
+      );
+
+      // Students with Low Attendance (< 10%)
+      const lowAttendanceStudents = await db.query(
+        `SELECT u.id, u.name, u.roll_no as register_number, u.department, u.section,
+                (
+                  SELECT COUNT(DISTINCT ar.contest_id) 
+                  FROM AttendanceRecords ar 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE ar.user_id = u.id 
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ) as total_contests,
+                (
+                  SELECT COUNT(DISTINCT ar.contest_id) 
+                  FROM AttendanceRecords ar 
+                  JOIN Contests c ON ar.contest_id = c.contest_id 
+                  WHERE ar.user_id = u.id 
+                    AND ar.attendance_status = 'PRESENT'
+                    AND c.contest_status = 'Rated'${platformFilterStr}
+                    AND c.start_time >= u.academic_start_date 
+                    AND c.start_time <= u.academic_end_date
+                    AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                    AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                    AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                    AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                    AND c.slug NOT LIKE '%internal-%'
+                ) as present_count,
+                ROUND(
                   (
                     SELECT COUNT(DISTINCT ar.contest_id) 
                     FROM AttendanceRecords ar 
                     JOIN Contests c ON ar.contest_id = c.contest_id 
                     WHERE ar.user_id = u.id 
+                      AND ar.attendance_status = 'PRESENT'
                       AND c.contest_status = 'Rated'${platformFilterStr}
                       AND c.start_time >= u.academic_start_date 
                       AND c.start_time <= u.academic_end_date
@@ -287,69 +271,86 @@ async function getDashboardStats(req, res) {
                       AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
                       AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
                       AND c.slug NOT LIKE '%internal-%'
-                  ), 0
-                ) * 100
-              ) as attendance_percentage
-       FROM Users u
-       WHERE u.status = 'active' 
-         AND (
-           SELECT COUNT(DISTINCT ar.contest_id) 
-           FROM AttendanceRecords ar 
-           JOIN Contests c ON ar.contest_id = c.contest_id 
-           WHERE ar.user_id = u.id 
-             AND c.contest_status = 'Rated'${platformFilterStr}
-             AND c.start_time >= u.academic_start_date 
-             AND c.start_time <= u.academic_end_date
-             AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
-             AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
-             AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
-             AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
-             AND c.slug NOT LIKE '%internal-%'
-         ) >= 3 
-       HAVING attendance_percentage < 10
-       ORDER BY attendance_percentage ASC
-       LIMIT 10`
-    );
+                  ) / NULLIF(
+                    (
+                      SELECT COUNT(DISTINCT ar.contest_id) 
+                      FROM AttendanceRecords ar 
+                      JOIN Contests c ON ar.contest_id = c.contest_id 
+                      WHERE ar.user_id = u.id 
+                        AND c.contest_status = 'Rated'${platformFilterStr}
+                        AND c.start_time >= u.academic_start_date 
+                        AND c.start_time <= u.academic_end_date
+                        AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+                        AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+                        AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+                        AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+                        AND c.slug NOT LIKE '%internal-%'
+                    ), 0
+                  ) * 100
+                ) as attendance_percentage
+         FROM Users u
+         WHERE u.status = 'active' 
+           AND (
+             SELECT COUNT(DISTINCT ar.contest_id) 
+             FROM AttendanceRecords ar 
+             JOIN Contests c ON ar.contest_id = c.contest_id 
+             WHERE ar.user_id = u.id 
+               AND c.contest_status = 'Rated'${platformFilterStr}
+               AND c.start_time >= u.academic_start_date 
+               AND c.start_time <= u.academic_end_date
+               AND c.slug NOT LIKE 'test-%' AND c.slug NOT LIKE '%-test-%' AND c.slug NOT LIKE '%-test'
+               AND c.slug NOT LIKE '%mock-%' AND c.slug NOT LIKE '%dummy-%'
+               AND c.slug NOT LIKE '%retry-%' AND c.slug NOT LIKE '%stale-%'
+               AND c.slug NOT LIKE '%crashed-%' AND c.slug NOT LIKE '%regression-%'
+               AND c.slug NOT LIKE '%internal-%'
+           ) >= 3 
+         HAVING attendance_percentage < 10
+         ORDER BY attendance_percentage ASC
+         LIMIT 10`
+      );
 
-    // Recently Added Contests (last 2 weeks)
-    let recentContestsSql = `
-       SELECT title as name, start_time as date, platform
-       FROM Contests 
-       WHERE start_time >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
-    `;
-    const recentContestsParams = [];
-    if (filterPlatform !== 'all') {
-      recentContestsSql += ` AND platform = ? `;
-      recentContestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
-    }
-    recentContestsSql += ` ORDER BY start_time DESC `;
-
-    const recentContests = await db.query(recentContestsSql, recentContestsParams);
-
-    return res.json({
-      success: true,
-      stats: {
-        totalStudents,
-        totalActiveStudents: totalStudents,
-        totalContests,
-        ratedContests,
-        unratedContests,
-        cancelledContests,
-        weeklyContests,
-        biweeklyContests,
-        overallAttendance,
-        averageRating,
-        recentlySynced
-      },
-      departmentStats,
-      weeklyTrend,
-      topStudents,
-      alerts: {
-        missingUploads: [],
-        lowAttendanceStudents,
-        recentContests
+      // Recently Added Contests (last 2 weeks)
+      let recentContestsSql = `
+         SELECT title as name, start_time as date, platform
+         FROM Contests 
+         WHERE start_time >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+      `;
+      const recentContestsParams = [];
+      if (filterPlatform !== 'all') {
+        recentContestsSql += ` AND platform = ? `;
+        recentContestsParams.push(filterPlatform === 'codechef' ? 'CodeChef' : 'LeetCode');
       }
-    });
+      recentContestsSql += ` ORDER BY start_time DESC `;
+
+      const recentContests = await db.query(recentContestsSql, recentContestsParams);
+
+      return {
+        success: true,
+        stats: {
+          totalStudents,
+          totalActiveStudents: totalStudents,
+          totalContests,
+          ratedContests,
+          unratedContests,
+          cancelledContests,
+          weeklyContests,
+          biweeklyContests,
+          overallAttendance,
+          averageRating,
+          recentlySynced
+        },
+        departmentStats,
+        weeklyTrend,
+        topStudents,
+        alerts: {
+          missingUploads: [],
+          lowAttendanceStudents,
+          recentContests
+        }
+      };
+    }, 15 * 60 * 1000); // Cache for 15 minutes
+
+    return res.json(data);
   } catch (error) {
     console.error('Error generating dashboard stats:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });

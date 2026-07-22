@@ -169,7 +169,9 @@ async function persistHealthToDb() {
 }
 
 // Persist every 5 minutes
-setInterval(persistHealthToDb, 5 * 60 * 1000);
+setInterval(() => {
+  persistHealthToDb().catch(err => console.warn('[PlatformHealth] Unhandled error during persistence:', err.message));
+}, 5 * 60 * 1000);
 
 module.exports = {
   recordSuccess,

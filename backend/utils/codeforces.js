@@ -166,6 +166,7 @@ async function getUserCodeforcesStats(username) {
 }
 
 module.exports = {
+  queryCodeforces,
   verifyCodeforcesUsername,
   getUserCodeforcesStats
 };
