@@ -277,8 +277,75 @@ async function processContestUpload(req, res) {
   }
 }
 
-// 2. Get attendance sheets/list for a specific contest
+// 2. Get attendance sheets/list for a specific contest with pagination and timing telemetry
 async function getContestAttendance(req, res) {
+  const reqStart = Date.now();
+  const { contestId } = req.params;
+  let { batch, department, section, page, limit } = req.query;
+
+  if (!contestId) {
+    return res.status(400).json({ success: false, message: 'Contest name/ID is required.' });
+  }
+
+  try {
+    console.log(`[API Start] GET /api/attendance/contest/${contestId} | Query:`, req.query);
+    const result = await attendanceService.getContestParticipantsDetails(contestId, { batch, department, section });
+    const allData = result.data || [];
+    const totalCount = allData.length;
+
+    let paginatedData = allData;
+    let pageNum = page ? parseInt(page, 10) : 1;
+    let limitNum = limit ? parseInt(limit, 10) : totalCount;
+
+    if (page && limit && limit !== 'all') {
+      const startIndex = (pageNum - 1) * limitNum;
+      paginatedData = allData.slice(startIndex, startIndex + limitNum);
+    }
+
+    const totalTimeMs = Date.now() - reqStart;
+    const responsePayload = {
+      success: true,
+      count: paginatedData.length,
+      total: totalCount,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: limitNum > 0 ? Math.ceil(totalCount / limitNum) : 1,
+      data: paginatedData,
+      attended: result.attended,
+      missed: result.missed,
+      summary: result.summary,
+      validationStatus: result.validationStatus,
+      validationIssues: result.validationIssues,
+      timing: {
+        startTime: new Date(reqStart).toISOString(),
+        totalTimeMs,
+        rowsReturned: paginatedData.length,
+        totalRows: totalCount
+      }
+    };
+
+    const payloadJson = JSON.stringify(responsePayload);
+    console.log(`[API Response Telemetry] GET /api/attendance/contest/${contestId} | Rows: ${paginatedData.length}/${totalCount} | Time: ${totalTimeMs}ms | Size: ${payloadJson.length} bytes`);
+
+    if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'no-store');
+      res.set('X-Response-Time', `${totalTimeMs}ms`);
+    }
+
+    return res.json(responsePayload);
+  } catch (error) {
+    console.error('[Attendance API Log] Error fetching contest attendance:', error.stack || error);
+    return res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to retrieve attendance list.', 
+      error: process.env.NODE_ENV !== 'production' ? error.stack || error.message : undefined 
+    });
+  }
+}
+
+// 2b. Export Contest Attendance Excel file (Backend Streaming)
+async function exportContestAttendance(req, res) {
+  const reqStart = Date.now();
   const { contestId } = req.params;
   let { batch, department, section } = req.query;
 
@@ -287,25 +354,58 @@ async function getContestAttendance(req, res) {
   }
 
   try {
+    console.log(`[Export API Start] GET /api/attendance/contest/${contestId}/export`);
     const result = await attendanceService.getContestParticipantsDetails(contestId, { batch, department, section });
-    if (typeof res.set === 'function') {
-      res.set('Cache-Control', 'no-store'); // prevent browser from caching attendance data
-    }
-    return res.json({
-      success: true,
-      count: result.count,
-      data: result.data,
-      attended: result.attended,
-      missed: result.missed,
-      validationStatus: result.validationStatus,
-      validationIssues: result.validationIssues
+    const studentsList = result.data || [];
+    const dbTimeMs = Date.now() - reqStart;
+
+    const excelStart = Date.now();
+    const headers = [
+      'Roll Number', 'Student Name', 'Department', 'Section', 'Batch',
+      'LeetCode Username', 'Registration Status', 'Join Status', 'Attendance Status',
+      'Contest Rank', 'Problems Solved', 'Contest Score', 'Marked By', 'Remarks'
+    ];
+
+    const rows = studentsList.map(s => [
+      s.register_number || '',
+      s.name || '',
+      s.department || '',
+      s.section || '',
+      s.academic_year || '',
+      s.leetcode_username || s.platform_username || '',
+      s.registration_time ? 'Registered' : 'Not Registered',
+      s.join_time ? 'Joined' : 'No Activity',
+      (s.status || 'absent').toUpperCase(),
+      s.contest_rank || '-',
+      s.problems_solved !== null && s.problems_solved !== undefined ? s.problems_solved : '-',
+      s.contest_score !== null && s.contest_score !== undefined ? s.contest_score : '-',
+      s.marked_by || 'system',
+      s.remarks || ''
+    ]);
+
+    const worksheet = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, 'Contest Attendance');
+
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const excelTimeMs = Date.now() - excelStart;
+    const totalTimeMs = Date.now() - reqStart;
+
+    console.log(`[Export Telemetry] Contest: ${contestId} | DB Time: ${dbTimeMs}ms | Excel Gen Time: ${excelTimeMs}ms | Total Time: ${totalTimeMs}ms | Rows: ${rows.length} | Size: ${buffer.length} bytes`);
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="contest_attendance_${contestId}_${new Date().toISOString().split('T')[0]}.xlsx"`,
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-store'
     });
+
+    return res.send(buffer);
   } catch (error) {
-    console.error('[Attendance API Log] Error fetching contest attendance:', error.stack || error);
+    console.error('[Export API Error]', error.stack || error);
     return res.status(500).json({ 
       success: false, 
-      message: error.message || 'Failed to retrieve attendance list.', 
-      error: process.env.NODE_ENV !== 'production' ? error.stack || error.message : undefined 
+      message: error.message || 'Failed to generate contest attendance Excel file.'
     });
   }
 }
@@ -720,6 +820,7 @@ async function getStudentAttendanceHistory(req, res) {
 module.exports = {
   processContestUpload,
   getContestAttendance,
+  exportContestAttendance,
   overrideAttendance,
   getStudentAttendanceHistory
 };

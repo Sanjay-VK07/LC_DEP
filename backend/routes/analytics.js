@@ -15,5 +15,6 @@ router.get('/rating-distribution', analyticsController.getRatingDistribution);
 router.get('/dashboard-stats', analyticsController.getDashboardStats);
 router.get('/platform-stats', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), platformStatsController.getPlatformStats);
 router.get('/attendance-matrix', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), platformStatsController.getAttendanceMatrix);
+router.get('/attendance-matrix/export', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), platformStatsController.exportAttendanceMatrix);
 
 module.exports = router;

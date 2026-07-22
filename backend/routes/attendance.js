@@ -14,6 +14,7 @@ const upload = multer({
 router.post('/upload', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), upload.single('file'), attendanceController.processContestUpload);
 router.post('/override', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), attendanceController.overrideAttendance);
 router.get('/contest/:contestId', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), attendanceController.getContestAttendance);
+router.get('/contest/:contestId/export', authenticate, authorize(['Super Admin', 'Faculty', 'HOD']), attendanceController.exportContestAttendance);
 router.get('/student/:studentId', authenticate, attendanceController.getStudentAttendanceHistory);
 
 // LeetCode Contest Ranking Search Attendance

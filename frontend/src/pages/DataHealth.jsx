@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
@@ -24,9 +25,23 @@ import {
 
 function DataHealth() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState('health'); // 'health' | 'platform-stats' | 'attendance-matrix'
+  // Tab state synced with URL search params
+  const tabFromUrl = searchParams.get('tab') || 'health';
+  const [activeTab, setActiveTab] = useState(tabFromUrl);
+
+  const handleTabChange = (key) => {
+    setActiveTab(key);
+    setSearchParams({ tab: key }, { replace: true });
+  };
+
+  useEffect(() => {
+    const currentParam = searchParams.get('tab') || 'health';
+    if (currentParam !== activeTab) {
+      setActiveTab(currentParam);
+    }
+  }, [searchParams]);
 
   // Health tab state
   const [data, setData] = useState(null);
@@ -55,10 +70,16 @@ function DataHealth() {
   const [platformStats, setPlatformStats] = useState([]);
   const [platformStatsLoading, setPlatformStatsLoading] = useState(false);
 
-  // Attendance Matrix state
+  // Attendance Matrix state & refs
   const [matrix, setMatrix] = useState(null);
   const [matrixLoading, setMatrixLoading] = useState(false);
+  const [matrixError, setMatrixError] = useState('');
   const [matrixContestType, setMatrixContestType] = useState('');
+  const [matrixSearch, setMatrixSearch] = useState('');
+  const [matrixPage, setMatrixPage] = useState(1);
+  const [matrixPageSize, setMatrixPageSize] = useState(100);
+  const [exportingMatrix, setExportingMatrix] = useState(false);
+  const matrixAbortControllerRef = useRef(null);
 
   const showToast = (msg, type = 'success') => {
     setToastMessage(msg);
@@ -120,14 +141,45 @@ function DataHealth() {
   };
 
   const fetchAttendanceMatrix = async () => {
+    // Abort previous in-flight matrix request if active
+    if (matrixAbortControllerRef.current) {
+      matrixAbortControllerRef.current.abort();
+    }
+    matrixAbortControllerRef.current = new AbortController();
+
+    const fetchStart = Date.now();
     setMatrixLoading(true);
+    setMatrixError('');
     try {
       const params = {};
       if (matrixContestType) params.contestType = matrixContestType;
-      const res = await axios.get('/api/analytics/attendance-matrix', { params });
-      if (res.data.success) setMatrix(res.data);
-    } catch (err) { console.error(err); }
-    finally { setMatrixLoading(false); }
+
+      console.log('[Frontend Telemetry] Starting GET /api/analytics/attendance-matrix fetch...');
+      const res = await axios.get('/api/analytics/attendance-matrix', {
+        params,
+        signal: matrixAbortControllerRef.current.signal
+      });
+
+      const fetchTime = Date.now() - fetchStart;
+
+      if (res.data && res.data.success) {
+        setMatrix(res.data);
+        setMatrixPage(1);
+        const heapMemory = window.performance?.memory ? `${(window.performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(2)} MB` : 'N/A';
+        console.log(`[Frontend Matrix Telemetry] Fetch Time: ${fetchTime}ms | Rows: ${res.data.matrix?.length || 0} | Contests: ${res.data.contests?.length || 0} | Heap Memory: ${heapMemory}`);
+      } else {
+        setMatrixError(res.data?.message || 'Failed to load attendance matrix data.');
+      }
+    } catch (err) {
+      if (axios.isCancel(err)) {
+        console.log('[Frontend Matrix Telemetry] Previous matrix request aborted cleanly.');
+        return;
+      }
+      console.error('[AttendanceMatrix Exception]:', err);
+      setMatrixError(err.response?.data?.message || err.message || 'Failed to fetch attendance matrix. Please try again.');
+    } finally {
+      setMatrixLoading(false);
+    }
   };
 
   const fetchHealthAudit = async (forceRefresh = false) => {
@@ -153,33 +205,82 @@ function DataHealth() {
     axios.get('/api/departments').then(res => { if (res.data.success) setDepts(res.data.data); }).catch(console.error);
     axios.get('/api/students/batches').then(res => { if (res.data.success) setBatches(res.data.data); }).catch(console.error);
     fetchHealthAudit();
-  }, [activeTab]);
 
-  const handleExportMatrix = () => {
-    if (!matrix?.matrix?.length) return;
-    const headers = ['Roll No', 'Name', 'Department', 'Section', 'Batch', 'LeetCode Username',
-      ...matrix.contests.map(c => {
-        const d = new Date(c.date);
-        return c.title + ' (' + d.toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'2-digit'}) + ')';
-      })
-    ];
-    const rows = matrix.matrix.map(s => [
-      s.rollNo, s.name, s.department, s.section||'', s.batch, s.leetcodeUsername,
-      ...matrix.contests.map(c => s.attendance[c.id]||'N/A')
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Attendance');
-    XLSX.writeFile(wb, 'attendance_matrix_' + new Date().toISOString().split('T')[0] + '.xlsx');
+    return () => {
+      if (matrixAbortControllerRef.current) {
+        matrixAbortControllerRef.current.abort();
+      }
+    };
+  }, [activeTab, matrixContestType]);
+
+  // Filtered matrix rows based on search keyword
+  const filteredMatrixRows = React.useMemo(() => {
+    if (!matrix || !Array.isArray(matrix.matrix)) return [];
+    const searchLower = matrixSearch.toLowerCase().trim();
+    if (!searchLower) return matrix.matrix;
+    return matrix.matrix.filter(s => {
+      if (!s) return false;
+      const roll = (s.rollNo || '').toLowerCase();
+      const name = (s.name || '').toLowerCase();
+      const lc = (s.leetcodeUsername || '').toLowerCase();
+      const dept = (s.department || '').toLowerCase();
+      return roll.includes(searchLower) || name.includes(searchLower) || lc.includes(searchLower) || dept.includes(searchLower);
+    });
+  }, [matrix, matrixSearch]);
+
+  // Windowed pagination for matrix rows (prevents DOM freeze for 5,000 students)
+  const paginatedMatrixRows = React.useMemo(() => {
+    if (matrixPageSize === 'all' || filteredMatrixRows.length <= Number(matrixPageSize)) {
+      return filteredMatrixRows;
+    }
+    const startIndex = (matrixPage - 1) * Number(matrixPageSize);
+    return filteredMatrixRows.slice(startIndex, startIndex + Number(matrixPageSize));
+  }, [filteredMatrixRows, matrixPage, matrixPageSize]);
+
+  const matrixTotalPages = Math.max(1, Math.ceil(filteredMatrixRows.length / (matrixPageSize === 'all' ? (filteredMatrixRows.length || 1) : Number(matrixPageSize))));
+
+  const handleExportMatrix = async () => {
+    setExportingMatrix(true);
+    try {
+      const params = {};
+      if (matrixContestType) params.contestType = matrixContestType;
+      const res = await axios.get('/api/analytics/attendance-matrix/export', {
+        params,
+        responseType: 'blob'
+      });
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(blob);
+      link.download = `attendance_matrix_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(link.href);
+      showToast('Attendance sheet exported successfully!');
+    } catch (err) {
+      console.error('[ExportMatrix] Error:', err);
+      showToast('Failed to export spreadsheet: ' + (err.response?.data?.message || err.message), 'error');
+    } finally {
+      setExportingMatrix(false);
+    }
   };
 
   const handleExportPlatformStats = () => {
-    if (!platformStats?.length) return;
-    const rows = buildPlatformStatsRows(platformStats);
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Platform Stats');
-    XLSX.writeFile(wb, 'platform_stats_' + new Date().toISOString().split('T')[0] + '.xlsx');
+    if (!platformStats?.length) {
+      showToast('No platform stats available to export.', 'error');
+      return;
+    }
+    try {
+      const rows = buildPlatformStatsRows(platformStats);
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Platform Stats');
+      XLSX.writeFile(wb, 'platform_stats_' + new Date().toISOString().split('T')[0] + '.xlsx');
+      showToast('Platform stats exported successfully!');
+    } catch (err) {
+      console.error('[ExportPlatformStats] Error:', err);
+      showToast('Failed to export platform stats: ' + err.message, 'error');
+    }
   };
 
   const [exportingSpreadsheet, setExportingSpreadsheet] = useState(false);
@@ -188,42 +289,33 @@ function DataHealth() {
     'Name': s.name,
     'Student Roll No': s.rollNo,
 
-    'LC Account': s.leetcode.username || '',
-    'LC Rating': s.leetcode.rating || '',
-    'LC Biweekly': s.leetcode.biweeklyThisMonth,
-    'LC Weekly': s.leetcode.weeklyThisMonth,
-    'LC Monthly': s.leetcode.weeklyThisMonth + s.leetcode.biweeklyThisMonth,
-    'LC Total Solved': s.leetcode.totalSolved,
+    'LC Account': s.leetcode?.username || '',
+    'LC Rating': s.leetcode?.rating || '',
+    'LC Biweekly': s.leetcode?.biweeklyThisMonth || 0,
+    'LC Weekly': s.leetcode?.weeklyThisMonth || 0,
+    'LC Monthly': (s.leetcode?.weeklyThisMonth || 0) + (s.leetcode?.biweeklyThisMonth || 0),
+    'LC Total Solved': s.leetcode?.totalSolved || 0,
 
-    'CC Account': s.codechef.username || '',
-    'CC Rating': s.codechef.rating || '',
-    'CC Total Solved': s.codechef.totalSolved,
+    'CC Account': s.codechef?.username || '',
+    'CC Rating': s.codechef?.rating || '',
+    'CC Total Solved': s.codechef?.totalSolved || 0,
 
-    'CF Account': s.codeforces.username || '',
-    'CF Rating': s.codeforces.rating || '',
-    'CF Total Solved': s.codeforces.totalSolved
+    'CF Account': s.codeforces?.username || '',
+    'CF Rating': s.codeforces?.rating || '',
+    'CF Total Solved': s.codeforces?.totalSolved || 0
   }));
-
 
   const toggleRow = (id) => {
     setExpandedStudents(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const getPlatformStatusDot = (platConn) => {
-    if (!platConn.connected) return <span className="h-2 w-2 rounded-full bg-slate-350 dark:bg-slate-755" title="Not connected"></span>;
+    if (!platConn || !platConn.connected) return <span className="h-2 w-2 rounded-full bg-slate-350 dark:bg-slate-755" title="Not connected"></span>;
     if (platConn.syncStatus === 'Healthy') return <span className="h-2 w-2 rounded-full bg-emerald-500" title="Connected and Healthy"></span>;
     if (platConn.syncStatus === 'Partial') return <span className="h-2 w-2 rounded-full bg-amber-400" title="Connected and Partial"></span>;
     if (platConn.syncStatus === 'Failed') return <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse" title="Connection Sync Failure"></span>;
     return <span className="h-2 w-2 rounded-full bg-slate-400" title="Never Synced"></span>;
   };
-
-  if (loading && activeTab === 'health') {
-    return (
-      <div className="flex h-[60vh] items-center justify-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-      </div>
-    );
-  }
 
   const aggregates = data?.aggregates || {
     totalStudents: 0, healthyCount: 0, partialCount: 0, needsAttentionCount: 0,
@@ -236,7 +328,7 @@ function DataHealth() {
 
   const filteredStudents = studentsList.filter(s => {
     const text = searchText.toLowerCase();
-    const matchesSearch = !text || s.name.toLowerCase().includes(text) || s.rollNo.toLowerCase().includes(text);
+    const matchesSearch = !text || (s.name && s.name.toLowerCase().includes(text)) || (s.rollNo && s.rollNo.toLowerCase().includes(text));
     const matchesDept = !filterDept || s.department === filterDept;
     const matchesBatch = !filterBatch || s.batch === filterBatch;
     const matchesHealth = !filterHealth || s.healthIndicator === filterHealth;
@@ -289,7 +381,7 @@ function DataHealth() {
             { key: 'platform-stats', label: 'Platform Contest Stats', icon: BarChart3 },
             { key: 'attendance-matrix', label: 'Attendance Sheet Export', icon: FileSpreadsheet }
           ].map(tab => (
-            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+            <button key={tab.key} onClick={() => handleTabChange(tab.key)}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 ${
                 activeTab === tab.key
                   ? 'border-primary-500 text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-950/20'
@@ -309,7 +401,7 @@ function DataHealth() {
                 <p className="text-xs text-slate-400 mt-0.5">Per-student weekly &amp; monthly contest participation across LeetCode, CodeChef and Codeforces</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={fetchPlatformStats} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl">
+                <button onClick={fetchPlatformStats} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-850">
                   <RefreshCw className={`h-3.5 w-3.5 ${platformStatsLoading ? 'animate-spin' : ''}`} /> Refresh
                 </button>
                 <button onClick={handleExportPlatformStats} className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-xl">
@@ -361,25 +453,25 @@ function DataHealth() {
                         <td className="py-2.5 px-3 font-bold text-slate-500">{s.rollNo}</td>
                         <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-white whitespace-nowrap">{s.name}</td>
                         <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #fef3c7'}}>
-                          {s.leetcode.username ? (
+                          {s.leetcode?.username ? (
                             <span className="font-bold text-orange-500">{s.leetcode.rating || '—'}</span>
                           ) : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode.weeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.leetcode.weeklyThisWeek}
+                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode?.weeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
+                            {s.leetcode?.weeklyThisWeek || 0}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode.biweeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.leetcode.biweeklyThisWeek}
+                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode?.biweeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
+                            {s.leetcode?.biweeklyThisWeek || 0}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {s.leetcode.weeklyThisMonth + s.leetcode.biweeklyThisMonth}
+                          {(s.leetcode?.weeklyThisMonth || 0) + (s.leetcode?.biweeklyThisMonth || 0)}
                         </td>
                         <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #ccfbf1'}}>
-                          {s.codechef.username ? (
+                          {s.codechef?.username ? (
                             <div className="flex items-center justify-center gap-1">
                               <span className="font-bold" style={{color: s.codechef.starColor}}>{s.codechef.stars || '—'}</span>
                               <span className="text-slate-500">{s.codechef.rating || ''}</span>
@@ -387,27 +479,27 @@ function DataHealth() {
                           ) : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codechef.wednesdayContestsThisWeek > 0 ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.codechef.wednesdayContestsThisWeek}
+                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codechef?.wednesdayContestsThisWeek > 0 ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-400'}`}>
+                            {s.codechef?.wednesdayContestsThisWeek || 0}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {s.codechef.wednesdayContestsThisMonth}
+                          {s.codechef?.wednesdayContestsThisMonth || 0}
                         </td>
                         <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #fee2e2'}}>
-                          {s.codeforces.username ? (
+                          {s.codeforces?.username ? (
                             <span className="font-bold text-[11px] px-2 py-0.5 rounded-lg" style={{background: s.codeforces.rankBg, color: s.codeforces.rankColor}}>
                               {s.codeforces.rank} {s.codeforces.rating ? `(${s.codeforces.rating})` : ''}
                             </span>
                           ) : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codeforces.contestsThisWeek > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.codeforces.contestsThisWeek}
+                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codeforces?.contestsThisWeek > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-400'}`}>
+                            {s.codeforces?.contestsThisWeek || 0}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {s.codeforces.contestsThisMonth}
+                          {s.codeforces?.contestsThisMonth || 0}
                         </td>
                       </tr>
                     ))}
@@ -433,68 +525,136 @@ function DataHealth() {
                   <option value="Weekly">Weekly Only</option>
                   <option value="Biweekly">Biweekly Only</option>
                 </select>
-                <button onClick={fetchAttendanceMatrix} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 font-bold text-xs px-3 py-2 rounded-xl">
+                <button onClick={fetchAttendanceMatrix} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-850">
                   <RefreshCw className={`h-3.5 w-3.5 ${matrixLoading ? 'animate-spin' : ''}`} /> Load
                 </button>
-                <button onClick={handleExportMatrix} disabled={!matrix || !matrix.matrix?.length}
+                <button onClick={handleExportMatrix} disabled={exportingMatrix || !matrix || !matrix.matrix?.length}
                   className="flex items-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 text-white font-bold text-xs px-3.5 py-2 rounded-xl shadow disabled:opacity-40">
-                  <Download className="h-3.5 w-3.5" /> Export Excel
+                  <Download className={`h-3.5 w-3.5 ${exportingMatrix ? 'animate-spin' : ''}`} /> {exportingMatrix ? 'Exporting...' : 'Export Excel'}
                 </button>
               </div>
             </div>
-            {matrixLoading ? (
+            {matrixError ? (
+              <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center justify-between">
+                <span>❌ {matrixError}</span>
+                <button onClick={fetchAttendanceMatrix} className="underline text-xs hover:text-rose-700">Retry</button>
+              </div>
+            ) : matrixLoading ? (
               <div className="flex h-40 items-center justify-center">
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
               </div>
-            ) : matrix ? (
+            ) : matrix && matrix.matrix ? (
               <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto shadow-sm">
-                <div className="p-4 border-b border-slate-100 dark:border-slate-850 flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">{matrix.students} students × {matrix.contests.length} contests</span>
+                <div className="p-4 border-b border-slate-100 dark:border-slate-850 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-slate-500">{filteredMatrixRows.length} of {matrix.students || 0} students × {matrix.contests ? matrix.contests.length : 0} contests</span>
+                    <div className="relative">
+                      <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search matrix..."
+                        value={matrixSearch}
+                        onChange={(e) => { setMatrixSearch(e.target.value); setMatrixPage(1); }}
+                        className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-300 w-44"
+                      />
+                    </div>
+                  </div>
                   <div className="flex items-center gap-3 text-[10px] font-bold">
                     <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-200 inline-block"></span> PRESENT</span>
                     <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200 inline-block"></span> ABSENT</span>
                     <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-100 inline-block"></span> N/A</span>
                   </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-[11px]">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-850 text-slate-500 font-bold">
-                        <th className="py-2.5 px-3 sticky left-0 bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[80px]">Roll No</th>
-                        <th className="py-2.5 px-3 sticky left-[80px] bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[150px]">Name</th>
-                        <th className="py-2.5 px-3 min-w-[80px]">Dept</th>
-                        {matrix.contests.map(c => (
-                          <th key={c.id} className="py-2.5 px-2 text-center min-w-[90px] whitespace-nowrap text-[10px]">
-                            <div>{c.title.replace('LeetCode', '').replace('Contest', '').trim()}</div>
-                            <div className="font-normal text-slate-400">{new Date(c.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short'})}</div>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
-                      {matrix.matrix.map(s => (
-                        <tr key={s.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/10">
-                          <td className="py-2 px-3 sticky left-0 bg-white dark:bg-slate-900 font-bold text-slate-500 z-10">{s.rollNo}</td>
-                          <td className="py-2 px-3 sticky left-[80px] bg-white dark:bg-slate-900 font-semibold text-slate-800 dark:text-white z-10 whitespace-nowrap">{s.name}</td>
-                          <td className="py-2 px-3 text-slate-500">{s.department}</td>
-                          {matrix.contests.map(c => {
-                            const status = s.attendance[c.id] || 'N/A';
+                {filteredMatrixRows.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 text-sm">No attendance records match the search filters.</div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-850 text-slate-500 font-bold">
+                            <th className="py-2.5 px-3 sticky left-0 bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[80px]">Roll No</th>
+                            <th className="py-2.5 px-3 sticky left-[80px] bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[150px]">Name</th>
+                            <th className="py-2.5 px-3 min-w-[80px]">Dept</th>
+                            {matrix.contests && matrix.contests.map(c => (
+                              <th key={c.id} className="py-2.5 px-2 text-center min-w-[90px] whitespace-nowrap text-[10px]">
+                                <div>{c.title ? c.title.replace('LeetCode', '').replace('Contest', '').trim() : ''}</div>
+                                <div className="font-normal text-slate-400">{c.date ? new Date(c.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short'}) : ''}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
+                          {paginatedMatrixRows.map(s => {
+                            if (!s) return null;
                             return (
-                              <td key={c.id} className="py-2 px-2 text-center">
-                                <span className={`inline-block px-2 py-0.5 rounded font-bold text-[10px] ${
-                                  status === 'PRESENT' ? 'bg-green-100 text-green-700' :
-                                  status === 'ABSENT'  ? 'bg-red-100 text-red-600' :
-                                  'bg-slate-100 text-slate-400'}`}>
-                                  {status === 'PRESENT' ? 'P' : status === 'ABSENT' ? 'A' : '–'}
-                                </span>
-                              </td>
+                              <tr key={s.id || s.rollNo} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/10">
+                                <td className="py-2 px-3 sticky left-0 bg-white dark:bg-slate-900 font-bold text-slate-500 z-10">{s.rollNo || '-'}</td>
+                                <td className="py-2 px-3 sticky left-[80px] bg-white dark:bg-slate-900 font-semibold text-slate-800 dark:text-white z-10 whitespace-nowrap">{s.name || 'Unknown'}</td>
+                                <td className="py-2 px-3 text-slate-500">{s.department || '-'}</td>
+                                {matrix.contests && matrix.contests.map(c => {
+                                  const status = s.attendance ? s.attendance[c.id] || 'N/A' : 'N/A';
+                                  return (
+                                    <td key={c.id} className="py-2 px-2 text-center">
+                                      <span className={`inline-block px-2 py-0.5 rounded font-bold text-[10px] ${
+                                        status === 'PRESENT' ? 'bg-green-100 text-green-700' :
+                                        status === 'ABSENT'  ? 'bg-red-100 text-red-600' :
+                                        'bg-slate-100 text-slate-400'}`}>
+                                        {status === 'PRESENT' ? 'P' : status === 'ABSENT' ? 'A' : '–'}
+                                      </span>
+                                    </td>
+                                  );
+                                })}
+                              </tr>
                             );
                           })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Matrix Windowed Pagination Footer */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30 text-xs font-semibold text-slate-500">
+                      <div>
+                        Showing {matrixPageSize === 'all' ? 1 : Math.min((matrixPage - 1) * Number(matrixPageSize) + 1, filteredMatrixRows.length)} to {matrixPageSize === 'all' ? filteredMatrixRows.length : Math.min(matrixPage * Number(matrixPageSize), filteredMatrixRows.length)} of {filteredMatrixRows.length} students
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] text-slate-400">Rows:</span>
+                          <select
+                            value={matrixPageSize}
+                            onChange={(e) => { setMatrixPageSize(e.target.value); setMatrixPage(1); }}
+                            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2 py-1 text-xs outline-none"
+                          >
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="250">250</option>
+                            <option value="500">500</option>
+                            <option value="all">All</option>
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setMatrixPage(p => Math.max(1, p - 1))}
+                            disabled={matrixPage === 1 || matrixPageSize === 'all'}
+                            className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          >
+                            Prev
+                          </button>
+                          <span className="px-2 text-slate-600 dark:text-slate-300">
+                            Page {matrixPage} of {matrixTotalPages}
+                          </span>
+                          <button
+                            onClick={() => setMatrixPage(p => Math.min(matrixTotalPages, p + 1))}
+                            disabled={matrixPage >= matrixTotalPages || matrixPageSize === 'all'}
+                            className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="text-center py-12 text-slate-400 text-sm">Click "Load" to generate the attendance matrix.</div>
@@ -504,6 +664,11 @@ function DataHealth() {
 
         {/* Tab: health - entire original DataHealth content */}
         {activeTab === 'health' && (
+          loading ? (
+            <div className="flex h-[60vh] items-center justify-center">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
+            </div>
+          ) : (
           <div className="space-y-6">
             {/* Header Banner */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -867,6 +1032,7 @@ function DataHealth() {
               </div>
             </div>
           </div>
+          )
         )}
       </div>
     </>

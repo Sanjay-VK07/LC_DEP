@@ -212,103 +212,211 @@ async function getPlatformStats(req, res) {
 }
 
 /**
+ * Helper to build attendance matrix data cleanly with single-pass JOIN query
+ */
+async function buildAttendanceMatrixData(reqQuery) {
+  const dbStart = Date.now();
+  const { department, section, academicBatch, contestType } = reqQuery;
+
+  // 1. Get all finished contests (sorted by date ascending)
+  let contestSql = `
+    SELECT c.contest_id, c.title, c.slug, c.contest_type, c.start_time, c.contest_status
+    FROM Contests c
+    WHERE c.start_time <= NOW()
+      AND c.contest_status != 'Cancelled'
+  `;
+  const contestParams = [];
+  if (contestType) { contestSql += ' AND c.contest_type = ?'; contestParams.push(contestType); }
+  contestSql += ' ORDER BY c.start_time ASC';
+  const contests = await db.query(contestSql, contestParams);
+
+  // 2. Get students
+  let studentSql = `
+    SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch, u.leetcode_username
+    FROM Users u
+    WHERE u.status = 'active'
+  `;
+  const studentParams = [];
+  if (department)    { studentSql += ' AND u.department = ?';    studentParams.push(department); }
+  if (section)       { studentSql += ' AND u.section = ?';       studentParams.push(section); }
+  if (academicBatch) { studentSql += ' AND u.academic_batch = ?'; studentParams.push(academicBatch); }
+  studentSql += ' ORDER BY u.roll_no ASC';
+  const students = await db.query(studentSql, studentParams);
+
+  if (students.length === 0 || contests.length === 0) {
+    return { contests: [], students: 0, matrix: [], dbTimeMs: Date.now() - dbStart };
+  }
+
+  // 3. Single JOIN query for attendance records (eliminating N+1 & parameter limit bottlenecks)
+  let recordSql = `
+    SELECT ar.user_id, ar.contest_id, ar.attendance_status
+    FROM AttendanceRecords ar
+    JOIN Users u ON ar.user_id = u.id
+    JOIN Contests c ON ar.contest_id = c.contest_id
+    WHERE u.status = 'active'
+      AND c.start_time <= NOW()
+      AND c.contest_status != 'Cancelled'
+  `;
+  const recordParams = [];
+  if (department)    { recordSql += ' AND u.department = ?';    recordParams.push(department); }
+  if (section)       { recordSql += ' AND u.section = ?';       recordParams.push(section); }
+  if (academicBatch) { recordSql += ' AND u.academic_batch = ?'; recordParams.push(academicBatch); }
+  if (contestType)   { recordSql += ' AND c.contest_type = ?';   recordParams.push(contestType); }
+
+  const records = await db.query(recordSql, recordParams);
+
+  const lookup = new Map();
+  records.forEach(r => {
+    lookup.set(`${r.user_id}_${r.contest_id}`, r.attendance_status);
+  });
+
+  const fullMatrix = students.map(s => {
+    const row = {
+      id: s.id,
+      rollNo: s.roll_no,
+      name: s.name,
+      department: s.department,
+      section: s.section,
+      batch: s.academic_batch,
+      leetcodeUsername: s.leetcode_username || '',
+      attendance: {}
+    };
+    contests.forEach(c => {
+      const status = lookup.get(`${s.id}_${c.contest_id}`);
+      row.attendance[c.contest_id] = status || 'N/A';
+    });
+    return row;
+  });
+
+  const dbTimeMs = Date.now() - dbStart;
+
+  return {
+    contests: contests.map(c => ({
+      id: c.contest_id,
+      title: c.title,
+      slug: c.slug,
+      type: c.contest_type,
+      date: c.start_time,
+      status: c.contest_status
+    })),
+    students: students.length,
+    matrix: fullMatrix,
+    dbTimeMs
+  };
+}
+
+/**
  * GET /api/analytics/attendance-matrix
- * Returns attendance per student × per contest date (all dates as columns)
- * Ready for Excel export where each row = student, each column = contest date
+ * Returns attendance per student × per contest date (all dates as columns) with pagination & timing logs
  */
 async function getAttendanceMatrix(req, res) {
+  const reqStart = Date.now();
   try {
-    const { department, section, academicBatch, contestType } = req.query;
+    const { page, limit } = req.query;
+    console.log('[API Start] GET /api/analytics/attendance-matrix | Query:', req.query);
 
-    // Get all finished contests (sorted by date ascending)
-    let contestSql = `
-      SELECT c.contest_id, c.title, c.slug, c.contest_type, c.start_time,
-             c.contest_status
-      FROM Contests c
-      WHERE c.start_time <= NOW()
-        AND c.contest_status != 'Cancelled'
-    `;
-    const contestParams = [];
-    if (contestType) { contestSql += ' AND c.contest_type = ?'; contestParams.push(contestType); }
-    contestSql += ' ORDER BY c.start_time ASC';
-    const contests = await db.query(contestSql, contestParams);
+    const { contests, students: totalStudents, matrix: fullMatrix, dbTimeMs } = await buildAttendanceMatrixData(req.query);
 
-    // Get all students
-    let studentSql = `
-      SELECT u.id, u.name, u.roll_no, u.department, u.section, u.academic_batch,
-             u.leetcode_username
-      FROM Users u
-      WHERE u.status = 'active'
-    `;
-    const studentParams = [];
-    if (department)    { studentSql += ' AND u.department = ?';    studentParams.push(department); }
-    if (section)       { studentSql += ' AND u.section = ?';       studentParams.push(section); }
-    if (academicBatch) { studentSql += ' AND u.academic_batch = ?'; studentParams.push(academicBatch); }
-    studentSql += ' ORDER BY u.roll_no ASC';
-    const students = await db.query(studentSql, studentParams);
+    let paginatedMatrix = fullMatrix;
+    let pageNum = page ? parseInt(page, 10) : 1;
+    let limitNum = limit ? parseInt(limit, 10) : fullMatrix.length;
 
-    if (students.length === 0 || contests.length === 0) {
-      return res.json({ success: true, contests: [], students: [], matrix: [] });
+    if (page && limit && limit !== 'all') {
+      const startIndex = (pageNum - 1) * limitNum;
+      paginatedMatrix = fullMatrix.slice(startIndex, startIndex + limitNum);
     }
 
-    // Get all attendance records for these students and contests
-    const studentIds  = students.map(s => s.id);
-    const contestIds  = contests.map(c => c.contest_id);
-
-    // Build placeholders safely
-    const sPlaceholders = studentIds.map(() => '?').join(',');
-    const cPlaceholders = contestIds.map(() => '?').join(',');
-
-    const records = await db.query(
-      `SELECT ar.user_id, ar.contest_id, ar.attendance_status
-       FROM AttendanceRecords ar
-       WHERE ar.user_id IN (${sPlaceholders})
-         AND ar.contest_id IN (${cPlaceholders})`,
-      [...studentIds, ...contestIds]
-    );
-
-    // Build lookup map: userId_contestId → status
-    const lookup = new Map();
-    records.forEach(r => {
-      lookup.set(`${r.user_id}_${r.contest_id}`, r.attendance_status);
-    });
-
-    // Build matrix rows
-    const matrix = students.map(s => {
-      const row = {
-        id: s.id,
-        rollNo: s.roll_no,
-        name: s.name,
-        department: s.department,
-        section: s.section,
-        batch: s.academic_batch,
-        leetcodeUsername: s.leetcode_username || '',
-        attendance: {}
-      };
-      contests.forEach(c => {
-        const status = lookup.get(`${s.id}_${c.contest_id}`);
-        row.attendance[c.contest_id] = status || 'N/A';
-      });
-      return row;
-    });
-
-    return res.json({
+    const totalTimeMs = Date.now() - reqStart;
+    const responsePayload = {
       success: true,
-      contests: contests.map(c => ({
-        id: c.contest_id,
-        title: c.title,
-        slug: c.slug,
-        type: c.contest_type,
-        date: c.start_time,
-        status: c.contest_status
-      })),
-      students: students.length,
-      matrix
-    });
+      count: paginatedMatrix.length,
+      total: totalStudents,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: limitNum > 0 ? Math.ceil(totalStudents / limitNum) : 1,
+      contests,
+      students: totalStudents,
+      matrix: paginatedMatrix,
+      timing: {
+        startTime: new Date(reqStart).toISOString(),
+        dbTimeMs,
+        totalTimeMs,
+        rowsReturned: paginatedMatrix.length
+      }
+    };
+
+    const payloadJson = JSON.stringify(responsePayload);
+    console.log(`[API Response Telemetry] GET /api/analytics/attendance-matrix | Students: ${paginatedMatrix.length}/${totalStudents} | Contests: ${contests.length} | DB Time: ${dbTimeMs}ms | Total Time: ${totalTimeMs}ms | Size: ${payloadJson.length} bytes`);
+
+    if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'no-store');
+      res.set('X-Response-Time', `${totalTimeMs}ms`);
+    }
+
+    return res.json(responsePayload);
   } catch (err) {
     console.error('[AttendanceMatrix] Error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 }
 
-module.exports = { getPlatformStats, getAttendanceMatrix };
+/**
+ * GET /api/analytics/attendance-matrix/export
+ * Backend Excel Streaming Export for Attendance Matrix
+ */
+async function exportAttendanceMatrix(req, res) {
+  const reqStart = Date.now();
+  try {
+    console.log('[Export API Start] GET /api/analytics/attendance-matrix/export');
+    const { contests, matrix: fullMatrix, dbTimeMs } = await buildAttendanceMatrixData(req.query);
+
+    if (fullMatrix.length === 0 || contests.length === 0) {
+      return res.status(400).json({ success: false, message: 'No attendance matrix data available to export.' });
+    }
+
+    const excelStart = Date.now();
+    const headers = [
+      'Roll No', 'Name', 'Department', 'Section', 'Batch', 'LeetCode Username',
+      ...contests.map(c => {
+        const d = new Date(c.date);
+        const formattedDate = isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+        return `${c.title} (${formattedDate})`;
+      })
+    ];
+
+    const rows = fullMatrix.map(s => [
+      s.rollNo || '',
+      s.name || '',
+      s.department || '',
+      s.section || '',
+      s.batch || '',
+      s.leetcodeUsername || '',
+      ...contests.map(c => (s.attendance ? s.attendance[c.id] || 'N/A' : 'N/A'))
+    ]);
+
+    const xlsx = require('xlsx');
+    const ws = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Attendance Matrix');
+
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const excelTimeMs = Date.now() - excelStart;
+    const totalTimeMs = Date.now() - reqStart;
+
+    console.log(`[Export Telemetry] Matrix Export | DB Time: ${dbTimeMs}ms | Excel Gen Time: ${excelTimeMs}ms | Total Time: ${totalTimeMs}ms | Students: ${fullMatrix.length} | Contests: ${contests.length} | Size: ${buffer.length} bytes`);
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="attendance_matrix_${new Date().toISOString().split('T')[0]}.xlsx"`,
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-store'
+    });
+
+    return res.send(buffer);
+  } catch (err) {
+    console.error('[Export Matrix Error]', err.stack || err);
+    return res.status(500).json({ success: false, message: 'Failed to export attendance matrix Excel file.' });
+  }
+}
+
+module.exports = { getPlatformStats, getAttendanceMatrix, exportAttendanceMatrix };

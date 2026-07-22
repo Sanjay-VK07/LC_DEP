@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { 
   CloudUpload, 
@@ -18,7 +18,8 @@ import {
   Trophy,
   Crown,
   BookOpen,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
@@ -52,6 +53,9 @@ function Attendance() {
   const [students, setStudents] = useState([]);
   const [leaderboardStudents, setLeaderboardStudents] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [exportingContest, setExportingContest] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [expandedStudentId, setExpandedStudentId] = useState(null);
@@ -240,20 +244,49 @@ function Attendance() {
   // Fetch attendance list when selected contest changes or filters change
   const fetchAttendanceList = useCallback(async () => {
     if (!selectedContestId) return;
+
+    if (listAbortControllerRef.current) {
+      listAbortControllerRef.current.abort();
+    }
+    listAbortControllerRef.current = new AbortController();
+
+    const fetchStart = Date.now();
     setLoadingList(true);
     setUploadSummary(null);
+    setError('');
     try {
       const params = {};
       if (selectedBatch) params.batch = selectedBatch;
       if (selectedDept) params.department = selectedDept;
       if (selectedSection) params.section = selectedSection;
-      const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, { params });
-      if (res.data.success) {
+
+      console.log(`[Frontend Telemetry] Fetching attendance for contest ${selectedContestId}...`);
+      const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, {
+        params,
+        signal: listAbortControllerRef.current.signal
+      });
+
+      const fetchTime = Date.now() - fetchStart;
+      
+      if (res.data && res.data.success && Array.isArray(res.data.data)) {
         logger.debug('Received contest attendance students:', res.data.data);
         setStudents(res.data.data);
+        setCurrentPage(1);
+        const heapMem = window.performance?.memory ? `${(window.performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(2)} MB` : 'N/A';
+        console.log(`[Frontend Telemetry] Attendance loaded: ${res.data.data.length} records | Duration: ${fetchTime}ms | Heap: ${heapMem}`);
+      } else {
+        const errorMsg = res.data?.message || 'Invalid API response payload.';
+        console.error('[Frontend Fetch Failure]:', errorMsg);
+        setError(errorMsg);
       }
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to fetch attendance sheet.');
+      if (axios.isCancel(err)) {
+        console.log('[Frontend Telemetry] Attendance request canceled cleanly.');
+        return;
+      }
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to fetch attendance sheet.';
+      console.error('[Frontend Fetch Exception]:', err);
+      setError(errorMsg);
     } finally {
       setLoadingList(false);
     }
@@ -261,7 +294,49 @@ function Attendance() {
 
   useEffect(() => {
     fetchAttendanceList();
+    return () => {
+      if (listAbortControllerRef.current) {
+        listAbortControllerRef.current.abort();
+      }
+    };
   }, [fetchAttendanceList]);
+
+  // Backend Streaming Excel Export Handler
+  const handleExportContest = async () => {
+    if (!selectedContestId) return;
+    const exportStart = Date.now();
+    setExportingContest(true);
+    setError('');
+    try {
+      const params = {};
+      if (selectedBatch) params.batch = selectedBatch;
+      if (selectedDept) params.department = selectedDept;
+      if (selectedSection) params.section = selectedSection;
+
+      console.log(`[Frontend Export Start] Streaming Excel export for contest ${selectedContestId}...`);
+      const res = await axios.get(`/api/attendance/contest/${selectedContestId}/export`, {
+        params,
+        responseType: 'blob'
+      });
+
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(blob);
+      link.download = `contest_attendance_${selectedContestId}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(link.href);
+
+      setSuccess('Contest attendance sheet exported successfully!');
+      console.log(`[Frontend Export Success] Streaming download complete in ${Date.now() - exportStart}ms`);
+    } catch (err) {
+      console.error('[Frontend Export Exception]:', err);
+      setError('Failed to export contest attendance Excel sheet: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setExportingContest(false);
+    }
+  };
 
   // Upload backup match list
   const handleUploadSubmit = async (e) => {
@@ -401,29 +476,54 @@ function Attendance() {
     fetchSections();
   }, [lcDeptFilter, lcBatchFilter]);
 
-  // Filter students by search input and status filter
-  const filteredStudents = students.filter(s => {
-    const matchesSearch = s.name.toLowerCase().includes(search.toLowerCase()) || 
-                          s.register_number.includes(search) ||
-                          ((s.leetcode_username || '').toLowerCase().includes(search.toLowerCase()));
-    
-    let matchesStatus = true;
-    if (filterStatus) {
-      matchesStatus = normalizeAttendanceStatus(s.status) === filterStatus.toUpperCase();
-    }
-    
-    return matchesSearch && matchesStatus;
-  });
+  // Filter students by search input and status filter (memoized for high performance)
+  const filteredStudents = useMemo(() => {
+    if (!Array.isArray(students)) return [];
+    const searchLower = (search || '').toLowerCase().trim();
+    return students.filter(s => {
+      if (!s) return false;
+      const name = (s.name || '').toLowerCase();
+      const roll = (s.register_number || s.roll_no || '').toLowerCase();
+      const lc = (s.leetcode_username || s.platform_username || '').toLowerCase();
+      
+      const matchesSearch = !searchLower || name.includes(searchLower) || roll.includes(searchLower) || lc.includes(searchLower);
+      
+      let matchesStatus = true;
+      if (filterStatus) {
+        matchesStatus = normalizeAttendanceStatus(s.status) === filterStatus.toUpperCase();
+      }
+      
+      return matchesSearch && matchesStatus;
+    });
+  }, [students, search, filterStatus]);
 
-  const selectedContest = contests.find(c => c.id === Number(selectedContestId)) || contests.find(c => c.id === selectedContestId);
+  // Client-side windowed pagination for large tables (> 500 rows)
+  const paginatedStudents = useMemo(() => {
+    if (pageSize === 'all' || filteredStudents.length <= Number(pageSize)) {
+      return filteredStudents;
+    }
+    const startIndex = (currentPage - 1) * Number(pageSize);
+    return filteredStudents.slice(startIndex, startIndex + Number(pageSize));
+  }, [filteredStudents, currentPage, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredStudents.length / (pageSize === 'all' ? (filteredStudents.length || 1) : Number(pageSize))));
+
+  const selectedContest = useMemo(() => {
+    if (!Array.isArray(contests)) return null;
+    return contests.find(c => c.id === Number(selectedContestId)) || contests.find(c => c.id === selectedContestId);
+  }, [contests, selectedContestId]);
   
-  // Contest Analytics Calculations
-  const totalStudentsInBatch = students.length;
-  const totalPresent = students.filter(s => normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST').length;
-  const attendanceRate = totalStudentsInBatch > 0 ? Math.round((totalPresent / totalStudentsInBatch) * 100) : 0;
-  const averageRating = totalStudentsInBatch > 0 
-    ? Math.round(students.reduce((acc, s) => acc + Number(s.current_rating || 1500), 0) / totalStudentsInBatch) 
-    : 0;
+  // Contest Analytics Calculations (Memoized)
+  const { totalStudentsInBatch, totalPresent, attendanceRate, averageRating } = useMemo(() => {
+    const list = Array.isArray(students) ? students : [];
+    const total = list.length;
+    const present = list.filter(s => s && (normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST')).length;
+    const rate = total > 0 ? Math.round((present / total) * 100) : 0;
+    const avgRating = total > 0 
+      ? Math.round(list.reduce((acc, s) => acc + Number(s?.current_rating || 1500), 0) / total) 
+      : 0;
+    return { totalStudentsInBatch: total, totalPresent: present, attendanceRate: rate, averageRating: avgRating };
+  }, [students]);
 
   // Contest Leaderboard Calculations (Ranked by LeetCode current rating, across all contests)
   const leaderboardData = leaderboardStudents
@@ -544,6 +644,16 @@ function Attendance() {
               ))}
             </select>
           </div>
+
+          {/* Export Excel Streaming Button */}
+          <button
+            onClick={handleExportContest}
+            disabled={exportingContest || !selectedContestId}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-40"
+          >
+            <Download className={`h-4 w-4 ${exportingContest ? 'animate-spin' : ''}`} />
+            {exportingContest ? 'Exporting...' : 'Export Excel'}
+          </button>
         </div>
       </div>
 
@@ -659,30 +769,56 @@ function Attendance() {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs text-slate-600 dark:text-slate-350">
                   {loadingList ? (
                     <tr>
+                      <td colSpan="7" className="text-center py-16">
+                        <div className="flex flex-col items-center justify-center space-y-2">
+                          <div className="h-8 w-8 animate-spin rounded-full border-3 border-primary-500 border-t-transparent"></div>
+                          <span className="text-xs font-semibold text-slate-400">Loading contest attendance sheet...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : error ? (
+                    <tr>
                       <td colSpan="7" className="text-center py-12">
-                        <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
+                        <div className="flex flex-col items-center justify-center space-y-3 p-4 bg-rose-50/50 dark:bg-rose-950/20 rounded-2xl border border-rose-200 dark:border-rose-900/30 max-w-md mx-auto">
+                          <AlertTriangle className="h-8 w-8 text-rose-500" />
+                          <p className="text-xs font-bold text-rose-600 dark:text-rose-400">{error}</p>
+                          <button
+                            onClick={fetchAttendanceList}
+                            className="flex items-center gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-4 py-2 shadow-sm transition-all"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" /> Retry Loading
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ) : filteredStudents.length === 0 ? (
                     <tr>
-                      <td colSpan="7" className="text-center py-12 text-slate-400">No student records found.</td>
+                      <td colSpan="7" className="text-center py-16 text-slate-400">
+                        <div className="flex flex-col items-center justify-center space-y-2">
+                          <User className="h-8 w-8 text-slate-300 dark:text-slate-700" />
+                          <span className="font-semibold text-slate-500 dark:text-slate-400">No student records found</span>
+                          <span className="text-[11px] text-slate-400">Try clearing search keywords or changing status filters.</span>
+                        </div>
+                      </td>
                     </tr>
                   ) : (
-                    filteredStudents.map((s) => {
+                    paginatedStudents.map((s) => {
+                      if (!s) return null;
+                      const studentId = s.student_id || s.id;
                       const isPresent = normalizeAttendanceStatus(s.status) === 'PRESENT' || normalizeAttendanceStatus(s.status) === 'UNRATED CONTEST';
-                      const toggleExpand = (studentId) => {
-                        setExpandedStudentId(expandedStudentId === studentId ? null : studentId);
+                      const toggleExpand = (idToToggle) => {
+                        setExpandedStudentId(expandedStudentId === idToToggle ? null : idToToggle);
                       };
                       return (
-                        <React.Fragment key={s.student_id}>
+                        <React.Fragment key={studentId}>
                           <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
                             <td className="px-6 py-3.5">
-                              <div className="font-bold text-slate-800 dark:text-slate-200">{s.register_number}</div>
-                              <div className="font-semibold text-slate-500">{s.name}</div>
+                              <div className="font-bold text-slate-800 dark:text-slate-200">{s.register_number || s.roll_no || '-'}</div>
+                              <div className="font-semibold text-slate-500">{s.name || 'Unknown Student'}</div>
                             </td>
                             <td className="px-6 py-3.5">
-                              <span className="font-medium">{s.department}</span>
-                              <span className="text-[10px] text-slate-450 block">Section {s.section}</span>
+                              <span className="font-medium">{s.department || '-'}</span>
+                              <span className="text-[10px] text-slate-450 block">Section {s.section || 'N/A'}</span>
                             </td>
                             <td className="px-6 py-3.5">
                               {s.leetcode_username ? (
@@ -756,7 +892,7 @@ function Attendance() {
                                 } else {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                                      {s.status}
+                                      {s.status || 'ABSENT'}
                                     </span>
                                   );
                                 }
@@ -776,15 +912,15 @@ function Attendance() {
                                   {isPresent ? 'Mark Absent' : 'Mark Present'}
                                 </button>
                                 <button
-                                  onClick={() => toggleExpand(s.student_id)}
+                                  onClick={() => toggleExpand(studentId)}
                                   className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
                                 >
-                                  {expandedStudentId === s.student_id ? <ChevronDown className="h-4.5 w-4.5" /> : <ChevronRight className="h-4.5 w-4.5" />}
+                                  {expandedStudentId === studentId ? <ChevronDown className="h-4.5 w-4.5" /> : <ChevronRight className="h-4.5 w-4.5" />}
                                 </button>
                               </div>
                             </td>
                           </tr>
-                          {expandedStudentId === s.student_id && (
+                          {expandedStudentId === studentId && (
                             <tr className="bg-slate-50/20 dark:bg-slate-900/10">
                               <td colSpan="7" className="px-6 py-4 border-t border-b border-slate-100 dark:border-slate-800/80">
                                 <div className="animate-fade-in text-xs space-y-3">
@@ -849,6 +985,52 @@ function Attendance() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls */}
+            {filteredStudents.length > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-3.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 text-xs font-semibold text-slate-500">
+                <div className="flex items-center gap-2">
+                  <span>
+                    Showing {pageSize === 'all' ? 1 : Math.min((currentPage - 1) * Number(pageSize) + 1, filteredStudents.length)} to {pageSize === 'all' ? filteredStudents.length : Math.min(currentPage * Number(pageSize), filteredStudents.length)} of {filteredStudents.length} students
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400">Rows per page:</span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => { setPageSize(e.target.value); setCurrentPage(1); }}
+                      className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2 py-1 text-xs outline-none"
+                    >
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                      <option value="250">250</option>
+                      <option value="500">500</option>
+                      <option value="all">All</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1 || pageSize === 'all'}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      Prev
+                    </button>
+                    <span className="px-2 text-slate-600 dark:text-slate-300">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage >= totalPages || pageSize === 'all'}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

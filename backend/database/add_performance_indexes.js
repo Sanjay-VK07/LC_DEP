@@ -30,10 +30,34 @@ async function runPerformanceIndexes() {
   await addIndexSafely('Users', 'idx_users_dept_status', 'department, status');
   await addIndexSafely('Users', 'idx_users_batch', 'academic_batch');
   await addIndexSafely('Users', 'idx_users_status', 'status');
+  await addIndexSafely('Users', 'idx_users_dept_sec_batch', 'department, section, academic_batch');
+  await addIndexSafely('Users', 'idx_users_roll', 'roll_no');
+
+  // students table indexes (if table exists)
+  try {
+    await addIndexSafely('students', 'idx_students_status', 'status');
+    await addIndexSafely('students', 'idx_students_dept_sec_batch', 'department, section, academic_batch');
+    await addIndexSafely('students', 'idx_students_leetcode', 'leetcode_username');
+  } catch (e) { /* table might not exist */ }
 
   // Contests table indexes
   await addIndexSafely('Contests', 'idx_contests_platform_status_time', 'platform, contest_status, start_time');
   await addIndexSafely('Contests', 'idx_contests_status_time', 'contest_status, start_time');
+  await addIndexSafely('Contests', 'idx_contests_slug', 'slug');
+  await addIndexSafely('Contests', 'idx_contests_start_time', 'start_time');
+
+  // Contest_Attendance table indexes (if table exists)
+  try {
+    await addIndexSafely('Contest_Attendance', 'idx_ca_student_slug', 'student_id, contest_slug');
+    await addIndexSafely('Contest_Attendance', 'idx_ca_student_date', 'student_id, contest_date');
+    await addIndexSafely('Contest_Attendance', 'idx_ca_date', 'contest_date');
+    await addIndexSafely('Contest_Attendance', 'idx_ca_status', 'attendance_status');
+  } catch (e) { /* table might not exist */ }
+
+  // ContestParticipants table indexes (if table exists)
+  try {
+    await addIndexSafely('ContestParticipants', 'idx_cp_slug_user', 'contest_slug, username');
+  } catch (e) { /* table might not exist */ }
 
   // AttendanceRecords table indexes
   await addIndexSafely('AttendanceRecords', 'idx_att_user_contest_status', 'user_id, contest_id, attendance_status');
