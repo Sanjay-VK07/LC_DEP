@@ -20,6 +20,7 @@ const contestmasterRoutes = require('./routes/contestmaster');
 const contestLeaderboardSyncRoutes = require('./routes/contestLeaderboardSync');
 const placementRoutes = require('./routes/placement');
 const aiRoutes = require('./routes/ai');
+const verificationRoutes = require('./routes/verificationRoutes');
 
 
 const compression = require('compression');
@@ -49,6 +50,7 @@ app.use('/api/contestmaster', contestmasterRoutes);
 app.use('/api/contest', contestLeaderboardSyncRoutes);
 app.use('/api/placement', placementRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/verification', verificationRoutes);
 
 
 // API v1 namespace aliases (backward compatible — both /api/ and /api/v1/ work)
@@ -58,6 +60,7 @@ app.use('/api/v1/attendance', attendanceRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/departments', departmentRoutes);
+app.use('/api/v1/verification', verificationRoutes);
 app.use('/api/v1/jobs', jobRoutes);
 app.use('/api/v1/health', healthRoutes);
 app.use('/api/v1/auth', authRoutes);

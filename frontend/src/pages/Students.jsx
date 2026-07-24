@@ -80,6 +80,18 @@ function Students() {
   const [importResults, setImportResults] = useState(null);
   const [importProgress, setImportProgress] = useState(null); // { batch, totalBatches, rowsDone, totalRows }
 
+  // Lock body scrolling when any modal is open
+  useEffect(() => {
+    if (isImportModalOpen || isAddModalOpen || isEditModalOpen || bulkDeleteConfirm) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [isImportModalOpen, isAddModalOpen, isEditModalOpen, bulkDeleteConfirm]);
+
   console.count("Students Render");
   console.log('[Students State Audit]', {
     platformChecks,
@@ -570,7 +582,22 @@ function Students() {
 
     const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const totalBatches = Math.ceil(rows.length / IMPORT_BATCH_SIZE);
-    const aggregate = { importedCount: 0, skippedCount: 0, duplicates: [], invalidHandles: [], errors: [] };
+    const aggregate = {
+      totalRows: rows.length,
+      importedCount: 0,
+      invalidLeetCodeCount: 0,
+      duplicateCount: 0,
+      pendingCount: 0,
+      skippedCount: 0,
+      imported: [],
+      invalidLeetCode: [],
+      duplicates: [],
+      invalidHandles: [],
+      errors: [],
+      processingTimeMs: 0,
+      reportFilename: '',
+      invalidFilename: ''
+    };
 
     setImportProgress({ batch: 0, totalBatches, rowsDone: 0, totalRows: rows.length });
 
@@ -591,10 +618,18 @@ function Students() {
           if (res.data.success) {
             const d = res.data.details || {};
             aggregate.importedCount += d.importedCount || 0;
+            if (d.imported) aggregate.imported.push(...d.imported);
+            aggregate.invalidLeetCodeCount += d.invalidLeetCodeCount || 0;
+            if (d.invalidLeetCode) aggregate.invalidLeetCode.push(...d.invalidLeetCode);
+            aggregate.duplicateCount += d.duplicateCount || 0;
+            if (d.duplicates) aggregate.duplicates.push(...d.duplicates);
+            aggregate.pendingCount += d.pendingCount || 0;
             aggregate.skippedCount += d.skippedCount || 0;
-            aggregate.duplicates.push(...(d.duplicates || []));
-            aggregate.invalidHandles.push(...(d.invalidHandles || []));
-            aggregate.errors.push(...(d.errors || []));
+            if (d.invalidHandles) aggregate.invalidHandles.push(...d.invalidHandles);
+            if (d.errors) aggregate.errors.push(...d.errors);
+            aggregate.processingTimeMs += d.processingTimeMs || 0;
+            if (d.reportFilename) aggregate.reportFilename = d.reportFilename;
+            if (d.invalidFilename) aggregate.invalidFilename = d.invalidFilename;
             succeeded = true;
           } else {
             lastErr = res.data.message || 'Unknown error';
@@ -609,14 +644,14 @@ function Students() {
       }
 
       setImportProgress({ batch: b + 1, totalBatches, rowsDone: Math.min((b + 1) * IMPORT_BATCH_SIZE, rows.length), totalRows: rows.length });
-      // Refresh the directory table after every batch (not just at the end) so newly-imported
-      // students become visible immediately, even if this modal has been closed in the meantime.
       fetchStudents();
     }
 
+    aggregate.processingTime = `${(aggregate.processingTimeMs / 1000).toFixed(2)}s`;
+
     setImportResults({
       success: true,
-      message: `Processed ${rows.length} rows across ${totalBatches} batch(es). Imported: ${aggregate.importedCount}, Duplicates: ${aggregate.duplicates.length}, Invalid Handles: ${aggregate.invalidHandles.length}, Errors: ${aggregate.errors.length}`,
+      message: `Processed ${rows.length} rows across ${totalBatches} batch(es). Imported: ${aggregate.importedCount}, Invalid LeetCode IDs: ${aggregate.invalidLeetCodeCount}, Duplicates: ${aggregate.duplicateCount}`,
       details: aggregate
     });
     fetchStudents();
@@ -625,10 +660,70 @@ function Students() {
     setImporting(false);
   };
 
+  // Download Full 2-Sheet Excel Report (BulkImportReport_YYYY-MM-DD_HH-mm.xlsx)
+  const downloadFullReport = (details) => {
+    if (!details) return;
+    const importedList = details.imported || [];
+    const invalidList = details.invalidLeetCode || [];
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Imported Students
+    const sheet1Rows = importedList.map(item => ({
+      'Roll Number': item.rollNo || item.roll_no || '',
+      'Student Name': item.name || '',
+      'Department': item.department || '',
+      'Section': item.section || '',
+      'LeetCode Username': item.leetcodeUsername || item.leetcode_username || '',
+      'CodeChef Username': item.codechefUsername || item.codechef_username || '-',
+      'Codeforces Username': item.codeforcesUsername || item.codeforces_username || '-',
+      'HackerRank Username': item.hackerrankUsername || item.hackerrank_username || '-',
+      'Status': item.status || 'Imported'
+    }));
+    const ws1 = XLSX.utils.json_to_sheet(sheet1Rows.length > 0 ? sheet1Rows : [{}]);
+    XLSX.utils.book_append_sheet(wb, ws1, 'Imported Students');
+
+    // Sheet 2: Invalid LeetCode IDs
+    const sheet2Rows = invalidList.map(item => ({
+      'Roll Number': item.rollNo || item.roll_no || '',
+      'Student Name': item.name || '',
+      'Department': item.department || '',
+      'Section': item.section || '',
+      'LeetCode Username': item.leetcodeUsername || item.leetcode_username || '',
+      'Reason': item.reason || ''
+    }));
+    const ws2 = XLSX.utils.json_to_sheet(sheet2Rows.length > 0 ? sheet2Rows : [{}]);
+    XLSX.utils.book_append_sheet(wb, ws2, 'Invalid LeetCode IDs');
+
+    const filename = details.reportFilename || `BulkImportReport_${new Date().toISOString().slice(0,10)}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  };
+
+  // Download Only Invalid LeetCode IDs Excel Report (InvalidLeetCodeIDs_YYYY-MM-DD_HH-mm.xlsx)
+  const downloadInvalidIDsReport = (details) => {
+    if (!details) return;
+    const invalidList = details.invalidLeetCode || [];
+
+    const wb = XLSX.utils.book_new();
+    const sheetRows = invalidList.map(item => ({
+      'Roll Number': item.rollNo || item.roll_no || '',
+      'Student Name': item.name || '',
+      'Department': item.department || '',
+      'Section': item.section || '',
+      'LeetCode Username': item.leetcodeUsername || item.leetcode_username || '',
+      'Reason': item.reason || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(sheetRows.length > 0 ? sheetRows : [{}]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Invalid LeetCode IDs');
+
+    const filename = details.invalidFilename || `InvalidLeetCodeIDs_${new Date().toISOString().slice(0,10)}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  };
+
   // Download template
   const downloadTemplate = () => {
     const headers = [
-      { 'S.No.': 1, 'Reg No.': '311520104001', 'Student Name': 'John Doe', 'Dept': 'CSE', 'Sec': 'A', 'LeetCode ID': 'johndoe_lc', 'CodeChef ID': 'johndoe_cc', 'Codeforces ID': 'johndoe_cf' }
+      { 'S.No.': 1, 'Reg No.': '311520104001', 'Student Name': 'John Doe', 'Dept': 'CSE', 'Sec': 'A', 'LeetCode ID': 'johndoe_lc', 'CodeChef ID': 'johndoe_cc', 'Codeforces ID': 'johndoe_cf', 'hackerrank_username': 'johndoe_hr' }
     ];
     const ws = XLSX.utils.json_to_sheet(headers);
     const wb = XLSX.utils.book_new();
@@ -1098,10 +1193,10 @@ function Students() {
 
       {/* Bulk Import Modal */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
-          <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl animate-fade-in">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4 py-6 overflow-hidden">
+          <div className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl animate-fade-in overflow-hidden">
+            {/* Header - Fixed */}
+            <div className="flex-shrink-0 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">
               <div>
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white">Bulk Import Student Profiles</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Upload a sheet to import multiple students at once.</p>
@@ -1114,89 +1209,173 @@ function Students() {
               </button>
             </div>
 
-            {/* Template instructions */}
-            <div className="flex items-center justify-between p-3.5 bg-primary-50/50 dark:bg-primary-950/20 border border-primary-100/60 dark:border-primary-900/20 rounded-xl mb-5 text-xs">
-              <div>
-                <span className="font-semibold text-primary-800 dark:text-primary-400 block">Download Template</span>
-                <span className="text-slate-500 dark:text-slate-400 text-[11px]">Download our pre-structured Excel template to prevent mapping errors.</span>
-              </div>
-              <button
-                onClick={downloadTemplate}
-                className="flex items-center gap-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 font-semibold text-primary-600 dark:text-primary-400 shadow-sm"
-              >
-                <Download className="h-4 w-4" /> template.xlsx
-              </button>
-            </div>
-
-            {/* Form */}
-            {!importResults ? (
-              <form onSubmit={handleImportSubmit} className="space-y-5">
-                {error && (
-                  <div className="flex items-center gap-2 rounded-xl bg-rose-50 dark:bg-rose-950/25 border border-rose-100 dark:border-rose-900/30 p-3 text-xs font-semibold text-rose-600 dark:text-rose-400">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>{error}</span>
-                  </div>
-                )}
-
+            {/* Modal Body - Scrollable */}
+            <div className="flex-1 overflow-y-auto min-h-0 pr-1 space-y-4">
+              {/* Template instructions */}
+              <div className="flex items-center justify-between p-3.5 bg-primary-50/50 dark:bg-primary-950/20 border border-primary-100/60 dark:border-primary-900/20 rounded-xl text-xs">
                 <div>
-                  <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Academic Batch (applies to all rows in this file)</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="2024-2028"
-                    value={importBatch}
-                    onChange={(e) => setImportBatch(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-700 dark:text-slate-200"
-                  />
+                  <span className="font-semibold text-primary-800 dark:text-primary-400 block">Download Template</span>
+                  <span className="text-slate-500 dark:text-slate-400 text-[11px]">Download our pre-structured Excel template to prevent mapping errors.</span>
                 </div>
+                <button
+                  onClick={downloadTemplate}
+                  className="flex items-center gap-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 font-semibold text-primary-600 dark:text-primary-400 shadow-sm shrink-0"
+                >
+                  <Download className="h-4 w-4" /> template.xlsx
+                </button>
+              </div>
 
-                <label className="flex items-start gap-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={updateExisting}
-                    onChange={(e) => setUpdateExisting(e.target.checked)}
-                    className="mt-0.5"
-                  />
-                  <span className="text-xs text-slate-600 dark:text-slate-300">
-                    <span className="font-semibold block">Update existing students instead of skipping them</span>
-                    Re-imports rows whose Reg No. already exists, overwriting their stored fields with this file's values. Use this to backfill/correct data from a re-run (e.g. after fixing a column mapping) — leave unchecked for a normal first-time import.
-                  </span>
-                </label>
+              {/* Form or Results */}
+              {!importResults ? (
+                <form id="bulk-import-form" onSubmit={handleImportSubmit} className="space-y-4">
+                  {error && (
+                    <div className="flex items-center gap-2 rounded-xl bg-rose-50 dark:bg-rose-950/25 border border-rose-100 dark:border-rose-900/30 p-3 text-xs font-semibold text-rose-600 dark:text-rose-400">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{error}</span>
+                    </div>
+                  )}
 
-                <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8 hover:bg-slate-50/40 dark:hover:bg-slate-800/10 transition-colors">
-                  <Upload className="h-8 w-8 text-slate-400 mb-2" />
-                  <span className="text-sm font-semibold text-slate-600 dark:text-slate-400 block">Select Excel File</span>
-                  <span className="text-xs text-slate-400 mt-1 mb-4">Supports .xlsx, .xls formats up to 5MB</span>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Academic Batch (applies to all rows in this file)</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="2024-2028"
+                      value={importBatch}
+                      onChange={(e) => setImportBatch(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-700 dark:text-slate-200"
+                    />
+                  </div>
 
-                  <input
-                    type="file"
-                    accept=".xlsx, .xls"
-                    required
-                    onChange={(e) => setImportFile(e.target.files[0])}
-                    className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 dark:file:bg-slate-800 dark:file:text-slate-200"
-                  />
-                  {importFile && (
-                    <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mt-3">Selected: {importFile.name}</p>
+                  <label className="flex items-start gap-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={updateExisting}
+                      onChange={(e) => setUpdateExisting(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span className="text-xs text-slate-600 dark:text-slate-300">
+                      <span className="font-semibold block">Update existing students instead of skipping them</span>
+                      Re-imports rows whose Reg No. already exists, overwriting their stored fields with this file's values. Use this to backfill/correct data from a re-run (e.g. after fixing a column mapping) — leave unchecked for a normal first-time import.
+                    </span>
+                  </label>
+
+                  <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8 hover:bg-slate-50/40 dark:hover:bg-slate-800/10 transition-colors">
+                    <Upload className="h-8 w-8 text-slate-400 mb-2" />
+                    <span className="text-sm font-semibold text-slate-600 dark:text-slate-400 block">Select Excel File</span>
+                    <span className="text-xs text-slate-400 mt-1 mb-4">Supports .xlsx, .xls formats up to 5MB</span>
+
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls"
+                      required
+                      onChange={(e) => setImportFile(e.target.files[0])}
+                      className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 dark:file:bg-slate-800 dark:file:text-slate-200"
+                    />
+                    {importFile && (
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mt-3">Selected: {importFile.name}</p>
+                    )}
+                  </div>
+
+                  {importProgress && (
+                    <div className="rounded-xl border border-primary-100 dark:border-primary-900/40 bg-primary-50/50 dark:bg-primary-950/20 p-3.5">
+                      <div className="flex items-center justify-between text-xs font-semibold text-primary-800 dark:text-primary-400 mb-1.5">
+                        <span>Batch {importProgress.batch} of {importProgress.totalBatches}</span>
+                        <span>{importProgress.rowsDone} / {importProgress.totalRows} rows</span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-primary-100 dark:bg-primary-900/40 overflow-hidden">
+                        <div
+                          className="h-full bg-primary-500 transition-all duration-300"
+                          style={{ width: `${Math.round((importProgress.rowsDone / importProgress.totalRows) * 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">Each batch commits independently — a network drop only costs the current batch, not what's already imported.</p>
+                    </div>
+                  )}
+                </form>
+              ) : (
+                /* Display import report summary results */
+                <div className="space-y-4 animate-fade-in">
+                  <div className="p-4 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 rounded-2xl flex items-start gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                      <h4 className="font-bold text-emerald-800 dark:text-emerald-400">Import Process Completed!</h4>
+                      <p className="text-emerald-600 dark:text-emerald-500 mt-1">
+                        Processed <b>{importResults.details.totalRows || 0}</b> rows in <b>{importResults.details.processingTime || '0.00s'}</b>. Successfully imported <b>{importResults.details.importedCount || 0}</b> student profiles.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Summary Card Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs">
+                    <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
+                      <span className="text-slate-400 font-semibold block text-[11px]">Total Rows</span>
+                      <span className="text-base font-bold text-slate-800 dark:text-slate-100">{importResults.details.totalRows || 0}</span>
+                    </div>
+                    <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 rounded-xl border border-emerald-100 dark:border-emerald-900/30 shadow-sm">
+                      <span className="text-emerald-600 dark:text-emerald-400 font-semibold block text-[11px]">Imported</span>
+                      <span className="text-base font-bold text-emerald-700 dark:text-emerald-300">{importResults.details.importedCount || 0}</span>
+                    </div>
+                    <div className="p-3 bg-rose-50 dark:bg-rose-950/20 rounded-xl border border-rose-100 dark:border-rose-900/30 shadow-sm">
+                      <span className="text-rose-600 dark:text-rose-400 font-semibold block text-[11px]">Invalid IDs</span>
+                      <span className="text-base font-bold text-rose-700 dark:text-rose-300">{importResults.details.invalidLeetCodeCount || 0}</span>
+                    </div>
+                    <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-xl border border-amber-100 dark:border-amber-900/30 shadow-sm">
+                      <span className="text-amber-600 dark:text-amber-400 font-semibold block text-[11px]">Duplicates</span>
+                      <span className="text-base font-bold text-amber-700 dark:text-amber-300">{importResults.details.duplicateCount || 0}</span>
+                    </div>
+                    <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-xl border border-blue-100 dark:border-blue-900/30 shadow-sm">
+                      <span className="text-blue-600 dark:text-blue-400 font-semibold block text-[11px]">Verification Pending</span>
+                      <span className="text-base font-bold text-blue-700 dark:text-blue-300">{importResults.details.pendingCount || 0}</span>
+                    </div>
+                    <div className="p-3 bg-indigo-50 dark:bg-indigo-950/20 rounded-xl border border-indigo-100 dark:border-indigo-900/30 shadow-sm">
+                      <span className="text-indigo-600 dark:text-indigo-400 font-semibold block text-[11px]">Processing Time</span>
+                      <span className="text-base font-bold text-indigo-700 dark:text-indigo-300">{importResults.details.processingTime || '0.00s'}</span>
+                    </div>
+                  </div>
+
+                  {/* Invalid LeetCode IDs List Table */}
+                  {importResults.details.invalidLeetCode && importResults.details.invalidLeetCode.length > 0 && (
+                    <div className="rounded-xl border border-rose-100 dark:border-rose-900/40 bg-rose-50/30 dark:bg-rose-950/10 p-3.5 text-xs">
+                      <span className="font-bold text-rose-800 dark:text-rose-400 block mb-2">Invalid / Rejected LeetCode IDs ({importResults.details.invalidLeetCode.length})</span>
+                      <div className="max-h-56 overflow-y-auto rounded-lg border border-rose-200/60 dark:border-rose-900/40">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead className="sticky top-0 bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-semibold z-10">
+                            <tr className="border-b border-rose-200 dark:border-rose-900/40">
+                              <th className="py-1.5 px-2">Row</th>
+                              <th className="py-1.5 px-2">Roll No</th>
+                              <th className="py-1.5 px-2">Name</th>
+                              <th className="py-1.5 px-2">LeetCode Username</th>
+                              <th className="py-1.5 px-2">Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-rose-100 dark:divide-rose-900/20 text-slate-700 dark:text-slate-300 bg-white/50 dark:bg-slate-900/50">
+                            {importResults.details.invalidLeetCode.map((item, idx) => (
+                              <tr key={idx}>
+                                <td className="py-1 px-2 font-mono text-[10px] text-rose-600 dark:text-rose-400 font-bold">{item.excelRow || item.rowNumber || item.excel_row || idx + 2}</td>
+                                <td className="py-1 px-2 font-mono font-semibold">{item.rollNo}</td>
+                                <td className="py-1 px-2">{item.name}</td>
+                                <td className="py-1 px-2 font-mono">{item.leetcodeUsername || '(empty)'}</td>
+                                <td className="py-1 px-2">
+                                  <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300">
+                                    {item.reason}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   )}
                 </div>
+              )}
+            </div>
 
-                {importProgress && (
-                  <div className="rounded-xl border border-primary-100 dark:border-primary-900/40 bg-primary-50/50 dark:bg-primary-950/20 p-3.5">
-                    <div className="flex items-center justify-between text-xs font-semibold text-primary-800 dark:text-primary-400 mb-1.5">
-                      <span>Batch {importProgress.batch} of {importProgress.totalBatches}</span>
-                      <span>{importProgress.rowsDone} / {importProgress.totalRows} rows</span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-primary-100 dark:bg-primary-900/40 overflow-hidden">
-                      <div
-                        className="h-full bg-primary-500 transition-all duration-300"
-                        style={{ width: `${Math.round((importProgress.rowsDone / importProgress.totalRows) * 100)}%` }}
-                      />
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">Each batch commits independently — a network drop only costs the current batch, not what's already imported.</p>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-4 mt-6">
+            {/* Footer - Fixed */}
+            <div className="flex-shrink-0 border-t border-slate-100 dark:border-slate-800 pt-4 mt-4">
+              {!importResults ? (
+                <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     disabled={importing}
@@ -1207,62 +1386,41 @@ function Students() {
                   </button>
                   <button
                     type="submit"
+                    form="bulk-import-form"
                     disabled={importing || !importFile || !importBatch.trim()}
                     className="rounded-xl bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white px-5 py-2.5 text-xs font-semibold shadow-md shadow-primary-500/10 flex items-center gap-1.5"
                   >
                     {importing ? <><Loader2 className="h-4 w-4 animate-spin" /> Importing...</> : 'Run Import'}
                   </button>
                 </div>
-              </form>
-            ) : (
-              /* Display import report summary results */
-              <div className="space-y-4 animate-fade-in">
-                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 rounded-2xl flex items-start gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
-                  <div className="text-xs">
-                    <h4 className="font-bold text-emerald-800 dark:text-emerald-400">Import Process Completed!</h4>
-                    <p className="text-emerald-600 dark:text-emerald-500 mt-1">
-                      Successfully imported <b>{importResults.details.importedCount}</b> student profiles into the database.
-                    </p>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => downloadFullReport(importResults.details)}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold shadow-sm transition-all"
+                    >
+                      <Download className="h-4 w-4" /> Download Full Report (3 Sheets)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => downloadInvalidIDsReport(importResults.details)}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm transition-all"
+                    >
+                      <Download className="h-4 w-4" /> Download Invalid IDs
+                    </button>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Duplicates block */}
-                  <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3.5 text-xs">
-                    <span className="font-bold text-slate-700 dark:text-slate-300 block mb-2">Duplicate Rows ({importResults.details.duplicates.length})</span>
-                    {importResults.details.duplicates.length === 0 ? (
-                      <p className="text-slate-400 italic">No duplicates detected.</p>
-                    ) : (
-                      <ul className="list-disc pl-4 space-y-1 text-slate-500 max-h-36 overflow-y-auto">
-                        {importResults.details.duplicates.map((d, idx) => <li key={`${d}_${idx}`}>{d}</li>)}
-                      </ul>
-                    )}
-                  </div>
-
-                  {/* Invalid Handles block */}
-                  <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3.5 text-xs">
-                    <span className="font-bold text-slate-700 dark:text-slate-300 block mb-2">Invalid LeetCode Handles ({importResults.details.invalidHandles.length})</span>
-                    {importResults.details.invalidHandles.length === 0 ? (
-                      <p className="text-slate-400 italic">All LeetCode usernames verified.</p>
-                    ) : (
-                      <ul className="list-disc pl-4 space-y-1 text-slate-500 max-h-36 overflow-y-auto">
-                        {importResults.details.invalidHandles.map((h, idx) => <li key={`${h}_${idx}`}>{h}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
                   <button
+                    type="button"
                     onClick={() => { setIsImportModalOpen(false); setImportFile(null); setImportResults(null); }}
-                    className="rounded-xl bg-slate-800 hover:bg-slate-700 text-white px-5 py-2.5 text-xs font-semibold shadow-sm"
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 px-5 py-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     Done
                   </button>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}

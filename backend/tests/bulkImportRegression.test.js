@@ -13,6 +13,8 @@ function mockResponse() {
   };
 }
 
+const { setAdapter, resetAdapters } = require('../services/adapters/AdapterFactory');
+
 let originalEnqueue;
 
 before(async () => {
@@ -20,6 +22,10 @@ before(async () => {
   // Mock syncQueue.enqueue globally to avoid database access after pool ends
   originalEnqueue = syncQueue.enqueue;
   syncQueue.enqueue = () => {};
+
+  setAdapter('leetcode', {
+    getProfile: async (username) => ({ verified: true, username: username || 'test_lc', rating: 1500 })
+  });
 
   // Clear any existing test data to ensure clean environment
   await db.query("DELETE FROM Users WHERE roll_no LIKE 'IMPORT-TEST-%'");
@@ -326,7 +332,77 @@ test('Bulk Import - Empty rows are skipped', async () => {
   assert.equal(checkDb.length, 1);
 });
 
+test('Bulk Import - HackerRank username import and profile seeding', async () => {
+  const req = {
+    body: {
+      students: [
+        {
+          rowNumber: 2,
+          rollNo: 'IMPORT-TEST-007',
+          name: 'HackerRank Student',
+          department: 'CSE',
+          section: 'B',
+          academicBatch: '2024-2028',
+          leetcodeUsername: 'hr_test_lc',
+          hackerrank_username: 'hr_test_handle'
+        }
+      ],
+      duplicateStrategy: 'skip',
+      dryRun: false,
+      importSessionId: 'session-test-hr',
+      batchIndex: 0
+    }
+  };
+
+  const res = mockResponse();
+  await studentController.bulkImportStudents(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.data.details.importedCount, 1);
+
+  const [userRow] = await db.query("SELECT id, hackerrank_username FROM Users WHERE roll_no = 'IMPORT-TEST-007'");
+  assert.ok(userRow);
+  assert.equal(userRow.hackerrank_username, 'hr_test_handle');
+
+  const hrProfile = await db.query("SELECT * FROM HackerRankProfiles WHERE user_id = ?", [userRow.id]);
+  assert.equal(hrProfile.length, 1);
+});
+
+test('Bulk Import - HackerRank username empty/optional column handled seamlessly', async () => {
+  const req = {
+    body: {
+      students: [
+        {
+          rowNumber: 2,
+          rollNo: 'IMPORT-TEST-008',
+          name: 'No HR Student',
+          department: 'CSE',
+          section: 'B',
+          academicBatch: '2024-2028',
+          leetcodeUsername: 'nohr_test_lc',
+          hackerrank_username: ''
+        }
+      ],
+      duplicateStrategy: 'skip',
+      dryRun: false,
+      importSessionId: 'session-test-nohr',
+      batchIndex: 0
+    }
+  };
+
+  const res = mockResponse();
+  await studentController.bulkImportStudents(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.data.details.importedCount, 1);
+
+  const [userRow] = await db.query("SELECT id, hackerrank_username FROM Users WHERE roll_no = 'IMPORT-TEST-008'");
+  assert.ok(userRow);
+  assert.equal(userRow.hackerrank_username, null);
+});
+
 after(async () => {
+  resetAdapters();
   // Restore original enqueue
   if (originalEnqueue) {
     syncQueue.enqueue = originalEnqueue;

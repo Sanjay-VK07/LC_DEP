@@ -16,6 +16,7 @@ router.delete('/:id', studentController.deleteStudent);
 
 // Bulk operations
 router.post('/import', upload.single('file'), studentController.bulkImportStudents);
+router.get('/import-history', studentController.getImportHistory);
 router.post('/bulk-delete', studentController.bulkDeleteStudents);
 router.post('/archive', studentController.archiveStudents);
 router.post('/restore', studentController.restoreStudents);

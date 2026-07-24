@@ -1811,6 +1811,152 @@ async function run() {
       console.log('[Migration] Migration "add_foreign_key_constraints" completed successfully.');
     }
 
+    // ==========================================
+    // MIGRATION 21: bulk_import_audit_logs
+    // ==========================================
+    const rows21 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'bulk_import_audit_logs'"
+    );
+
+    if (rows21.length > 0) {
+      console.log('[Migration] Migration "bulk_import_audit_logs" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "bulk_import_audit_logs"...');
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS BulkImportAuditLogs (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          session_id VARCHAR(255) NOT NULL,
+          imported_by VARCHAR(255) DEFAULT 'Admin',
+          academic_batch VARCHAR(100) DEFAULT NULL,
+          total_rows INT DEFAULT 0,
+          imported_count INT DEFAULT 0,
+          invalid_count INT DEFAULT 0,
+          skipped_count INT DEFAULT 0,
+          duplicate_count INT DEFAULT 0,
+          pending_count INT DEFAULT 0,
+          processing_time_ms INT DEFAULT 0,
+          report_details JSON DEFAULT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_session_id (session_id),
+          INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB;
+      `);
+
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('bulk_import_audit_logs')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "bulk_import_audit_logs" completed successfully.');
+    }
+
+    // ==========================================
+    // MIGRATION 22: create_handle_verifications_table
+    // ==========================================
+    const rows22 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'create_handle_verifications_table'"
+    );
+
+    if (rows22.length > 0) {
+      console.log('[Migration] Migration "create_handle_verifications_table" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "create_handle_verifications_table"...');
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS HandleVerifications (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT DEFAULT NULL,
+          platform VARCHAR(50) NOT NULL,
+          username_original VARCHAR(100) NOT NULL,
+          username_normalized VARCHAR(100) NOT NULL,
+          verification_status ENUM('VERIFIED', 'PENDING', 'INVALID', 'EXPIRED', 'UNVERIFIED', 'FAILED') DEFAULT 'UNVERIFIED',
+          verification_source ENUM('API', 'CACHE', 'IMPORT', 'MANUAL', 'ADMIN', 'AUTO_SYNC') DEFAULT 'API',
+          verified_at TIMESTAMP NULL DEFAULT NULL,
+          verification_expiry TIMESTAMP NULL DEFAULT NULL,
+          last_error TEXT DEFAULT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_hv_platform_norm (platform, username_normalized),
+          INDEX idx_hv_platform_status (platform, verification_status),
+          INDEX idx_hv_user_platform (user_id, platform),
+          INDEX idx_hv_user_id (user_id),
+          UNIQUE KEY uk_user_platform (user_id, platform),
+          CONSTRAINT fk_hv_user FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB;
+      `);
+
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('create_handle_verifications_table')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "create_handle_verifications_table" completed successfully.');
+    }
+
+    // ==========================================
+    // MIGRATION 23: enhance_bulk_import_audit_logs
+    // ==========================================
+    const rows23 = await db.query(
+      "SELECT 1 FROM Schema_Migrations WHERE migration_name = 'enhance_bulk_import_audit_logs'"
+    );
+
+    if (rows23.length > 0) {
+      console.log('[Migration] Migration "enhance_bulk_import_audit_logs" is already executed. Skipping.');
+    } else {
+      console.log('[Migration] Executing migration "enhance_bulk_import_audit_logs"...');
+
+      const auditCols = await db.query("SHOW COLUMNS FROM BulkImportAuditLogs");
+      const auditColNames = auditCols.map(c => c.Field);
+
+      if (!auditColNames.includes('import_job_id')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN import_job_id VARCHAR(100) DEFAULT NULL AFTER session_id;");
+      }
+      if (!auditColNames.includes('validation_policy')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN validation_policy VARCHAR(50) DEFAULT 'STRICT' AFTER academic_batch;");
+      }
+      if (!auditColNames.includes('current_row')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN current_row INT DEFAULT 0 AFTER total_rows;");
+      }
+      if (!auditColNames.includes('completed_rows')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN completed_rows INT DEFAULT 0 AFTER current_row;");
+      }
+      if (!auditColNames.includes('failed_rows')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN failed_rows INT DEFAULT 0 AFTER completed_rows;");
+      }
+      if (!auditColNames.includes('status')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN status VARCHAR(50) DEFAULT 'COMPLETED' AFTER failed_rows;");
+      }
+      if (!auditColNames.includes('cache_hits')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN cache_hits INT DEFAULT 0 AFTER status;");
+      }
+      if (!auditColNames.includes('cache_misses')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN cache_misses INT DEFAULT 0 AFTER cache_hits;");
+      }
+      if (!auditColNames.includes('api_requests')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN api_requests INT DEFAULT 0 AFTER cache_misses;");
+      }
+      if (!auditColNames.includes('api_failures')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN api_failures INT DEFAULT 0 AFTER api_requests;");
+      }
+      if (!auditColNames.includes('cache_hit_rate')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN cache_hit_rate DECIMAL(5,2) DEFAULT 0.00 AFTER api_failures;");
+      }
+      if (!auditColNames.includes('started_at')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN started_at TIMESTAMP NULL DEFAULT NULL AFTER report_details;");
+      }
+      if (!auditColNames.includes('completed_at')) {
+        await db.query("ALTER TABLE BulkImportAuditLogs ADD COLUMN completed_at TIMESTAMP NULL DEFAULT NULL AFTER started_at;");
+      }
+
+      await db.query(`
+        INSERT INTO Schema_Migrations (migration_name)
+        VALUES ('enhance_bulk_import_audit_logs')
+        ON DUPLICATE KEY UPDATE executed_at = CURRENT_TIMESTAMP;
+      `);
+      console.log('[Migration] Migration "enhance_bulk_import_audit_logs" completed successfully.');
+    }
+
     process.exit(0);
   } catch (err) {
     console.error('[Migration] Migration failed:', err.message);
@@ -1819,4 +1965,5 @@ async function run() {
 }
 
 run();
+
 

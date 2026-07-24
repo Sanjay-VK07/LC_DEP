@@ -22,4 +22,22 @@ function getAdapter(platform) {
   return adapter;
 }
 
-module.exports = { getAdapter };
+function setAdapter(platform, adapterInstance) {
+  if (!platform) return;
+  const p = platform.toLowerCase().trim();
+  adapters[p] = adapterInstance;
+}
+
+function resetAdapters() {
+  adapters.leetcode = new LeetCodeAdapter();
+  adapters.codeforces = new CodeforcesAdapter();
+  adapters.codechef = new CodeChefAdapter();
+  adapters.hackerrank = new HackerRankAdapter();
+}
+
+module.exports = {
+  getAdapter,
+  setAdapter,
+  resetAdapters
+};
+

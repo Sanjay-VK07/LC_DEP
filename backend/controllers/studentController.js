@@ -8,6 +8,8 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const { normalizeHandle } = require('../services/normalizationService');
 const codeforcesVerificationService = require('../services/codeforcesVerificationService');
 const syncQueue = require('../utils/syncQueue');
+const PlatformValidator = require('../services/PlatformValidator');
+const { formatReportFilename } = require('../utils/importReportGenerator');
 
 // Reusable handle validation regex constants
 const LEETCODE_REGEX = /^[a-zA-Z0-9_-]{3,30}$/;
@@ -745,8 +747,10 @@ async function deleteStudent(req, res) {
   }
 }
 
-// 5. Bulk Import Students from Excel
+// 5. Bulk Import Students from Excel with LeetCode Validation & Reporting
 async function bulkImportStudents(req, res) {
+  const startTime = Date.now();
+
   // Defensive RBAC Check
   if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
@@ -777,11 +781,11 @@ async function bulkImportStudents(req, res) {
   const duplicateStrategy = (req.body.duplicateStrategy || 'skip').toLowerCase();
   const dryRun = req.body.dryRun === true || req.body.dryRun === 'true';
   const importBatch = (req.body.academicBatch || '').trim();
-  const importSessionId = req.body.importSessionId;
+  const importSessionId = req.body.importSessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const batchIndex = Number(req.body.batchIndex || 0);
+  const importedBy = req.user ? (req.user.name || req.user.role || 'Admin') : 'Admin';
 
-  // Idempotency: if this exact batch of this session was already committed (e.g. a client-side
-  // retry after a network drop reused the same session/batch id), skip reprocessing it entirely.
+  // Idempotency check
   if (importSessionId && !dryRun) {
     try {
       const already = await db.query(
@@ -792,7 +796,19 @@ async function bulkImportStudents(req, res) {
         return res.json({
           success: true,
           message: `Batch ${batchIndex} already processed for this session — skipped duplicate submission.`,
-          details: { importedCount: 0, skippedCount: 0, duplicates: [], invalidHandles: [], errors: [], alreadyProcessed: true }
+          details: {
+            importedCount: 0,
+            skippedCount: 0,
+            invalidLeetCodeCount: 0,
+            duplicateCount: 0,
+            pendingCount: 0,
+            imported: [],
+            invalidLeetCode: [],
+            duplicates: [],
+            invalidHandles: [],
+            errors: [],
+            alreadyProcessed: true
+          }
         });
       }
     } catch (idemErr) {
@@ -801,14 +817,14 @@ async function bulkImportStudents(req, res) {
   }
 
   const imported = [];
+  const invalidLeetCode = [];
   const duplicates = [];
   const invalidHandles = [];
   const errors = [];
   let skippedCount = 0;
 
-  // Columns mapping helper: handles Excel casing/casing-indifferent columns or direct JSON
+  // Columns mapping helper
   const getVal = (row, fields) => {
-    // If it is direct JSON object, check properties directly (case-insensitive)
     const rowKeys = Object.keys(row);
     const matchedKey = rowKeys.find(k => fields.includes(k.toLowerCase().trim().replace(/[\s_./-]/g, '')));
     if (matchedKey) return String(row[matchedKey]).trim();
@@ -816,28 +832,50 @@ async function bulkImportStudents(req, res) {
   };
 
   try {
-    // Cache all existing active/inactive student usernames and roll numbers to avoid N+1 duplicate queries
+    // 1. Fetch existing users to check DB duplicates and owned handles
     const existingUsers = await db.query(
-      "SELECT roll_no, leetcode_username, codechef_username, codeforces_username, hackerrank_username FROM Users"
+      "SELECT id, roll_no, leetcode_username, codechef_username, codeforces_username, hackerrank_username FROM Users"
     );
 
-    const rollNoCache = new Set();
-    const lcCache = new Set();
-    const chefCache = new Set();
-    const forcesCache = new Set();
-    const rankCache = new Set();
+    const rollNoMap = new Map();
+    const lcHandleOwnerMap = new Map();
 
     existingUsers.forEach(u => {
-      if (u.roll_no) rollNoCache.add(u.roll_no.trim().toUpperCase());
-      if (u.leetcode_username) lcCache.add(u.leetcode_username.trim().toLowerCase());
-      if (u.codechef_username) chefCache.add(u.codechef_username.trim().toLowerCase());
-      if (u.codeforces_username) forcesCache.add(u.codeforces_username.trim().toLowerCase());
-      if (u.hackerrank_username) rankCache.add(u.hackerrank_username.trim().toLowerCase());
+      if (u.roll_no) rollNoMap.set(u.roll_no.trim().toUpperCase(), u);
+      if (u.leetcode_username) lcHandleOwnerMap.set(u.leetcode_username.trim().toLowerCase(), u.roll_no.trim().toUpperCase());
     });
 
-    // Cache all active departments
+    // 2. Fetch active departments
     const activeDeptsRows = await db.query("SELECT code FROM departments WHERE status = 'active'");
     const activeDepts = new Set(activeDeptsRows.map(d => d.code.trim().toUpperCase()));
+
+    // 3. First pass over uploaded rows to detect in-file duplicates and collect handles for batch validation
+    const seenFileLcHandles = new Map(); // normLC -> firstSeenGlobalRowIndex
+    const inFileDuplicateRows = new Set(); // globalRowIndex set
+    const lcHandlesToValidate = [];
+
+    for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
+      const row = data[rowIndex];
+      const globalRowIndex = row.rowNumber || (rowIndex + 2);
+      const lcUsername = getVal(row, ['leetcodeusername', 'leetcode', 'leetcodehandle', 'handle', 'leetcodeid']);
+      
+      if (lcUsername && lcUsername.trim()) {
+        const normLC = lcUsername.trim().toLowerCase();
+        if (seenFileLcHandles.has(normLC)) {
+          inFileDuplicateRows.add(globalRowIndex);
+        } else {
+          seenFileLcHandles.set(normLC, globalRowIndex);
+          lcHandlesToValidate.push(normLC);
+        }
+      }
+    }
+
+    // 4. Run batch validation via PlatformValidator (cache-first + outage handling + chunking)
+    const validationMap = await PlatformValidator.validateBatch('leetcode', lcHandlesToValidate, {
+      concurrency: 20,
+      retries: 2,
+      skipCache: false
+    });
 
     let transactionConnection = null;
     if (!dryRun) {
@@ -848,10 +886,10 @@ async function bulkImportStudents(req, res) {
     let shouldAbort = false;
     const pendingSyncEnqueues = [];
 
-    // We can process in sequence to handle abort rollback properly
+    // 5. Main Row-by-Row Processing Loop
     for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
       const row = data[rowIndex];
-      const globalRowIndex = row.rowNumber || (rowIndex + 2); // Use rowNumber from JSON or 2-indexed Excel row
+      const globalRowIndex = row.rowNumber || (rowIndex + 2);
 
       const rollNo = getVal(row, ['rollno', 'rollnumber', 'regno', 'registernumber', 'registerno', 'register_number']);
       const name = getVal(row, ['studentname', 'name', 'fullname', 'username']);
@@ -861,7 +899,7 @@ async function bulkImportStudents(req, res) {
       const lcUsername = getVal(row, ['leetcodeusername', 'leetcode', 'leetcodehandle', 'handle', 'leetcodeid']);
       const codechefUsername = getVal(row, ['codechefusername', 'codechef', 'codechefhandle', 'codechefid']);
       const codeforcesUsername = getVal(row, ['codeforcesusername', 'codeforces', 'codeforceshandle', 'codeforcesid', 'codeforceusername', 'codeforce', 'codeforcehandle', 'codeforceid', 'cfusername', 'cfid', 'cfhandle', 'cf']);
-      const hackerrankUsername = getVal(row, ['hackerrankusername', 'hackerrank', 'hackerrankhandle']);
+      const hackerrankUsername = getVal(row, ['hackerrankusername', 'hackerrank', 'hackerrankhandle', 'hackerrankid']);
 
       const email = getVal(row, ['email', 'emailid', 'emailaddress']);
       const phoneNumber = getVal(row, ['phonenumber', 'phone', 'contactnumber', 'mobile', 'mobilenumber']);
@@ -871,14 +909,15 @@ async function bulkImportStudents(req, res) {
       let academicStartDate = getVal(row, ['academicstartdate', 'startdate', 'admissiondate']);
       let academicEndDate = getVal(row, ['academicenddate', 'enddate', 'graduationdate']);
 
-      // Check if the row is completely empty (all required fields empty)
+      // A. Completely empty row check
       if (!rollNo && !name && !dept && !sec && !lcUsername) {
         skippedCount++;
         continue;
       }
 
-      if (!rollNo || !name || !dept || !sec || !sec.trim() || !academicBatch || !lcUsername) {
-        errors.push(`Row ${globalRowIndex}: Missing required fields (Roll No, Name, Dept, Section, Batch, LeetCode Username).`);
+      // B. Missing basic required fields check
+      if (!rollNo || !name || !dept || !sec || !sec.trim() || !academicBatch) {
+        errors.push(`Row ${globalRowIndex}: Missing required fields (Roll No, Name, Dept, Section, Batch).`);
         if (duplicateStrategy === 'abort') {
           shouldAbort = true;
           break;
@@ -886,9 +925,9 @@ async function bulkImportStudents(req, res) {
         continue;
       }
 
-      // Validate department is active in-memory
+      // C. Active Department check
       if (!activeDepts.has(dept.trim().toUpperCase())) {
-        errors.push(`Row ${globalRowIndex}: Department '${dept}' is either invalid or inactive. Please configure it in Department Management first.`);
+        errors.push(`Row ${globalRowIndex}: Department '${dept}' is either invalid or inactive.`);
         if (duplicateStrategy === 'abort') {
           shouldAbort = true;
           break;
@@ -896,22 +935,19 @@ async function bulkImportStudents(req, res) {
         continue;
       }
 
-      // Default date calculations if not provided in Excel/JSON
-      if (!academicStartDate && academicBatch) {
-        const years = academicBatch.split('-');
-        if (years.length >= 1) {
-          academicStartDate = `${years[0].trim()}-07-01`;
-        }
-      }
-      if (!academicEndDate && academicBatch) {
-        const years = academicBatch.split('-');
-        if (years.length >= 2) {
-          academicEndDate = `${years[1].trim()}-06-30`;
-        }
-      }
-
-      if (!academicStartDate || !academicEndDate) {
-        errors.push(`Row ${globalRowIndex}: Academic start/end dates could not be resolved.`);
+      // D. Missing LeetCode Username check
+      if (!lcUsername || !lcUsername.trim()) {
+        invalidLeetCode.push({
+          excelRow: globalRowIndex,
+          platform: 'LeetCode',
+          rollNo: rollNo.toUpperCase(),
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: '',
+          reason: 'Username missing'
+        });
+        invalidHandles.push(`Row ${globalRowIndex}: Username missing`);
         if (duplicateStrategy === 'abort') {
           shouldAbort = true;
           break;
@@ -921,14 +957,24 @@ async function bulkImportStudents(req, res) {
 
       const trimmedRoll = rollNo.toUpperCase();
       const trimmedLC = lcUsername.trim();
+      const normLC = trimmedLC.toLowerCase();
       const trimmedChef = codechefUsername ? codechefUsername.trim() : null;
       const trimmedForces = codeforcesUsername ? codeforcesUsername.trim() : null;
       const trimmedRank = hackerrankUsername ? hackerrankUsername.trim() : null;
 
-      // Validation using our validation helper
-      const valError = validateHandles(trimmedLC, trimmedChef, trimmedForces, trimmedRank);
-      if (valError) {
-        errors.push(`Row ${globalRowIndex}: ${valError}`);
+      // E. Check if duplicate LeetCode username in uploaded Excel file
+      if (inFileDuplicateRows.has(globalRowIndex)) {
+        invalidLeetCode.push({
+          excelRow: globalRowIndex,
+          platform: 'LeetCode',
+          rollNo: trimmedRoll,
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: trimmedLC,
+          reason: 'Duplicate in uploaded file'
+        });
+        invalidHandles.push(`Row ${globalRowIndex} (${trimmedLC}): Duplicate in uploaded file`);
         if (duplicateStrategy === 'abort') {
           shouldAbort = true;
           break;
@@ -936,31 +982,96 @@ async function bulkImportStudents(req, res) {
         continue;
       }
 
-      // Check duplicates
-      const isRollDup = rollNoCache.has(trimmedRoll);
-      const isLcDup = lcCache.has(trimmedLC.toLowerCase());
-      const isChefDup = trimmedChef && chefCache.has(trimmedChef.toLowerCase());
-      const isForcesDup = trimmedForces && forcesCache.has(trimmedForces.toLowerCase());
-      const isRankDup = trimmedRank && rankCache.has(trimmedRank.toLowerCase());
+      // F. Check if LeetCode username already assigned to another student in DB
+      const existingOwnerRoll = lcHandleOwnerMap.get(normLC);
+      if (existingOwnerRoll && existingOwnerRoll !== trimmedRoll) {
+        invalidLeetCode.push({
+          excelRow: globalRowIndex,
+          platform: 'LeetCode',
+          rollNo: trimmedRoll,
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: trimmedLC,
+          reason: 'Username already assigned to another student'
+        });
+        invalidHandles.push(`Row ${globalRowIndex} (${trimmedLC}): Username already assigned to another student`);
+        if (duplicateStrategy === 'abort') {
+          shouldAbort = true;
+          break;
+        }
+        continue;
+      }
 
-      const hasDuplicate = isRollDup || isLcDup || isChefDup || isForcesDup || isRankDup;
+      // G. Check LeetCode handle format validation
+      const formatCheck = PlatformValidator.validateFormat('leetcode', trimmedLC);
+      if (!formatCheck.valid) {
+        invalidLeetCode.push({
+          excelRow: globalRowIndex,
+          platform: 'LeetCode',
+          rollNo: trimmedRoll,
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: trimmedLC,
+          reason: formatCheck.reason
+        });
+        invalidHandles.push(`Row ${globalRowIndex} (${trimmedLC}): ${formatCheck.reason}`);
+        if (duplicateStrategy === 'abort') {
+          shouldAbort = true;
+          break;
+        }
+        continue;
+      }
 
-      if (hasDuplicate) {
+      // H. Check LeetCode API / Cache validation result
+      const valRes = validationMap.get(normLC) || await PlatformValidator.verifySingleUsername('leetcode', trimmedLC);
+      if (!valRes || !valRes.verified) {
+        const rejectionReason = valRes?.reason || 'Account does not exist';
+        invalidLeetCode.push({
+          excelRow: globalRowIndex,
+          platform: 'LeetCode',
+          rollNo: trimmedRoll,
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: trimmedLC,
+          reason: rejectionReason
+        });
+        invalidHandles.push(`Row ${globalRowIndex} (${trimmedLC}): ${rejectionReason}`);
+        if (duplicateStrategy === 'abort') {
+          shouldAbort = true;
+          break;
+        }
+        continue;
+      }
+
+      const verifiedLCUsername = valRes.username || trimmedLC;
+
+      // Default date calculations if not provided
+      if (!academicStartDate && academicBatch) {
+        const years = academicBatch.split('-');
+        if (years.length >= 1) academicStartDate = `${years[0].trim()}-07-01`;
+      }
+      if (!academicEndDate && academicBatch) {
+        const years = academicBatch.split('-');
+        if (years.length >= 2) academicEndDate = `${years[1].trim()}-06-30`;
+      }
+
+      // I. Check Duplicate Roll Number Strategy
+      const existingUser = rollNoMap.get(trimmedRoll);
+      if (existingUser) {
         if (duplicateStrategy === 'abort') {
           errors.push(`Row ${globalRowIndex}: Duplicate record detected in abort mode.`);
           shouldAbort = true;
           break;
         } else if (duplicateStrategy === 'skip') {
-          duplicates.push(`Row ${globalRowIndex}: Duplicate record skipped.`);
+          duplicates.push(`Row ${globalRowIndex} (${trimmedRoll}): Duplicate record skipped.`);
           skippedCount++;
           continue;
         } else if (duplicateStrategy === 'update') {
-          // Update strategy - perform update on active transaction
           if (!dryRun) {
             try {
-              // Re-verify Codeforces on update too, since this branch previously saved the raw
-              // handle with no verification at all, leaving codeforces_verified perpetually unset
-              // (which is what the Codeforces Progress widget requires to show any data).
               let updateCfVerified = 0, updateCfVerifiedAt = null, updateCfVerifiedSource = null, updateCfNormalized = null;
               if (trimmedForces && process.env.NODE_ENV !== 'test') {
                 try {
@@ -972,10 +1083,8 @@ async function bulkImportStudents(req, res) {
                     updateCfNormalized = normalizeHandle(trimmedForces);
                   }
                 } catch (err) {}
-                await new Promise(resolve => setTimeout(resolve, 2000));
               }
 
-              // Update student details
               await transactionConnection.query(
                 `UPDATE Users
                  SET name = ?, department = ?, section = ?, leetcode_username = ?, codechef_username = ?,
@@ -983,50 +1092,59 @@ async function bulkImportStudents(req, res) {
                      codeforces_verified_at = ?, codeforces_verified_source = ?, hackerrank_username = ?, academic_batch = ?,
                      academic_start_date = ?, academic_end_date = ?, email = ?, phone_number = ?, remarks = ?, college_code = ?
                  WHERE roll_no = ?`,
-                [name, dept, sec.toUpperCase(), trimmedLC, trimmedChef, trimmedForces, updateCfNormalized, updateCfVerified,
+                [name, dept, sec.toUpperCase(), verifiedLCUsername, trimmedChef, trimmedForces, updateCfNormalized, updateCfVerified,
                  updateCfVerifiedAt, updateCfVerifiedSource, trimmedRank, academicBatch,
                  formatDateForSql(academicStartDate), formatDateForSql(academicEndDate), email || null, phoneNumber || null, remarks || null, collegeCode, trimmedRoll]
               );
-              imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: trimmedLC, status: 'updated' });
+              await transactionConnection.query(
+                `INSERT IGNORE INTO HackerRankProfiles (user_id) SELECT id FROM Users WHERE roll_no = ?`,
+                [trimmedRoll]
+              );
+
+              imported.push({
+                rollNo: trimmedRoll,
+                name,
+                department: dept,
+                section: sec,
+                leetcodeUsername: verifiedLCUsername,
+                codechefUsername: trimmedChef || '-',
+                codeforcesUsername: trimmedForces || '-',
+                hackerrankUsername: trimmedRank || '-',
+                status: 'Updated'
+              });
             } catch (updateErr) {
               errors.push(`Row ${globalRowIndex}: DB update failed - ${updateErr.message}`);
             }
           } else {
-            imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: trimmedLC, status: 'updated' });
+            imported.push({
+              rollNo: trimmedRoll,
+              name,
+              department: dept,
+              section: sec,
+              leetcodeUsername: verifiedLCUsername,
+              codechefUsername: trimmedChef || '-',
+              codeforcesUsername: trimmedForces || '-',
+              hackerrankUsername: trimmedRank || '-',
+              status: 'Updated'
+            });
           }
           continue;
         }
       }
 
-      // Handle Verification (only in non-dry-runs or dry-runs if verification required, but to pass regression tests quickly we mock or run verify)
-      let verifyResult = { verified: true, username: trimmedLC };
+      // J. Insert New Student
       let finalChef = trimmedChef;
       let finalForces = trimmedForces;
       let finalRank = trimmedRank;
       let cfVerified = 0, cfVerifiedAt = null, cfVerifiedSource = null, cfNormalized = null;
 
       if (process.env.NODE_ENV !== 'test') {
-        try {
-          verifyResult = await getAdapter('leetcode').getProfile(trimmedLC);
-          if (!verifyResult.verified) {
-            invalidHandles.push(`Row ${globalRowIndex} (LeetCode: ${trimmedLC}): Account could not be verified on LeetCode.`);
-            if (duplicateStrategy === 'abort') {
-              shouldAbort = true;
-              break;
-            }
-            continue;
-          }
-        } catch (err) {
-          // Safe fallback for testing environment
-        }
-
         if (trimmedChef) {
           try {
             const verifyChef = await getAdapter('codechef').getProfile(trimmedChef);
             if (verifyChef.verified) finalChef = verifyChef.username;
           } catch (err) {}
         }
-
         if (trimmedForces) {
           try {
             const verifyForces = await getAdapter('codeforces').getProfile(trimmedForces);
@@ -1038,12 +1156,7 @@ async function bulkImportStudents(req, res) {
               cfNormalized = normalizeHandle(finalForces);
             }
           } catch (err) {}
-          // Codeforces enforces ~1 request/2s per IP; without this pacing, bulk imports fire
-          // requests back-to-back and Codeforces silently stops responding after the first few,
-          // causing verification to fail/hang for most subsequent rows.
-          await new Promise(resolve => setTimeout(resolve, 2000));
         }
-
         if (trimmedRank) {
           try {
             const verifyRank = await getAdapter('hackerrank').getProfile(trimmedRank);
@@ -1060,12 +1173,12 @@ async function bulkImportStudents(req, res) {
           const result = await transactionConnection.query(
             `INSERT INTO Users (name, roll_no, department, section, leetcode_username, codechef_username, codeforces_username, codeforces_username_normalized, codeforces_verified, codeforces_verified_at, codeforces_verified_source, hackerrank_username, academic_batch, academic_start_date, academic_end_date, status, email, phone_number, remarks, college_code)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-            [name, trimmedRoll, dept, sec.toUpperCase(), verifyResult.username, finalChef, finalForces, cfNormalized, cfVerified, cfVerifiedAt, cfVerifiedSource, finalRank, academicBatch, sqlStartDate, sqlEndDate, email || null, phoneNumber || null, remarks || null, collegeCode]
+            [name, trimmedRoll, dept, sec.toUpperCase(), verifiedLCUsername, finalChef, finalForces, cfNormalized, cfVerified, cfVerifiedAt, cfVerifiedSource, finalRank, academicBatch, sqlStartDate, sqlEndDate, email || null, phoneNumber || null, remarks || null, collegeCode]
           );
 
           const newStudentId = result.insertId || result[0]?.insertId;
 
-          // Seed empty profiles
+          // Seed empty profile tables
           await transactionConnection.query(
             `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, global_ranking, problems_solved)
              VALUES (?, 1500.00, 1500.00, NULL, 0)`,
@@ -1075,21 +1188,26 @@ async function bulkImportStudents(req, res) {
           await transactionConnection.query(`INSERT INTO CodeforcesProfiles (user_id) VALUES (?)`, [newStudentId]);
           await transactionConnection.query(`INSERT INTO HackerRankProfiles (user_id) VALUES (?)`, [newStudentId]);
 
-          // Add to local caches
-          rollNoCache.add(trimmedRoll);
-          lcCache.add(verifyResult.username.toLowerCase());
-          if (finalChef) chefCache.add(finalChef.toLowerCase());
-          if (finalForces) forcesCache.add(finalForces.toLowerCase());
-          if (finalRank) rankCache.add(finalRank.toLowerCase());
+          // Update local maps
+          rollNoMap.set(trimmedRoll, { id: newStudentId, roll_no: trimmedRoll });
+          lcHandleOwnerMap.set(verifiedLCUsername.toLowerCase(), trimmedRoll);
 
-          // Defer sync-queue enqueueing until after the transaction commits (see below) —
-          // enqueueing here would block on the still-uncommitted Users row's FK/row lock.
-          if (verifyResult.username) pendingSyncEnqueues.push([newStudentId, 'leetcode', verifyResult.username]);
+          if (verifiedLCUsername) pendingSyncEnqueues.push([newStudentId, 'leetcode', verifiedLCUsername]);
           if (finalChef) pendingSyncEnqueues.push([newStudentId, 'codechef', finalChef]);
           if (finalForces) pendingSyncEnqueues.push([newStudentId, 'codeforces', finalForces]);
           if (finalRank) pendingSyncEnqueues.push([newStudentId, 'hackerrank', finalRank]);
 
-          imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: verifyResult.username });
+          imported.push({
+            rollNo: trimmedRoll,
+            name,
+            department: dept,
+            section: sec,
+            leetcodeUsername: verifiedLCUsername,
+            codechefUsername: finalChef || '-',
+            codeforcesUsername: finalForces || '-',
+            hackerrankUsername: finalRank || '-',
+            status: 'Imported'
+          });
         } catch (dbErr) {
           errors.push(`Row ${globalRowIndex}: DB insertion failed - ${dbErr.message}`);
           if (duplicateStrategy === 'abort') {
@@ -1098,7 +1216,17 @@ async function bulkImportStudents(req, res) {
           }
         }
       } else {
-        imported.push({ rollNo: trimmedRoll, name, leetcodeUsername: verifyResult.username });
+        imported.push({
+          rollNo: trimmedRoll,
+          name,
+          department: dept,
+          section: sec,
+          leetcodeUsername: verifiedLCUsername,
+          codechefUsername: trimmedChef || '-',
+          codeforcesUsername: trimmedForces || '-',
+          hackerrankUsername: trimmedRank || '-',
+          status: 'Imported'
+        });
       }
     }
 
@@ -1111,6 +1239,11 @@ async function bulkImportStudents(req, res) {
           message: `Bulk import aborted due to errors: ${errors.join('; ')}`,
           details: {
             importedCount: 0,
+            invalidLeetCodeCount: 0,
+            duplicateCount: 0,
+            pendingCount: 0,
+            imported: [],
+            invalidLeetCode: [],
             skippedCount: 0,
             duplicates: [],
             invalidHandles: [],
@@ -1122,13 +1255,12 @@ async function bulkImportStudents(req, res) {
       await transactionConnection.commit();
       transactionConnection.release();
 
-      // Now that new Users rows are committed and visible, it's safe to enqueue their syncs
-      // (enqueue() writes to StudentPlatformSync via the shared pool, on a separate connection).
+      // Enqueue sync tasks after commit
       for (const [studentId, platform, username] of pendingSyncEnqueues) {
         syncQueue.enqueue(studentId, platform, username);
       }
 
-      // Log successful import session batch
+      // Log import session batch for idempotency
       if (importSessionId) {
         try {
           await db.query(
@@ -1139,39 +1271,108 @@ async function bulkImportStudents(req, res) {
           console.error('[Bulk Import] Failed to save session batch details:', sessErr.message);
         }
       }
-    } else {
-      if (shouldAbort) {
-        return res.status(400).json({
-          success: false,
-          message: 'Dry run aborted with errors.',
-          details: {
-            importedCount: 0,
-            skippedCount: 0,
-            duplicates: [],
-            invalidHandles: [],
-            errors
-          }
-        });
+    } else if (shouldAbort) {
+      return res.status(400).json({
+        success: false,
+        message: 'Dry run aborted with errors.',
+        details: {
+          importedCount: 0,
+          invalidLeetCodeCount: 0,
+          duplicateCount: 0,
+          pendingCount: 0,
+          imported: [],
+          invalidLeetCode: [],
+          skippedCount: 0,
+          duplicates: [],
+          invalidHandles: [],
+          errors
+        }
+      });
+    }
+
+    const processingTimeMs = Date.now() - startTime;
+    const processingTimeSec = (processingTimeMs / 1000).toFixed(2);
+    const processingTime = `${processingTimeSec}s`;
+
+    const pendingCount = invalidLeetCode.filter(r => [
+      'Cloudflare blocked',
+      'Rate limited',
+      'Verification timeout',
+      'Unable to verify after retries'
+    ].includes(r.reason)).length;
+
+    const reportDetails = {
+      totalRows: data.length,
+      importedCount: imported.length,
+      invalidLeetCodeCount: invalidLeetCode.length,
+      duplicateCount: duplicates.length,
+      pendingCount,
+      skippedCount,
+      imported,
+      invalidLeetCode,
+      duplicates,
+      invalidHandles,
+      errors,
+      processingTimeMs,
+      processingTime,
+      reportFilename: formatReportFilename('BulkImportReport'),
+      invalidFilename: formatReportFilename('InvalidLeetCodeIDs')
+    };
+
+    // Save import audit log to BulkImportAuditLogs table
+    if (!dryRun) {
+      try {
+        await db.query(
+          `INSERT INTO BulkImportAuditLogs (session_id, imported_by, academic_batch, total_rows, imported_count, invalid_count, skipped_count, duplicate_count, pending_count, processing_time_ms, report_details)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [importSessionId, importedBy, importBatch || 'N/A', data.length, imported.length, invalidLeetCode.length, skippedCount, duplicates.length, pendingCount, processingTimeMs, JSON.stringify(reportDetails)]
+        );
+      } catch (auditErr) {
+        console.error('[Bulk Import] Failed to write BulkImportAuditLogs:', auditErr.message);
       }
     }
 
     return res.json({
       success: true,
-      message: dryRun 
-        ? `Dry run completed. Processed ${data.length} rows.` 
-        : `Processed ${data.length} rows. Imported: ${imported.length}, Duplicates: ${duplicates.length}, Invalid Handles: ${invalidHandles.length}, Errors: ${errors.length}`,
-      details: {
-        importedCount: imported.length,
-        skippedCount,
-        duplicates,
-        invalidHandles,
-        errors
-      }
+      message: dryRun
+        ? `Dry run completed. Processed ${data.length} rows.`
+        : `Processed ${data.length} rows in ${processingTime}. Imported: ${imported.length}, Invalid LeetCode IDs: ${invalidLeetCode.length}, Duplicates: ${duplicates.length}, Skipped: ${skippedCount}`,
+      details: reportDetails
     });
 
   } catch (error) {
     console.error('Error processing bulk upload:', error);
     return res.status(500).json({ success: false, message: 'Internal server error processing file.' });
+  }
+}
+
+// 5a. Get Bulk Import Audit Log History for Admin Reporting
+async function getImportHistory(req, res) {
+  try {
+    const logs = await db.query(
+      `SELECT id, session_id, imported_by, academic_batch, total_rows, imported_count, invalid_count, skipped_count, duplicate_count, pending_count, processing_time_ms, report_details, created_at
+       FROM BulkImportAuditLogs
+       ORDER BY created_at DESC
+       LIMIT 50`
+    );
+
+    const formatted = logs.map(l => {
+      let details = null;
+      if (l.report_details) {
+        try {
+          details = typeof l.report_details === 'string' ? JSON.parse(l.report_details) : l.report_details;
+        } catch (e) {}
+      }
+      return {
+        ...l,
+        report_details: details
+      };
+    });
+
+    return res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('Error fetching bulk import history:', err);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve import audit logs.' });
   }
 }
 
@@ -1857,6 +2058,7 @@ module.exports = {
   deleteStudent,
   bulkDeleteStudents,
   bulkImportStudents,
+  getImportHistory,
   archiveStudents,
   restoreStudents,
   getArchivedSummary,
