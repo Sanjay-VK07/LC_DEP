@@ -287,22 +287,21 @@ function DataHealth() {
 
   const buildPlatformStatsRows = (stats) => stats.map(s => ({
     'Name': s.name,
-    'Student Roll No': s.rollNo,
+    'Roll No': s.rollNo,
 
-    'LC Account': s.leetcode?.username || '',
     'LC Rating': s.leetcode?.rating || '',
-    'LC Biweekly': s.leetcode?.biweeklyThisMonth || 0,
-    'LC Weekly': s.leetcode?.weeklyThisMonth || 0,
-    'LC Monthly': (s.leetcode?.weeklyThisMonth || 0) + (s.leetcode?.biweeklyThisMonth || 0),
-    'LC Total Solved': s.leetcode?.totalSolved || 0,
+    'LC Easy': s.leetcode?.easySolved || 0,
+    'LC Medium': s.leetcode?.mediumSolved || 0,
+    'LC Hard': s.leetcode?.hardSolved || 0,
+    'LC Total': s.leetcode?.totalSolved || 0,
 
-    'CC Account': s.codechef?.username || '',
     'CC Rating': s.codechef?.rating || '',
-    'CC Total Solved': s.codechef?.totalSolved || 0,
+    'CC Total': s.codechef?.totalSolved || 0,
 
-    'CF Account': s.codeforces?.username || '',
     'CF Rating': s.codeforces?.rating || '',
-    'CF Total Solved': s.codeforces?.totalSolved || 0
+    'CF Total': s.codeforces?.totalSolved || 0,
+
+    'HackerRank Total': s.hackerrank?.totalSolved || 0
   }));
 
   const toggleRow = (id) => {
@@ -338,23 +337,24 @@ function DataHealth() {
   const handleExportCSV = async () => {
     setExportingSpreadsheet(true);
     try {
-      if (!filteredStudents || !filteredStudents.length) return;
+      let stats = platformStats;
+      if (!stats || !stats.length) {
+        const res = await axios.get('/api/analytics/platform-stats');
+        stats = res.data.success ? res.data.data : [];
+      }
+      if (!stats || !stats.length) {
+        showToast('No platform stats available to export.', 'error');
+        return;
+      }
 
-      const rows = filteredStudents.map(s => {
-        const leetcode = s.connections?.leetcode || {};
-        return {
-          'Name': s.name !== undefined ? s.name : '',
-          'Roll Number': s.rollNo !== undefined ? s.rollNo : '',
-          'Rating': leetcode.connected && leetcode.currentRating !== undefined && leetcode.currentRating !== null ? leetcode.currentRating : '',
-          'Hard': leetcode.connected && leetcode.hardSolved !== undefined && leetcode.hardSolved !== null ? leetcode.hardSolved : '',
-          'Total': leetcode.connected && leetcode.problemsSolved !== undefined && leetcode.problemsSolved !== null ? leetcode.problemsSolved : ''
-        };
-      });
-
+      const rows = buildPlatformStatsRows(stats);
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Exported Stats');
       XLSX.writeFile(wb, 'Diagnostic_Center_Report.xlsx');
+    } catch (err) {
+      console.error('[ExportCSV] Error:', err);
+      showToast('Failed to export spreadsheet: ' + err.message, 'error');
     } finally {
       setExportingSpreadsheet(false);
     }

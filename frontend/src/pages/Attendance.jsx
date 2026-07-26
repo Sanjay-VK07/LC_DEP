@@ -762,8 +762,6 @@ function Attendance() {
                     <th className="px-6 py-4">Roll Number & Student</th>
                     <th className="px-6 py-4">Department & Sec</th>
                     <th className="px-6 py-4">LeetCode Handle</th>
-                    <th className="px-6 py-4">Registered?</th>
-                    <th className="px-6 py-4">Joined?</th>
                     <th className="px-6 py-4">Attendance Status</th>
                     <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
@@ -771,7 +769,7 @@ function Attendance() {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs text-slate-600 dark:text-slate-350">
                   {loadingList ? (
                     <tr>
-                      <td colSpan="7" className="text-center py-16">
+                      <td colSpan="5" className="text-center py-16">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <div className="h-8 w-8 animate-spin rounded-full border-3 border-primary-500 border-t-transparent"></div>
                           <span className="text-xs font-semibold text-slate-400">Loading contest attendance sheet...</span>
@@ -780,7 +778,7 @@ function Attendance() {
                     </tr>
                   ) : error ? (
                     <tr>
-                      <td colSpan="7" className="text-center py-12">
+                      <td colSpan="5" className="text-center py-12">
                         <div className="flex flex-col items-center justify-center space-y-3 p-4 bg-rose-50/50 dark:bg-rose-950/20 rounded-2xl border border-rose-200 dark:border-rose-900/30 max-w-md mx-auto">
                           <AlertTriangle className="h-8 w-8 text-rose-500" />
                           <p className="text-xs font-bold text-rose-600 dark:text-rose-400">{error}</p>
@@ -795,7 +793,7 @@ function Attendance() {
                     </tr>
                   ) : filteredStudents.length === 0 ? (
                     <tr>
-                      <td colSpan="7" className="text-center py-16 text-slate-400">
+                      <td colSpan="5" className="text-center py-16 text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <User className="h-8 w-8 text-slate-300 dark:text-slate-700" />
                           <span className="font-semibold text-slate-500 dark:text-slate-400">No student records found</span>
@@ -834,28 +832,6 @@ function Attendance() {
                                 </a>
                               ) : (
                                 <span className="text-slate-450 italic">Not Registered</span>
-                              )}
-                            </td>
-                            <td className="px-6 py-3.5">
-                              {s.registration_time ? (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400 px-2 py-0.5 font-bold">
-                                  Registered ✓
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 text-slate-400 dark:bg-slate-850 dark:text-slate-555 px-2 py-0.5 font-semibold">
-                                  Not Registered
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-6 py-3.5">
-                              {s.join_time ? (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400 px-2 py-0.5 font-bold">
-                                  Joined ✓
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 text-slate-400 dark:bg-slate-850 dark:text-slate-555 px-2 py-0.5 font-semibold">
-                                  No Activity
-                                </span>
                               )}
                             </td>
                             <td className="px-6 py-3.5">
@@ -924,7 +900,7 @@ function Attendance() {
                           </tr>
                           {expandedStudentId === studentId && (
                             <tr className="bg-slate-50/20 dark:bg-slate-900/10">
-                              <td colSpan="7" className="px-6 py-4 border-t border-b border-slate-100 dark:border-slate-800/80">
+                              <td colSpan="5" className="px-6 py-4 border-t border-b border-slate-100 dark:border-slate-800/80">
                                 <div className="animate-fade-in text-xs space-y-3">
                                   <h4 className="font-bold text-slate-700 dark:text-slate-300">EnthraHub Activity Log Audit Timeline</h4>
                                   

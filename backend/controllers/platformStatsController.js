@@ -76,6 +76,9 @@ async function getPlatformStats(req, res) {
                lp.current_rating   AS lc_rating,
                lp.highest_rating   AS lc_best_rating,
                lp.problems_solved  AS lc_total_solved,
+               lp.easy_solved      AS lc_easy_solved,
+               lp.medium_solved    AS lc_medium_solved,
+               lp.hard_solved      AS lc_hard_solved,
                cp.contest_history  AS cc_history,
                cp.current_rating   AS cc_rating,
                cp.stars            AS cc_stars,
@@ -83,11 +86,13 @@ async function getPlatformStats(req, res) {
                cfp.contest_history AS cf_history,
                cfp.current_rating  AS cf_rating,
                cfp.rank            AS cf_rank,
-               cfp.problems_solved AS cf_total_solved
+               cfp.problems_solved AS cf_total_solved,
+               hrp.problems_solved AS hr_total_solved
         FROM Users u
         LEFT JOIN LeetCodeProfiles  lp  ON lp.user_id  = u.id
         LEFT JOIN CodeChefProfiles  cp  ON cp.user_id  = u.id
         LEFT JOIN CodeforcesProfiles cfp ON cfp.user_id = u.id
+        LEFT JOIN HackerRankProfiles hrp ON hrp.user_id = u.id
         WHERE u.status = 'active'
       `;
       const params = [];
@@ -168,6 +173,9 @@ async function getPlatformStats(req, res) {
             rating: s.lc_rating ? Number(s.lc_rating) : null,
             bestRating: s.lc_best_rating ? Number(s.lc_best_rating) : null,
             totalSolved: s.lc_total_solved || 0,
+            easySolved: s.lc_easy_solved || 0,
+            mediumSolved: s.lc_medium_solved || 0,
+            hardSolved: s.lc_hard_solved || 0,
             weeklyThisWeek: lcWeekly,
             biweeklyThisWeek: lcBiweekly,
             weeklyThisMonth: lcWeeklyMonth,
@@ -191,6 +199,9 @@ async function getPlatformStats(req, res) {
             totalSolved: s.cf_total_solved || 0,
             contestsThisWeek: cfWeek,
             contestsThisMonth: cfMonth
+          },
+          hackerrank: {
+            totalSolved: s.hr_total_solved || 0
           }
         };
       });
