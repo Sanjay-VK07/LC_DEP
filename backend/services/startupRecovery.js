@@ -8,6 +8,56 @@ const snapshotEngine = require('./snapshotEngine');
 class StartupRecovery {
   async run() {
     console.log('[StartupRecovery] Running startup checks for interrupted contest syncs...');
+
+    // 0. Contest Integrity Self-Healing: Clean obsolete test orphans & recreate missing Contests entries
+    try {
+      console.log('[StartupRecovery] Running Contest Integrity self-healing checks...');
+      
+      // A. Remove test-only orphan LiveContests records (no matching Contests and no child ContestAttendance)
+      const deletedTestOrphans = await db.query(`
+        DELETE lc FROM LiveContests lc
+        LEFT JOIN Contests c ON lc.contestSlug = c.slug
+        LEFT JOIN ContestAttendance ca ON lc.id = ca.contestId
+        WHERE c.slug IS NULL
+          AND ca.id IS NULL
+          AND (
+            lc.contestSlug LIKE 'test-%' OR
+            lc.contestSlug LIKE 'mock-%' OR
+            lc.contestSlug LIKE 'dummy-%' OR
+            lc.contestSlug LIKE 'upcoming-live-%' OR
+            lc.is_test = 1
+          )
+      `);
+      if (deletedTestOrphans.affectedRows > 0) {
+        console.log(`[StartupRecovery] Purged ${deletedTestOrphans.affectedRows} obsolete test orphan LiveContests records.`);
+      }
+
+      // B. Auto-recreate missing Contests records for any remaining legitimate orphan LiveContests
+      const orphanLive = await db.query(`
+        SELECT lc.* FROM LiveContests lc
+        LEFT JOIN Contests c ON lc.contestSlug = c.slug
+        WHERE c.slug IS NULL
+      `);
+
+      for (const lc of orphanLive) {
+        const slug = lc.contestSlug;
+        const title = lc.contestName || slug;
+        const contestType = lc.contestType || (slug.includes('biweekly') ? 'Biweekly' : 'Weekly');
+        const match = slug.match(/contest-(\d+)/i) || slug.match(/starters-(\d+)/i) || slug.match(/(\d+)/);
+        const contestNumber = match ? parseInt(match[1], 10) : 0;
+        const startTime = lc.startTime ? new Date(lc.startTime) : new Date();
+        const platform = lc.platform || 'LeetCode';
+
+        await db.query(`
+          INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
+          VALUES (?, ?, ?, ?, ?, 5400, 'Rated', ?, 'SELF_HEALING')
+          ON DUPLICATE KEY UPDATE title = VALUES(title), start_time = VALUES(start_time)
+        `, [title, slug, contestType, contestNumber, startTime, platform]);
+        console.log(`[StartupRecovery] Auto-recreated missing Contests record for orphan LiveContests slug: "${slug}"`);
+      }
+    } catch (integrityErr) {
+      console.warn('[StartupRecovery] Contest Integrity self-healing error (non-critical):', integrityErr.message);
+    }
     
     // 1. Data Recovery check for incorrect ABSENT statuses (unconditional)
     try {

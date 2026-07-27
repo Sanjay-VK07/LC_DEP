@@ -244,6 +244,20 @@ class LiveContestScheduler {
           c.endTime,
           c.status
         ]);
+
+        // Ensure foreign-key consistency: matching Contests record exists
+        const slug = c.contestSlug;
+        const title = c.contestName || slug;
+        const contestType = c.contestType || (slug.includes('biweekly') ? 'Biweekly' : 'Weekly');
+        const match = slug.match(/contest-(\d+)/i) || slug.match(/starters-(\d+)/i) || slug.match(/(\d+)/);
+        const contestNumber = match ? parseInt(match[1], 10) : 0;
+        const startTimeDate = c.startTime ? new Date(c.startTime) : new Date();
+
+        await db.query(`
+          INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
+          VALUES (?, ?, ?, ?, ?, 5400, 'Rated', ?, 'SCHEDULER')
+          ON DUPLICATE KEY UPDATE title = VALUES(title), start_time = VALUES(start_time)
+        `, [title, slug, contestType, contestNumber, startTimeDate, c.platform || 'LeetCode']);
       }
       console.log(`[LiveContestScheduler] Discovery scan finished. Synced ${list.length} contests.`);
     } catch (err) {

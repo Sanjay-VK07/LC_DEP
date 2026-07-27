@@ -263,11 +263,14 @@ function evaluateCompleteness(platform, rawData) {
   } else if (p === 'codechef') {
     const totalSolved = Number(rawData.problemsSolved || 0);
     const hasHistory = Array.isArray(rawData.contestHistory) && rawData.contestHistory.length > 0;
+    const isUnrated = rawData.unrated || rawData.contestParticipationCount === 0 || (!hasHistory && rawData.rating === null);
 
     if (totalSolved <= 0) { missing.push('problems_solved'); score -= 30; }
-    if (rawData.rating === undefined || rawData.rating === null) { missing.push('rating'); score -= 30; }
-    if (rawData.stars === undefined || rawData.stars === null) { missing.push('stars'); score -= 25; }
-    if (!hasHistory) { missing.push('contest_history'); score -= 15; }
+    if (!isUnrated) {
+      if (rawData.rating === undefined || rawData.rating === null) { missing.push('rating'); score -= 30; }
+      if (rawData.stars === undefined || rawData.stars === null) { missing.push('stars'); score -= 25; }
+      if (!hasHistory) { missing.push('contest_history'); score -= 15; }
+    }
   } else if (p === 'hackerrank') {
     const totalSolved = Number(rawData.problemsSolved || 0);
     const badges = Array.isArray(rawData.badges) ? rawData.badges : [];
