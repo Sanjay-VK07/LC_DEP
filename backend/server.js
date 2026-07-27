@@ -27,42 +27,38 @@ const compression = require('compression');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Allowed origin list for production and development
+// Production & Development allowed origin list (normalized without trailing slashes)
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
-  "http://localhost:3001",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:3000",
-  "http://127.0.0.1:3001",
   "https://college-teal-ten.vercel.app",
   process.env.FRONTEND_URL
 ].filter(Boolean).map(url => url.trim().replace(/\/+$/, ''));
 
-// Production-ready CORS options
+// Production-ready CORS configuration
 const corsOptions = {
   origin(origin, callback) {
+    // Print incoming origin for debugging and audit tracing in Render logs
+    console.log("Incoming Origin:", origin);
+
     // 1. Allow requests with no origin (curl, postman, same-origin, mobile apps)
     if (!origin) return callback(null, true);
 
     const cleanOrigin = origin.trim().replace(/\/+$/, '');
     const cleanFrontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.trim().replace(/\/+$/, '') : '';
 
-    // 2. Allow all localhost & 127.0.0.1 ports
-    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin);
+    // 2. Exact match check against allowed origins list or process.env.FRONTEND_URL
+    const isAllowed = allowedOrigins.includes(cleanOrigin) ||
+                      (cleanFrontendUrl && cleanOrigin === cleanFrontendUrl) ||
+                      process.env.NODE_ENV !== 'production';
 
-    // 3. Allow Vercel preview and production deployments (*.vercel.app)
-    const isVercelDomain = /\.vercel\.app$/.test(cleanOrigin);
-
-    // 4. Match explicitly configured FRONTEND_URL or allowedOrigins list
-    const isConfiguredOrigin = allowedOrigins.includes(cleanOrigin) ||
-                               (cleanFrontendUrl && cleanOrigin === cleanFrontendUrl);
-
-    if (isLocalhost || isVercelDomain || isConfiguredOrigin || process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
+    if (isAllowed) {
+      // Pass string cleanOrigin so Access-Control-Allow-Origin echoes requesting origin and credentials: true works
+      return callback(null, cleanOrigin);
     }
 
     console.warn(`[CORS Audit] Rejected origin: "${origin}"`);
+    // NEVER throw an Error from the CORS callback. Returning false omits CORS headers safely without triggering 500 errors.
     return callback(null, false);
   },
   credentials: true,
@@ -71,24 +67,16 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
-// 1. Register CORS middleware BEFORE all other middlewares, parsers, and routes
+// 1. Register CORS middleware and global OPTIONS handling BEFORE all other middlewares, parsers, and routes
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.options("*", cors(corsOptions));
 
-// 2. Explicit OPTIONS short-circuit guard (guarantees preflight requests never reach business logic or throw exceptions)
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-  next();
-});
-
-// 3. Body parsers and request compression
+// 2. Body parsers, compression, and request logging
 app.use(compression());
 app.use(express.json());
 app.use(requestLogger);
 
-// 4. API Routes mapping
+// 3. API Routes mapping
 app.use('/api/students', studentRoutes);
 app.use('/api/contests', contestRoutes);
 app.use('/api/attendance', attendanceRoutes);
