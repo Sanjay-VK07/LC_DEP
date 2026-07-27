@@ -121,17 +121,6 @@ function Login() {
               )}
             </button>
           </form>
-
-          {/* Quick seeded roles help text */}
-          <div className="mt-8 border-t border-slate-800/80 pt-6 text-center text-xs text-slate-500">
-            <p className="font-semibold">Demo Credentials</p>
-            <p className="mt-1">
-              Admin: <code className="text-slate-400">admin</code> / <code className="text-slate-400">admin123</code>
-            </p>
-            <p>
-              Faculty: <code className="text-slate-400">faculty</code> / <code className="text-slate-400">faculty123</code>
-            </p>
-          </div>
         </div>
       </div>
     </div>

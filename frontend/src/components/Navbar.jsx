@@ -1,12 +1,21 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import { Menu, Sun, Moon, Bell, AlertTriangle } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Menu, Sun, Moon, Bell, AlertTriangle, LogOut } from 'lucide-react';
 import axios from 'axios';
 
 function Navbar({ toggleSidebar }) {
   const { darkMode, toggleDarkMode } = useTheme();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [alerts, setAlerts] = useState({ missingUploads: [], lowAttendanceStudents: [] });
   const [showAlertsMenu, setShowAlertsMenu] = useState(false);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/');
+  };
 
   useEffect(() => {
     // Fetch notifications
@@ -122,11 +131,18 @@ function Navbar({ toggleSidebar }) {
         {/* Brand/Label (Replacing User Profile Circle) */}
         <div className="flex items-center gap-2 border-l border-slate-200 dark:border-slate-800 pl-4">
           <div className="text-right">
-            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Access Mode</p>
+            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">{user?.role || 'Access Mode'}</p>
             <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Open Dashboard
+              {user?.name || user?.username || 'Open Dashboard'}
             </p>
           </div>
+          <button
+            onClick={handleLogout}
+            className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-950/20 dark:hover:text-rose-400 transition-colors"
+            title="Logout"
+          >
+            <LogOut className="h-5 w-5" />
+          </button>
         </div>
       </div>
     </header>

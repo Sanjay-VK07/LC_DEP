@@ -1143,21 +1143,15 @@ async function run() {
         ) ENGINE=InnoDB
       `);
 
-      // 7. Seed default accounts
+      // 7. Seed default account
       const bcrypt = require('bcryptjs');
-      const superAdminHash = await bcrypt.hash('admin123', 10);
-      const hodHash = await bcrypt.hash('hod123', 10);
-      const facultyHash = await bcrypt.hash('faculty123', 10);
-      const placementHash = await bcrypt.hash('placement123', 10);
+      const cseHash = await bcrypt.hash('cse1234', 10);
 
       await db.query(`
         INSERT IGNORE INTO Accounts (username, password_hash, role, name, email)
-        VALUES 
-          ('admin', ?, 'Super Admin', 'System Administrator', 'admin@college.edu'),
-          ('hod', ?, 'HOD', 'Head of Department', 'hod@college.edu'),
-          ('faculty', ?, 'Faculty', 'Faculty Coordinator', 'faculty@college.edu'),
-          ('placement', ?, 'Placement Coordinator', 'Placement Officer', 'placement@college.edu')
-      `, [superAdminHash, hodHash, facultyHash, placementHash]);
+        VALUES
+          ('cse', ?, 'Super Admin', 'CSE Administrator', 'cse@college.edu')
+      `, [cseHash]);
 
       // Seed Student accounts based on existing Users table
       console.log('[Migration] Seeding Student accounts...');
