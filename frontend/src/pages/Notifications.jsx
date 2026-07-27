@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Bell, 
   Search, 
@@ -39,7 +40,7 @@ function Notifications() {
         params.search = search;
       }
 
-      const res = await axios.get('/api/notifications', { params });
+      const res = await axios.get(`${API_URL}/notifications`, { params });
       setNotifications(res.data.success ? res.data.data : res.data);
     } catch (err) {
       setError('Failed to fetch notifications.');
@@ -57,7 +58,7 @@ function Notifications() {
 
   const handleMarkRead = async (id) => {
     try {
-      const res = await axios.post(`/api/notifications/read/${id}`);
+      const res = await axios.post(`${API_URL}/notifications/read/${id}`);
       if (res.data.success) {
         setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: 1 } : n));
       }
@@ -68,7 +69,7 @@ function Notifications() {
 
   const handleMarkAllRead = async () => {
     try {
-      const res = await axios.post('/api/notifications/read-all');
+      const res = await axios.post(`${API_URL}/notifications/read-all`);
       if (res.data.success) {
         setSuccess('All notifications marked as read.');
         fetchNotifications();
@@ -80,7 +81,7 @@ function Notifications() {
 
   const handleArchive = async (id) => {
     try {
-      const res = await axios.post(`/api/notifications/archive/${id}`);
+      const res = await axios.post(`${API_URL}/notifications/archive/${id}`);
       if (res.data.success) {
         setNotifications(prev => prev.filter(n => n.id !== id));
       }

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_URL } from '../config/api';
 
 const requestCache = new Map();
 
@@ -30,8 +31,8 @@ export async function fetchUnifiedProfile(studentId, forceRefresh = false) {
   const promise = (async () => {
     try {
       const url = forceRefresh
-        ? `/api/students/${studentId}/unified-profile?refresh=true`
-        : `/api/students/${studentId}/unified-profile`;
+        ? `${API_URL}/students/${studentId}/unified-profile?refresh=true`
+        : `${API_URL}/students/${studentId}/unified-profile`;
         
       const res = await axios.get(url);
       if (res.data && res.data.success) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { useAuth } from '../context/AuthContext';
 import { 
   Briefcase, 
@@ -53,13 +54,13 @@ function PlacementDashboard() {
   useEffect(() => {
     // Fetch departments and batches for staff filters
     if (!isStudent) {
-      axios.get('/api/departments')
+      axios.get(`${API_URL}/departments`)
         .then(res => {
           if (res.data.success) setDepts(res.data.data);
         })
         .catch(err => console.error('Failed to load departments', err));
 
-      axios.get('/api/students/batches')
+      axios.get(`${API_URL}/students/batches`)
         .then(res => {
           if (res.data.success) setBatches(res.data.data);
         })
@@ -71,7 +72,7 @@ function PlacementDashboard() {
     if (!targetStudentId) return;
     setStudentLoading(true);
     try {
-      const res = await axios.get(`/api/placement/student/${targetStudentId}`);
+      const res = await axios.get(`${API_URL}/placement/student/${targetStudentId}`);
       if (res.data.success) {
         setStudentData(res.data.data);
       }
@@ -89,7 +90,7 @@ function PlacementDashboard() {
       if (filterDept) params.department = filterDept;
       if (filterBatch) params.academicBatch = filterBatch;
 
-      const res = await axios.get('/api/placement/overview', { params });
+      const res = await axios.get(`${API_URL}/placement/overview`, { params });
       if (res.data.success) {
         setOverviewData(res.data);
       }

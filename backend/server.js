@@ -22,15 +22,30 @@ const placementRoutes = require('./routes/placement');
 const aiRoutes = require('./routes/ai');
 const verificationRoutes = require('./routes/verificationRoutes');
 
-
 const compression = require('compression');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
+
+// CORS configuration for production deployment
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.some(o => origin && origin.startsWith(o))) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true
+}));
 
 // Middleware
 app.use(compression());
-app.use(cors());
 app.use(express.json());
 app.use(requestLogger);
 
@@ -52,7 +67,6 @@ app.use('/api/placement', placementRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/verification', verificationRoutes);
 
-
 // API v1 namespace aliases (backward compatible — both /api/ and /api/v1/ work)
 app.use('/api/v1/students', studentRoutes);
 app.use('/api/v1/contests', contestRoutes);
@@ -71,7 +85,6 @@ app.use('/api/v1/ai', aiRoutes);
 
 // Global error handler (must be registered after all route controllers)
 app.use(errorHandler);
-
 
 // Root API
 app.get('/', (req, res) => {
@@ -177,8 +190,8 @@ async function startServer() {
 
   app.listen(PORT, () => {
     console.log(`[Server] EnthraHub Faculty Analytics System running on port ${PORT}`);
-    console.log(`[Server] API available at: http://localhost:${PORT}/api/`);
-    console.log(`[Server] Health check: http://localhost:${PORT}/api/health`);
+    console.log(`[Server] API available at: /api/`);
+    console.log(`[Server] Health check: /api/health`);
   });
 }
 

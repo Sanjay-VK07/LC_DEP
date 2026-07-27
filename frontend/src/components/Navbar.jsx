@@ -4,6 +4,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { Menu, Sun, Moon, Bell, AlertTriangle, LogOut } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 
 function Navbar({ toggleSidebar }) {
   const { darkMode, toggleDarkMode } = useTheme();
@@ -21,7 +22,7 @@ function Navbar({ toggleSidebar }) {
     // Fetch notifications
     const fetchAlerts = async () => {
       try {
-        const res = await axios.get('/api/analytics/dashboard-stats');
+        const res = await axios.get(`${API_URL}/analytics/dashboard-stats`);
         if (res.data.success && res.data.alerts) {
           setAlerts(res.data.alerts);
         }

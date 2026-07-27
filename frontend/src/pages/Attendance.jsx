@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   CloudUpload, 
   Search, 
@@ -103,7 +104,7 @@ function Attendance() {
       if (selectedSection) params.section = selectedSection;
 
       console.log(`[Frontend Telemetry] Fetching attendance for contest ${selectedContestId}...`);
-      const res = await axios.get(`/api/attendance/contest/${selectedContestId}`, {
+      const res = await axios.get(`${API_URL}/attendance/contest/${selectedContestId}`, {
         params,
         signal: listAbortControllerRef.current.signal
       });
@@ -137,7 +138,7 @@ function Attendance() {
   const fetchSystemHealth = async () => {
     setLoadingHealth(true);
     try {
-      const res = await axios.get('/api/health');
+      const res = await axios.get(`${API_URL}/health`);
       setSystemHealth(res.data);
     } catch (err) {
       console.error(err);
@@ -149,7 +150,7 @@ function Attendance() {
   const fetchJobs = async () => {
     setLoadingJobs(true);
     try {
-      const res = await axios.get('/api/jobs');
+      const res = await axios.get(`${API_URL}/jobs`);
       if (res.data.success) {
         setJobs(res.data.data);
       }
@@ -164,7 +165,7 @@ function Attendance() {
     setError('');
     setSuccess('');
     try {
-      const res = await axios.post('/api/jobs/sync');
+      const res = await axios.post(`${API_URL}/jobs/sync`);
       if (res.data.success) {
         setSuccess('Manual platform synchronization enqueued successfully.');
         fetchJobs();
@@ -181,12 +182,12 @@ function Attendance() {
     setBackfillProgress(5);
     setBackfillMessage('Enqueuing attendance backfill job...');
     try {
-      const res = await axios.post('/api/jobs/backfill');
+      const res = await axios.post(`${API_URL}/jobs/backfill`);
       if (res.data.success) {
         const jobId = res.data.jobId;
         const poll = setInterval(async () => {
           try {
-            const jobRes = await axios.get(`/api/jobs/${jobId}`);
+            const jobRes = await axios.get(`${API_URL}/jobs/${jobId}`);
             const job = jobRes.data.data;
             if (job) {
               setBackfillProgress(job.progress || 5);
@@ -220,7 +221,7 @@ function Attendance() {
     setError('');
     setSuccess('');
     try {
-      await axios.post('/api/jobs/cache/invalidate');
+      await axios.post(`${API_URL}/jobs/cache/invalidate`);
       setSuccess('Analytics cache cleared successfully.');
       fetchSystemHealth();
     } catch (e) {
@@ -245,10 +246,10 @@ function Attendance() {
     const fetchInitialData = async () => {
       try {
         const [contestsRes, deptsRes, batchesRes, leaderboardRes] = await Promise.all([
-          axios.get('/api/contests'),
-          axios.get('/api/departments?status=active'),
-          axios.get('/api/students/batches'),
-          axios.get('/api/students?status=active')
+          axios.get(`${API_URL}/contests`),
+          axios.get(`${API_URL}/departments?status=active`),
+          axios.get(`${API_URL}/students/batches`),
+          axios.get(`${API_URL}/students?status=active`)
         ]);
         if (contestsRes.data.success) {
           setContests(contestsRes.data.data);
@@ -279,7 +280,7 @@ function Attendance() {
         const params = { status: 'active' };
         if (selectedDept) params.department = selectedDept;
         if (selectedBatch) params.academicBatch = selectedBatch;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -316,7 +317,7 @@ function Attendance() {
       if (selectedSection) params.section = selectedSection;
 
       console.log(`[Frontend Export Start] Streaming Excel export for contest ${selectedContestId}...`);
-      const res = await axios.get(`/api/attendance/contest/${selectedContestId}/export`, {
+      const res = await axios.get(`${API_URL}/attendance/contest/${selectedContestId}/export`, {
         params,
         responseType: 'blob'
       });
@@ -355,7 +356,7 @@ function Attendance() {
     form.append('contestId', selectedContestId);
 
     try {
-      const res = await axios.post('/api/attendance/upload', form, {
+      const res = await axios.post(`${API_URL}/attendance/upload`, form, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       if (res.data.success) {
@@ -386,7 +387,7 @@ function Attendance() {
 
     setSavingOverride(true);
     try {
-      const res = await axios.post('/api/attendance/override', {
+      const res = await axios.post(`${API_URL}/attendance/override`, {
         studentId: overrideStudent.student_id,
         contestId: selectedContestId,
         status: overrideStatus,
@@ -410,7 +411,7 @@ function Attendance() {
     if (!lcContestSlug.trim()) return;
     setLoadingLcStats(true);
     try {
-      const res = await axios.get('/api/attendance/leetcode-stats', {
+      const res = await axios.get(`${API_URL}/attendance/leetcode-stats`, {
         params: {
           contestSlug: lcContestSlug,
           department: lcDeptFilter,
@@ -436,7 +437,7 @@ function Attendance() {
     setError('');
     setSuccess('');
     try {
-      const res = await axios.post('/api/attendance/leetcode-sync', {
+      const res = await axios.post(`${API_URL}/attendance/leetcode-sync`, {
         contestSlug: lcContestSlug
       });
       if (res.data.success) {
@@ -467,7 +468,7 @@ function Attendance() {
         const params = { status: 'active' };
         if (lcDeptFilter) params.department = lcDeptFilter;
         if (lcBatchFilter) params.academicBatch = lcBatchFilter;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           setLcAvailableSections(res.data.data);
         }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Archive as ArchiveIcon, 
   RotateCcw, 
@@ -32,7 +33,7 @@ function Archive() {
   // Fetch departments list
   const fetchAvailableDepts = async () => {
     try {
-      const res = await axios.get('/api/departments');
+      const res = await axios.get(`${API_URL}/departments`);
       if (res.data.success) {
         setAvailableDepts(res.data.data);
       }
@@ -44,7 +45,7 @@ function Archive() {
   // Fetch unique batches
   const fetchAvailableBatches = async () => {
     try {
-      const res = await axios.get('/api/students/batches');
+      const res = await axios.get(`${API_URL}/students/batches`);
       if (res.data.success) {
         setAvailableBatches(res.data.data);
       }
@@ -57,7 +58,7 @@ function Archive() {
   const fetchArchiveSummary = async () => {
     setLoading(true);
     try {
-      const res = await axios.get('/api/students/archive-summary');
+      const res = await axios.get(`${API_URL}/students/archive-summary`);
       if (res.data.success) {
         setArchivedBatches(res.data.data);
       }
@@ -81,7 +82,7 @@ function Archive() {
         const params = { status: 'active' };
         if (dept) params.department = dept;
         if (academicYear) params.academicBatch = academicYear;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -113,7 +114,7 @@ function Archive() {
         if (section) {
           params.section = section;
         }
-        const res = await axios.get('/api/students', { params });
+        const res = await axios.get(`${API_URL}/students`, { params });
         if (res.data.success) {
           setPreviewCount(res.data.data.length);
         }
@@ -143,7 +144,7 @@ function Archive() {
     setSuccess('');
 
     try {
-      const res = await axios.post('/api/students/archive', {
+      const res = await axios.post(`${API_URL}/students/archive`, {
         department: dept,
         academicYear,
         section
@@ -176,7 +177,7 @@ function Archive() {
     setSuccess('');
 
     try {
-      const res = await axios.post('/api/students/restore', {
+      const res = await axios.post(`${API_URL}/students/restore`, {
         department: batchDept,
         academicYear: batchYear,
         section: batchSec

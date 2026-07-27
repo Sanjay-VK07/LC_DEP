@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Flame, 
   Calendar, 
@@ -27,8 +28,8 @@ function Analytics() {
     const fetchInitialFilters = async () => {
       try {
         const [deptsRes, batchesRes] = await Promise.all([
-          axios.get('/api/departments?status=active'),
-          axios.get('/api/students/batches')
+          axios.get(`${API_URL}/departments?status=active`),
+          axios.get(`${API_URL}/students/batches`)
         ]);
         if (deptsRes.data.success) {
           setAvailableDepts(deptsRes.data.data);
@@ -50,7 +51,7 @@ function Analytics() {
         const params = { status: 'active' };
         if (filterDept) params.department = filterDept;
         if (filterBatch) params.academicBatch = filterBatch;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -75,7 +76,7 @@ function Analytics() {
         if (filterSec) lbParams.section = filterSec;
         if (filterBatch) lbParams.academicBatch = filterBatch;
 
-        const lbRes = await axios.get('/api/analytics/leaderboards', { params: lbParams });
+        const lbRes = await axios.get(`${API_URL}/analytics/leaderboards`, { params: lbParams });
 
         if (lbRes.data.success) {
           setLeaderboardData(lbRes.data);

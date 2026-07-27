@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   BarChart3, 
   Download, 
@@ -70,8 +71,8 @@ function Reports() {
     const loadFiltersData = async () => {
       try {
         const [deptsRes, batchesRes] = await Promise.all([
-          axios.get('/api/departments'),
-          axios.get('/api/students/batches')
+          axios.get(`${API_URL}/departments`),
+          axios.get(`${API_URL}/students/batches`)
         ]);
         if (deptsRes.data.success) {
           setAvailableDepts(deptsRes.data.data);
@@ -93,7 +94,7 @@ function Reports() {
         const params = { status: 'active' };
         if (studentDept) params.department = studentDept;
         if (studentYear) params.academicBatch = studentYear;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -114,12 +115,12 @@ function Reports() {
     setData([]); // Clear old data to prevent type mismatch crashes on tab transition
     try {
       if (activeTab === 'heatmap') {
-        const res = await axios.get('/api/reports/heatmap');
+        const res = await axios.get(`${API_URL}/reports/heatmap`);
         if (res.data.success) {
           setHeatmapData(res.data);
         }
       } else {
-        const endpoint = `/api/reports/${activeTab}`;
+        const endpoint = `${API_URL}/reports/${activeTab}`;
         let params = {};
         if (activeTab === 'students') {
           params = {

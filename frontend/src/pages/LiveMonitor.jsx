@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Activity, Play, Pause, RefreshCw, CheckCircle2, AlertCircle, Search, Filter, 
   Terminal, ShieldCheck, Cpu, HardDrive, Wifi, Users as UsersIcon, Award, 
@@ -73,7 +74,7 @@ function LiveMonitor() {
     // Poll health metrics every 15 seconds
     const healthInterval = setInterval(async () => {
       try {
-        const res = await axios.get('/api/contestmaster/live/health');
+        const res = await axios.get(`${API_URL}/contestmaster/live/health`);
         setHealth(res.data.health);
       } catch (e) {}
     }, 15000);
@@ -121,7 +122,7 @@ function LiveMonitor() {
     // Establish event stream connection
     const connectSSE = () => {
       console.log('[SSE] Connecting to live stream...');
-      const source = new EventSource('/api/contestmaster/live/stream');
+      const source = new EventSource(`${API_URL}/contestmaster/live/stream`);
       eventSourceRef.current = source;
 
       source.onopen = () => {

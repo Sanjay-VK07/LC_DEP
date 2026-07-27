@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 
 const AuthContext = createContext(null);
 
@@ -24,7 +25,7 @@ export function AuthProvider({ children }) {
 
   const fetchCurrentUser = async () => {
     try {
-      const res = await axios.get('/api/auth/me');
+      const res = await axios.get(`${API_URL}/auth/me`);
       if (res.data.success) {
         setUser(res.data.user);
       } else {
@@ -39,7 +40,7 @@ export function AuthProvider({ children }) {
 
   const login = async (username, password) => {
     try {
-      const res = await axios.post('/api/auth/login', { username, password });
+      const res = await axios.post(`${API_URL}/auth/login`, { username, password });
       if (res.data.success) {
         setToken(res.data.token);
         setUser(res.data.user);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import { useAuth } from '../context/AuthContext';
@@ -90,7 +91,7 @@ function DataHealth() {
   const handleForceFullSync = async () => {
     setGlobalSyncing(true);
     try {
-      const res = await axios.post('/api/students/sync-all');
+      const res = await axios.post(`${API_URL}/students/sync-all`);
       if (res.data.success) {
         showToast('Platform-wide synchronization started in background.');
       }
@@ -104,7 +105,7 @@ function DataHealth() {
   const handleClearCache = async () => {
     setClearingCache(true);
     try {
-      const res = await axios.post('/api/students/clear-cache');
+      const res = await axios.post(`${API_URL}/students/clear-cache`);
       if (res.data.success) {
         showToast('Analytics and placement cache successfully invalidated.');
       }
@@ -119,7 +120,7 @@ function DataHealth() {
     const key = `${studentId}:${platform}`;
     setSyncingPlatforms(prev => ({ ...prev, [key]: true }));
     try {
-      const res = await axios.post(`/api/students/${studentId}/sync/${platform}`);
+      const res = await axios.post(`${API_URL}/students/${studentId}/sync/${platform}`);
       if (res.data.success) {
         showToast(`Successfully synchronized ${platform} handle!`);
         await fetchHealthAudit();
@@ -134,7 +135,7 @@ function DataHealth() {
   const fetchPlatformStats = async () => {
     setPlatformStatsLoading(true);
     try {
-      const res = await axios.get('/api/analytics/platform-stats');
+      const res = await axios.get(`${API_URL}/analytics/platform-stats`);
       if (res.data.success) setPlatformStats(res.data.data);
     } catch (err) { console.error(err); }
     finally { setPlatformStatsLoading(false); }
@@ -155,7 +156,7 @@ function DataHealth() {
       if (matrixContestType) params.contestType = matrixContestType;
 
       console.log('[Frontend Telemetry] Starting GET /api/analytics/attendance-matrix fetch...');
-      const res = await axios.get('/api/analytics/attendance-matrix', {
+      const res = await axios.get(`${API_URL}/analytics/attendance-matrix`, {
         params,
         signal: matrixAbortControllerRef.current.signal
       });
@@ -188,7 +189,7 @@ function DataHealth() {
     try {
       const params = {};
       if (forceRefresh) params.refresh = 'true';
-      const res = await axios.get('/api/students/data-health', { params });
+      const res = await axios.get(`${API_URL}/students/data-health`, { params });
       if (res.data.success) {
         setData(res.data);
       }
@@ -202,8 +203,8 @@ function DataHealth() {
   useEffect(() => {
     if (activeTab === 'platform-stats') { fetchPlatformStats(); return; }
     if (activeTab === 'attendance-matrix') { fetchAttendanceMatrix(); return; }
-    axios.get('/api/departments').then(res => { if (res.data.success) setDepts(res.data.data); }).catch(console.error);
-    axios.get('/api/students/batches').then(res => { if (res.data.success) setBatches(res.data.data); }).catch(console.error);
+    axios.get(`${API_URL}/departments`).then(res => { if (res.data.success) setDepts(res.data.data); }).catch(console.error);
+    axios.get(`${API_URL}/students/batches`).then(res => { if (res.data.success) setBatches(res.data.data); }).catch(console.error);
     fetchHealthAudit();
 
     return () => {
@@ -244,7 +245,7 @@ function DataHealth() {
     try {
       const params = {};
       if (matrixContestType) params.contestType = matrixContestType;
-      const res = await axios.get('/api/analytics/attendance-matrix/export', {
+      const res = await axios.get(`${API_URL}/analytics/attendance-matrix/export`, {
         params,
         responseType: 'blob'
       });
@@ -339,7 +340,7 @@ function DataHealth() {
     try {
       let stats = platformStats;
       if (!stats || !stats.length) {
-        const res = await axios.get('/api/analytics/platform-stats');
+        const res = await axios.get(`${API_URL}/analytics/platform-stats`);
         stats = res.data.success ? res.data.data : [];
       }
       if (!stats || !stats.length) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Building2, 
   Plus, 
@@ -38,7 +39,7 @@ function Departments() {
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get('/api/departments');
+      const res = await axios.get(`${API_URL}/departments`);
       if (res.data.success) {
         setDepartments(res.data.data);
         console.log(`[Diagnostic] Departments count rendered in frontend: ${res.data.data.length}`);
@@ -97,9 +98,9 @@ function Departments() {
     try {
       let res;
       if (modalMode === 'add') {
-        res = await axios.post('/api/departments', formData);
+        res = await axios.post(`${API_URL}/departments`, formData);
       } else {
-        res = await axios.put(`/api/departments/${selectedDeptId}`, formData);
+        res = await axios.put(`${API_URL}/departments/${selectedDeptId}`, formData);
       }
 
       if (res.data.success) {
@@ -125,7 +126,7 @@ function Departments() {
     setSuccess('');
 
     try {
-      const res = await axios.delete(`/api/departments/${dept.id}`);
+      const res = await axios.delete(`${API_URL}/departments/${dept.id}`);
       if (res.data.success) {
         setSuccess(res.data.message);
         fetchDepartments();

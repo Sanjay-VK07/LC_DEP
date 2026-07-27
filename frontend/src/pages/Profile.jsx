@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import {
+import { API_URL } from '../config/api';
+import { 
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
@@ -41,8 +42,6 @@ import { normalizeAttendanceStatus } from '../utils/attendance';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-
-
 function Profile() {
   // Student selection states
   const [students, setStudents] = useState([]);
@@ -80,9 +79,9 @@ function Profile() {
     const fetchInitialData = async () => {
       try {
         const [studentsRes, deptsRes, batchesRes] = await Promise.all([
-          axios.get('/api/students?status=active'),
-          axios.get('/api/departments?status=active'),
-          axios.get('/api/students/batches')
+          axios.get(`${API_URL}/students?status=active`),
+          axios.get(`${API_URL}/departments?status=active`),
+          axios.get(`${API_URL}/students/batches`)
         ]);
         if (studentsRes.data.success) {
           setStudents(studentsRes.data.data);
@@ -111,7 +110,7 @@ function Profile() {
         const params = { status: 'active' };
         if (deptFilter) params.department = deptFilter;
         if (academicBatchFilter) params.academicBatch = academicBatchFilter;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -129,7 +128,7 @@ function Profile() {
   const fetchUnifiedProfileData = async (targetId) => {
     if (!targetId) { setUnifiedProfile(null); return; }
     try {
-      const res = await axios.get(`/api/students/${targetId}/unified-profile`);
+      const res = await axios.get(`${API_URL}/students/${targetId}/unified-profile`);
       if (res.data.success) {
         logger.debug('Received unified student profile data:', res.data.data);
         setUnifiedProfile(res.data.data);
@@ -142,7 +141,7 @@ function Profile() {
   const fetchRatingHistory = async (targetId) => {
     if (!targetId) { setRatingHistory({}); return; }
     try {
-      const res = await axios.get(`/api/analytics/student/${targetId}/rating-history`);
+      const res = await axios.get(`${API_URL}/analytics/student/${targetId}/rating-history`);
       if (res.data.success) setRatingHistory(res.data.ratingHistory || {});
     } catch (err) {
       console.error('Failed to fetch rating history:', err.message);
@@ -156,7 +155,7 @@ function Profile() {
     if (forceRefresh) setSyncing(true);
     setError('');
     try {
-      const url = `/api/attendance/student/${targetId}${forceRefresh ? '?refresh=true' : ''}`;
+      const url = `${API_URL}/attendance/student/${targetId}${forceRefresh ? '?refresh=true' : ''}`;
       const res = await axios.get(url);
       if (res.data.success) {
         logger.debug('Received student timeline data:', res.data.data);

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../../config/api';
 import { useAuth } from '../../context/AuthContext';
 
 const StudentProgressContext = createContext(null);
@@ -23,7 +24,7 @@ export function StudentProgressProvider({ children }) {
     // For faculty/admin, fetch the list of active students
     const fetchStudents = async () => {
       try {
-        const res = await axios.get('/api/students?status=active');
+        const res = await axios.get(`${API_URL}/students?status=active`);
         if (res.data.success) {
           const activeStudents = res.data.data || [];
           setStudents(activeStudents);

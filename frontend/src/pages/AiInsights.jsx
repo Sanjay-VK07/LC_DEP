@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { useAuth } from '../context/AuthContext';
 import { 
   Sparkles, 
@@ -43,7 +44,7 @@ function AiInsights() {
   // Load students list for staff selection
   useEffect(() => {
     if (!isStudent) {
-      axios.get('/api/students', { params: { status: 'active' } })
+      axios.get(`${API_URL}/students`, { params: { status: 'active' } })
         .then(res => {
           if (res.data.success) {
             setStudents(res.data.data);
@@ -66,7 +67,7 @@ function AiInsights() {
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`/api/ai/insights/${id}`);
+      const res = await axios.get(`${API_URL}/ai/insights/${id}`);
       if (res.data.success) {
         setInsightsData(res.data.data);
       }

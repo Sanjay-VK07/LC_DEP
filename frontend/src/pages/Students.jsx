@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import { 
   Plus, 
   Search, 
@@ -111,7 +112,7 @@ function Students() {
         academicBatch: filterYear,
         status: 'active'
       };
-      const res = await axios.get('/api/students', { params });
+      const res = await axios.get(`${API_URL}/students`, { params });
       if (res.data.success) {
         logger.debug('Received students list:', res.data.data);
         setStudents(res.data.data);
@@ -126,7 +127,7 @@ function Students() {
   // Fetch departments list
   const fetchAvailableDepts = async () => {
     try {
-      const res = await axios.get('/api/departments');
+      const res = await axios.get(`${API_URL}/departments`);
       if (res.data.success) {
         setAvailableDepts(res.data.data);
       }
@@ -138,7 +139,7 @@ function Students() {
   // Fetch unique batches
   const fetchAvailableBatches = async () => {
     try {
-      const res = await axios.get('/api/students/batches');
+      const res = await axios.get(`${API_URL}/students/batches`);
       if (res.data.success) {
         setAvailableBatches(res.data.data);
       }
@@ -163,7 +164,7 @@ function Students() {
         const params = { status: 'active' };
         if (filterDept) params.department = filterDept;
         if (filterYear) params.academicBatch = filterYear;
-        const res = await axios.get('/api/students/sections', { params });
+        const res = await axios.get(`${API_URL}/students/sections`, { params });
         if (res.data.success) {
           const sections = res.data.data;
           setAvailableSections(sections);
@@ -240,7 +241,7 @@ function Students() {
     }));
 
     try {
-      const res = await axios.get(`/api/students/verify-platform/${platform}/${encodeURIComponent(username)}`);
+      const res = await axios.get(`${API_URL}/students/verify-platform/${platform}/${encodeURIComponent(username)}`);
       const verified = Boolean(res.data.exists);
       setPlatformChecks(prev => ({
         ...prev,
@@ -276,7 +277,7 @@ function Students() {
     setLcStats({ rating: null, globalRanking: null });
 
     try {
-      const res = await axios.get(`/api/students/verify-leetcode/${username}`);
+      const res = await axios.get(`${API_URL}/students/verify-leetcode/${username}`);
       if (res.data.exists) {
         setLcVerified(true);
         setFormData(prev => ({ ...prev, leetcodeUsername: res.data.username })); // use formatted handle name
@@ -398,7 +399,7 @@ function Students() {
         codeforcesVerified: platformChecks.codeforces.verified === true,
         hackerrankVerified: platformChecks.hackerrank.verified === true
       };
-      const res = await axios.post('/api/students', payload);
+      const res = await axios.post(`${API_URL}/students`, payload);
       if (res.data.success) {
         setIsAddModalOpen(false);
         setSuccessMsg('Student added successfully.');
@@ -455,7 +456,7 @@ function Students() {
         codeforcesRank: platformChecks.codeforces.stats?.globalRanking ?? null,
         hackerrankVerified: platformChecks.hackerrank.verified === true
       };
-      const res = await axios.put(`/api/students/${selectedStudent.id}`, payload);
+      const res = await axios.put(`${API_URL}/students/${selectedStudent.id}`, payload);
       if (res.data.success) {
         setIsEditModalOpen(false);
         setSuccessMsg('Student details updated.');
@@ -474,7 +475,7 @@ function Students() {
   const handleDeleteStudent = async (id) => {
     if (!window.confirm('Are you sure you want to delete this student? All attendance history will be deleted!')) return;
     try {
-      const res = await axios.delete(`/api/students/${id}`);
+      const res = await axios.delete(`${API_URL}/students/${id}`);
       if (res.data.success) {
         setSuccessMsg('Student deleted.');
         fetchStudents();
@@ -530,7 +531,7 @@ function Students() {
         ? { studentIds: Array.from(selectedIds) }
         : { department: filterDept, academicBatch: filterYear, section: filterSec || undefined };
 
-      const res = await axios.post('/api/students/bulk-delete', payload);
+      const res = await axios.post(`${API_URL}/students/bulk-delete`, payload);
       if (res.data.success) {
         setSuccessMsg(res.data.message || `Deleted ${res.data.deletedCount} student(s).`);
         setSelectedIds(new Set());
@@ -608,7 +609,7 @@ function Students() {
 
       for (let attempt = 0; attempt <= IMPORT_BATCH_RETRIES && !succeeded; attempt++) {
         try {
-          const res = await axios.post('/api/students/import', {
+          const res = await axios.post(`${API_URL}/students/import`, {
             students: chunk,
             academicBatch: importBatch.trim(),
             duplicateStrategy: updateExisting ? 'update' : 'skip',

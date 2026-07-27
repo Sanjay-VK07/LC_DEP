@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 import {
   Plus,
   Calendar,
@@ -347,11 +348,11 @@ function Contests() {
 
   /* ── fetch active students and batches (on mount) ── */
   useEffect(() => {
-    axios.get('/api/students?status=active')
+    axios.get(`${API_URL}/students?status=active`)
       .then(res => { if (res.data.success) setStudents(res.data.data || []); })
       .catch(() => {});
 
-    axios.get('/api/contestmaster/batches')
+    axios.get(`${API_URL}/contestmaster/batches`)
       .then(res => { setAvailableBatches(res.data || []); })
       .catch(() => {});
   }, []);
@@ -361,7 +362,7 @@ function Contests() {
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`/api/contestmaster/${activePlatform}`, {
+      const res = await axios.get(`${API_URL}/contestmaster/${activePlatform}`, {
         params: {
           studentId: selectedStudentId,
           batch: selectedBatch,
@@ -395,7 +396,7 @@ function Contests() {
     setSuccessMsg('');
     setError('');
     try {
-      const res = await axios.post('/api/contests/sync');
+      const res = await axios.post(`${API_URL}/contests/sync`);
       if (res.data.success) {
         setSuccessMsg('Synchronization job started in background.');
         await fetchPlatformData();
@@ -533,8 +534,8 @@ function Contests() {
     setFormLoading(true);
     try {
       const res = modalMode === 'add'
-        ? await axios.post('/api/contests', formData)
-        : await axios.put(`/api/contests/${selectedContest.id}`, formData);
+        ? await axios.post(`${API_URL}/contests`, formData)
+        : await axios.put(`${API_URL}/contests/${selectedContest.id}`, formData);
       if (res.data.success) {
         setIsOpenModal(false);
         setSuccessMsg(modalMode === 'add' ? 'Contest created successfully.' : 'Contest updated successfully.');
@@ -551,7 +552,7 @@ function Contests() {
   const handleDeleteContest = async (id) => {
     if (!window.confirm('Delete this contest? All attendance records will be permanently removed.')) return;
     try {
-      const res = await axios.delete(`/api/contests/${id}`);
+      const res = await axios.delete(`${API_URL}/contests/${id}`);
       if (res.data.success) {
         setSuccessMsg('Contest deleted.');
         fetchPlatformData();
@@ -564,14 +565,14 @@ function Contests() {
 
   const handleRegister = async (contestId) => {
     try {
-      const res = await axios.post('/api/contests/register', { userId: selectedStudentId, contestId });
+      const res = await axios.post(`${API_URL}/contests/register`, { userId: selectedStudentId, contestId });
       if (res.data.success) { setSuccessMsg('Registered!'); fetchPlatformData(); setTimeout(() => setSuccessMsg(''), 3000); }
     } catch { setError('Failed to register.'); }
   };
 
   const handleJoin = async (contestId) => {
     try {
-      const res = await axios.post('/api/contests/join', { userId: selectedStudentId, contestId });
+      const res = await axios.post(`${API_URL}/contests/join`, { userId: selectedStudentId, contestId });
       if (res.data.success) { setSuccessMsg('Joined & marked present!'); fetchPlatformData(); setTimeout(() => setSuccessMsg(''), 3000); }
     } catch { setError('Failed to join.'); }
   };
@@ -588,7 +589,7 @@ function Contests() {
     if (!overrideContest || selectedStudentId === 'all') return;
     setSavingOverride(true);
     try {
-      const res = await axios.post('/api/attendance/override', {
+      const res = await axios.post(`${API_URL}/attendance/override`, {
         studentId: selectedStudentId,
         contestId: overrideContest.id,
         status: overrideStatus,
@@ -608,7 +609,7 @@ function Contests() {
     // Always re-fetch when called — filters may have changed since last fetch.
     setLoadingParticipants(p => ({ ...p, [contestId]: true }));
     try {
-      const res = await axios.get(`/api/attendance/contest/${contestId}`, {
+      const res = await axios.get(`${API_URL}/attendance/contest/${contestId}`, {
         params: {
           batch: selectedBatch || undefined
         }
