@@ -96,6 +96,27 @@ function classifyCurlError(err, stdout, stderr) {
   return { code: `CURL_EXIT_CODE_${err.code}`, message: `cURL exited with code ${err.code}: ${stderr || err.message}` };
 }
 
+function getHttpStatusText(code) {
+  const map = {
+    200: 'OK',
+    201: 'Created',
+    204: 'No Content',
+    301: 'Moved Permanently',
+    302: 'Found',
+    304: 'Not Modified',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Timeout'
+  };
+  return map[code] || `HTTP ${code}`;
+}
+
 class NetworkService {
   /**
    * Helper to build configurable browser-like headers
@@ -147,9 +168,11 @@ class NetworkService {
       const cachedData = contestRankingCache.get(contestSlug, pageNumber);
       if (cachedData) {
         DetailedLogger.logRequest({
+          url,
           contestSlug,
           pageNumber,
           httpStatus: 200,
+          statusText: 'OK (Cached)',
           retryCount: 0,
           errorType: 'NONE',
           durationMs: 0,
@@ -169,6 +192,7 @@ class NetworkService {
       return executeWithRetry(
         async (attempt) => {
           const startTime = Date.now();
+          const retryCount = attempt - 1;
           try {
             let result;
             if (useCurlTransport) {
@@ -193,6 +217,7 @@ class NetworkService {
               contestSlug,
               pageNumber,
               httpStatus: 200,
+              statusText: 'OK',
               responseHeaders,
               contentType,
               responseSize,
@@ -200,7 +225,7 @@ class NetworkService {
               isHtml: false,
               matchedMarker: 'None',
               durationMs,
-              retryCount: attempt,
+              retryCount,
               errorType: 'NONE',
               message: 'Request successful'
             });
@@ -217,6 +242,7 @@ class NetworkService {
               contestSlug,
               pageNumber,
               httpStatus: err.status || 'N/A',
+              statusText: err.statusText || (err.status ? getHttpStatusText(err.status) : 'N/A'),
               responseHeaders: err.headers || {},
               contentType: err.contentType || (err.headers && (err.headers['content-type'] || err.headers['Content-Type'])) || 'N/A',
               responseSize: err.responseSize || (err.body ? err.body.length : 0),
@@ -224,7 +250,7 @@ class NetworkService {
               isHtml: err.isHtml !== undefined ? err.isHtml : (err.body ? err.body.includes('<html') : false),
               matchedMarker: err.matchedMarker || 'None',
               durationMs,
-              retryCount: attempt,
+              retryCount,
               errorType,
               message: err.message
             });
@@ -258,6 +284,7 @@ class NetworkService {
     const response = await persistentAxios(config);
     const body = response.data;
     const statusCode = response.status;
+    const statusText = response.statusText || getHttpStatusText(statusCode);
     const parsedHeaders = response.headers || {};
 
     // Requirements 1 & 3: Detect Cloudflare and HTML responses before JSON parsing
@@ -271,6 +298,7 @@ class NetworkService {
         CloudflareBlockedError.DEFAULT_USER_MESSAGE,
         {
           status: statusCode,
+          statusText,
           url,
           contestSlug,
           pageNumber,
@@ -289,6 +317,7 @@ class NetworkService {
       const err = new Error(`Request failed with status code ${statusCode}`);
       err.code = `HTTP_${statusCode}`;
       err.status = statusCode;
+      err.statusText = statusText;
       err.headers = parsedHeaders;
       err.body = body;
       throw err;
@@ -302,6 +331,7 @@ class NetworkService {
       const jsonErr = new Error(`Failed to parse response JSON: ${parseErr.message}`);
       jsonErr.code = 'INVALID_JSON';
       jsonErr.status = statusCode;
+      jsonErr.statusText = statusText;
       jsonErr.headers = parsedHeaders;
       jsonErr.body = body;
       throw jsonErr;
@@ -330,10 +360,11 @@ class NetworkService {
           const errorObj = new Error(classification.message);
           errorObj.code = classification.code;
           errorObj.status = null;
+          errorObj.statusText = 'N/A';
           return reject(errorObj);
         }
 
-        const httpHeaderRegex = /^HTTP\/\d+\.\d+\s+\d+/gmi;
+        const httpHeaderRegex = /^HTTP\/(?:[0-9\.]+)\s+([0-9]{3})(?:\s+(.*))?/gmi;
         let matches = [...stdout.matchAll(httpHeaderRegex)];
         
         let body = stdout;
@@ -346,19 +377,20 @@ class NetworkService {
           
           if (doubleNewlineIndex !== -1) {
             headersStr = headerAndBody.substring(0, doubleNewlineIndex);
-            body = headerAndBody.substring(doubleNewlineIndex).trimStart();
+            body = headerAndBody.substring(doubleNewlineIndex).replace(/^(\r?\n)+/, '');
           }
         }
 
         const parsedHeaders = {};
         let statusCode = 200;
+        let statusText = 'OK';
 
         if (headersStr) {
           const lines = headersStr.split(/\r?\n/);
-          const httpMatch = lines[0].match(/^HTTP\/(\d+\.\d+)\s+(\d+)/i);
+          const httpMatch = lines[0].match(/^HTTP\/(?:[0-9\.]+)\s+([0-9]{3})(?:\s+(.*))?/i);
           if (httpMatch) {
-            statusCode = parseInt(httpMatch[2], 10);
-            parsedHeaders.statusCode = statusCode;
+            statusCode = parseInt(httpMatch[1], 10);
+            statusText = (httpMatch[2] || '').trim() || getHttpStatusText(statusCode);
           }
           for (let idx = 1; idx < lines.length; idx++) {
             const line = lines[idx];
@@ -382,6 +414,7 @@ class NetworkService {
             CloudflareBlockedError.DEFAULT_USER_MESSAGE,
             {
               status: statusCode,
+              statusText,
               url,
               contestSlug,
               pageNumber,
@@ -400,6 +433,7 @@ class NetworkService {
           const httpErr = new Error(`Request failed with status code ${statusCode}`);
           httpErr.code = `HTTP_${statusCode}`;
           httpErr.status = statusCode;
+          httpErr.statusText = statusText;
           httpErr.headers = parsedHeaders;
           httpErr.body = body;
           return reject(httpErr);
@@ -413,6 +447,7 @@ class NetworkService {
           const jsonErr = new Error(`Failed to parse response JSON: ${parseErr.message}`);
           jsonErr.code = 'INVALID_JSON';
           jsonErr.status = statusCode;
+          jsonErr.statusText = statusText;
           jsonErr.headers = parsedHeaders;
           jsonErr.body = body;
           reject(jsonErr);

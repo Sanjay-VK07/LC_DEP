@@ -46,13 +46,17 @@ const LeetCodeContestAttendanceController = {
       
       if (error.name === 'CloudflareBlockedError' || error.isCloudflare || error.code === 'CLOUDFLARE_BLOCK') {
         const userMsg = error.userMessage || CloudflareBlockedError.DEFAULT_USER_MESSAGE;
-        return res.status(error.status || 403).json({
+        const upstreamStatus = error.status || 403;
+        return res.status(upstreamStatus).json({
           success: false,
+          code: error.code || 'CLOUDFLARE_BLOCK',
           stage: 'Cloudflare Security',
-          error: error.message,
+          message: userMsg,
           userMessage: userMsg,
           contestSlug: slug,
-          message: userMsg
+          pageNumber: error.pageNumber !== undefined ? error.pageNumber : 1,
+          upstreamStatus,
+          error: error.message
         });
       }
 

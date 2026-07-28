@@ -31,6 +31,7 @@ class DetailedLogger {
     contestSlug = 'N/A',
     pageNumber = 'N/A',
     httpStatus = 'N/A',
+    statusText = 'N/A',
     responseHeaders = {},
     contentType = 'N/A',
     responseSize = 0,
@@ -46,6 +47,7 @@ class DetailedLogger {
   }) {
     const environment = process.env.RENDER ? 'Render' : 'Local';
     const statusStr = cached ? 'CACHED' : (httpStatus || 'N/A');
+    const statusTextStr = statusText || (httpStatus === 403 ? 'Forbidden' : (httpStatus === 200 ? 'OK' : 'N/A'));
     const previewSnippet = bodyPreview ? bodyPreview.slice(0, 300).replace(/\r?\n/g, ' ') : 'N/A';
     const headersStr = responseHeaders && Object.keys(responseHeaders).length > 0
       ? JSON.stringify(responseHeaders)
@@ -60,12 +62,13 @@ URL:              ${url}
 Contest Slug:     ${contestSlug}
 Page Number:      ${pageNumber}
 HTTP Status:      ${statusStr}
+Status Text:      ${statusTextStr}
 Content-Type:     ${contentType}
 Response Size:    ${responseSize} bytes
 Is HTML Detected: ${isHtml}
 Matched Marker:   ${matchedMarker || 'None'}
 Duration:         ${durationMs}ms
-Retry Attempt:    ${retryCount}
+Retry Count:      ${retryCount}
 Error Type:       ${errorType}
 Message:          ${message}
 Headers:          ${headersStr}
