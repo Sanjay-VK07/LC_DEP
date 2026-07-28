@@ -184,13 +184,24 @@ class NetworkService {
               contestRankingCache.set(contestSlug, pageNumber, result, options.cacheTtlMs);
             }
 
+            const responseHeaders = result.headers || {};
+            const contentType = responseHeaders['content-type'] || responseHeaders['Content-Type'] || 'application/json';
+            const responseSize = JSON.stringify(result).length;
+
             DetailedLogger.logRequest({
+              url,
               contestSlug,
               pageNumber,
               httpStatus: 200,
+              responseHeaders,
+              contentType,
+              responseSize,
+              bodyPreview: JSON.stringify(result).slice(0, 300),
+              isHtml: false,
+              matchedMarker: 'None',
+              durationMs,
               retryCount: attempt,
               errorType: 'NONE',
-              durationMs,
               message: 'Request successful'
             });
 
@@ -202,12 +213,19 @@ class NetworkService {
               : (err.code || 'REQUEST_FAILED');
 
             DetailedLogger.logRequest({
+              url,
               contestSlug,
               pageNumber,
               httpStatus: err.status || 'N/A',
+              responseHeaders: err.headers || {},
+              contentType: err.contentType || (err.headers && (err.headers['content-type'] || err.headers['Content-Type'])) || 'N/A',
+              responseSize: err.responseSize || (err.body ? err.body.length : 0),
+              bodyPreview: err.bodyPreview || (err.body ? err.body.slice(0, 300) : 'N/A'),
+              isHtml: err.isHtml !== undefined ? err.isHtml : (err.body ? err.body.includes('<html') : false),
+              matchedMarker: err.matchedMarker || 'None',
+              durationMs,
               retryCount: attempt,
               errorType,
-              durationMs,
               message: err.message
             });
 
@@ -247,16 +265,22 @@ class NetworkService {
 
     if (cfCheck.isBlocked) {
       const bodyPreview = typeof body === 'string' ? body.slice(0, 300) : null;
+      const responseSize = typeof body === 'string' ? Buffer.byteLength(body) : 0;
+      const contentType = parsedHeaders['content-type'] || parsedHeaders['Content-Type'] || 'N/A';
       throw new CloudflareBlockedError(
-        `Cloudflare block detected (${cfCheck.reason}) for URL: ${url}`,
+        CloudflareBlockedError.DEFAULT_USER_MESSAGE,
         {
           status: statusCode,
           url,
           contestSlug,
           pageNumber,
           headers: parsedHeaders,
+          contentType,
+          responseSize,
           bodyPreview,
-          reason: cfCheck.reason
+          reason: cfCheck.reason,
+          matchedMarker: cfCheck.matchedMarker,
+          isHtml: cfCheck.isHtml
         }
       );
     }
@@ -352,16 +376,22 @@ class NetworkService {
 
         if (cfCheck.isBlocked) {
           const bodyPreview = typeof body === 'string' ? body.slice(0, 300) : null;
+          const responseSize = typeof body === 'string' ? Buffer.byteLength(body) : 0;
+          const contentType = parsedHeaders['content-type'] || parsedHeaders['Content-Type'] || 'N/A';
           return reject(new CloudflareBlockedError(
-            `Cloudflare block detected (${cfCheck.reason}) for URL: ${url}`,
+            CloudflareBlockedError.DEFAULT_USER_MESSAGE,
             {
               status: statusCode,
               url,
               contestSlug,
               pageNumber,
               headers: parsedHeaders,
+              contentType,
+              responseSize,
               bodyPreview,
-              reason: cfCheck.reason
+              reason: cfCheck.reason,
+              matchedMarker: cfCheck.matchedMarker,
+              isHtml: cfCheck.isHtml
             }
           ));
         }

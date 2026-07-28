@@ -37,7 +37,7 @@ const HTML_MARKERS = [
  * @param {number} [params.statusCode] - HTTP status code
  * @param {object|string} [params.headers] - Response headers
  * @param {string|*} [params.body] - Raw response body
- * @returns {{ isBlocked: boolean, isHtml: boolean, reason: string }}
+ * @returns {{ isBlocked: boolean, isHtml: boolean, reason: string, matchedMarker: string|null }}
  */
 function detectCloudflare({ statusCode, headers = {}, body = '' } = {}) {
   let isHtml = false;
@@ -75,7 +75,7 @@ function detectCloudflare({ statusCode, headers = {}, body = '' } = {}) {
   // Check Cloudflare markers in body
   const matchedMarker = CLOUDFLARE_MARKERS.find(marker => lowerBody.includes(marker));
 
-  if (matchedMarker || cfRayHeader && isHtml || serverHeader.includes('cloudflare') && isHtml) {
+  if (matchedMarker || (cfRayHeader && isHtml) || (serverHeader.includes('cloudflare') && isHtml)) {
     isBlocked = true;
     if (lowerBody.includes('access denied')) {
       reason = 'Access Denied page';
@@ -96,10 +96,13 @@ function detectCloudflare({ statusCode, headers = {}, body = '' } = {}) {
     reason = 'Received HTML response instead of JSON';
   }
 
+  const effectiveMarker = matchedMarker || (serverHeader.includes('cloudflare') ? 'server: cloudflare' : (cfRayHeader ? `cf-ray: ${cfRayHeader}` : null));
+
   return {
     isBlocked,
     isHtml,
-    reason
+    reason,
+    matchedMarker: effectiveMarker
   };
 }
 

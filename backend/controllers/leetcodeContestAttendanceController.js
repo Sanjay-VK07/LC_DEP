@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const LeetCodeRankingSearchService = require('../services/leetcodeRankingSearchService');
 const { normalizeAttendanceStatus } = require('../utils/attendanceNormalizer');
+const CloudflareBlockedError = require('../utils/CloudflareBlockedError');
 
 /**
  * Controller to handle LeetCode Contest Ranking Search Attendance actions
@@ -43,6 +44,18 @@ const LeetCodeContestAttendanceController = {
       let stage = 'Unknown';
       const errorMsg = error.message || 'Unknown error occurred.';
       
+      if (error.name === 'CloudflareBlockedError' || error.isCloudflare || error.code === 'CLOUDFLARE_BLOCK') {
+        const userMsg = error.userMessage || CloudflareBlockedError.DEFAULT_USER_MESSAGE;
+        return res.status(error.status || 403).json({
+          success: false,
+          stage: 'Cloudflare Security',
+          error: error.message,
+          userMessage: userMsg,
+          contestSlug: slug,
+          message: userMsg
+        });
+      }
+
       if (errorMsg.includes('database') || errorMsg.includes('SQL') || errorMsg.includes('ER_') || errorMsg.includes('query')) {
         stage = 'Database';
       } else if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unexpected token')) {
