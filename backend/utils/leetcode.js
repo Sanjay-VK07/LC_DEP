@@ -47,20 +47,64 @@ function processPendingQueue() {
   });
 }
 
-function queryLeetCodeRaw(query, variables = {}) {
+// Cached CSRF session cookie for the LeetCode GraphQL endpoint (Django requires it on POST).
+let sessionCookie = null;
+let cookieFetchPromise = null;
+
+function fetchSessionCookie() {
+  if (cookieFetchPromise) return cookieFetchPromise;
+  cookieFetchPromise = new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'leetcode.com',
+      path: '/graphql/',
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      timeout: 10000
+    }, (res) => {
+      res.resume(); // drain body, we only need headers
+      const setCookie = res.headers['set-cookie'] || [];
+      const csrfLine = setCookie.find(c => c.startsWith('csrftoken'));
+      if (csrfLine) {
+        sessionCookie = csrfLine.split(';')[0];
+      }
+      cookieFetchPromise = null;
+      resolve(sessionCookie);
+    });
+    req.on('error', () => { cookieFetchPromise = null; resolve(null); });
+    req.on('timeout', () => { req.destroy(); cookieFetchPromise = null; resolve(null); });
+    req.end();
+  });
+  return cookieFetchPromise;
+}
+
+function isCsrfFailure(statusCode, data) {
+  return statusCode === 403 && typeof data === 'string' && data.toLowerCase().includes('csrf');
+}
+
+async function queryLeetCodeRaw(query, variables = {}, isCookieRetry = false) {
+  if (!sessionCookie) {
+    await fetchSessionCookie();
+  }
+
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ query, variables });
-    
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(postData),
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://leetcode.com/'
+    };
+    if (sessionCookie) {
+      headers['Cookie'] = sessionCookie;
+      headers['x-csrftoken'] = sessionCookie.split('=')[1];
+    }
+
     const options = {
       hostname: 'leetcode.com',
       path: '/graphql/',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://leetcode.com/'
-      },
+      headers,
       timeout: 10000 // 10 seconds timeout
     };
 
@@ -69,7 +113,19 @@ function queryLeetCodeRaw(query, variables = {}) {
       res.on('data', (chunk) => {
         data += chunk;
       });
-      res.on('end', () => {
+      res.on('end', async () => {
+        if (isCsrfFailure(res.statusCode, data) && !isCookieRetry) {
+          // Stale/missing CSRF cookie — refresh once and retry.
+          sessionCookie = null;
+          await fetchSessionCookie();
+          try {
+            resolve(await queryLeetCodeRaw(query, variables, true));
+          } catch (e) {
+            reject(e);
+          }
+          return;
+        }
+
         if (res.statusCode === 200) {
           try {
             const json = JSON.parse(data);
@@ -495,6 +551,7 @@ async function getUserContestRankingAndHistory(username) {
         ranking
         problemsSolved
         totalProblems
+        finishTimeInSeconds
         contest {
           title
           startTime
