@@ -3,6 +3,8 @@ const NetworkService = require('../utils/networkService');
 const cache = require('./analyticsCacheService');
 const auditLogSvc = require('./auditLogService');
 const { normalizeUsername } = require('../utils/usernameNormalizer');
+const DetailedLogger = require('../utils/detailedLogger');
+const { contestRankingCache } = require('../utils/contestRankingCache');
 
 const lockKey = Symbol.for('leetcode-sync-locks');
 if (!global[lockKey]) {
@@ -61,8 +63,9 @@ const LeetCodeRankingSearchService = {
 
       // 2. Fetch all pages concurrently in rate-limited batches
       const participantMap = new Map(); // username (lower) -> ranking_details
-      const concurrencyLimit = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10) || 2;
-      const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 500;
+      const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
+      const concurrencyLimit = Math.min(2, Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2);
+      const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 1000;
 
       // Add page 1 data immediately
       if (page1Data.total_rank) {
@@ -111,7 +114,7 @@ const LeetCodeRankingSearchService = {
             fetchedPagesData.set(currentPage, pageData);
           } catch (err) {
             pageErrors.set(currentPage, err);
-            const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare;
+            const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK';
             if (isCf) {
               console.warn(`[WARN] Cloudflare blocked page ${currentPage}`);
             } else {
@@ -127,13 +130,16 @@ const LeetCodeRankingSearchService = {
       }
       await Promise.all(workers);
 
-      // Retry Failed Pages Only (Max 2 Passes)
-      let failedPagesList = Array.from(pageErrors.keys());
+      // Retry Failed Transient Pages Only (Exclude Cloudflare blocks as per Requirement 5)
+      let failedPagesList = Array.from(pageErrors.entries())
+        .filter(([_, err]) => !(err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK'))
+        .map(([pg, _]) => pg);
+
       let retryPass = 1;
       const maxRetryPasses = 2;
 
       while (failedPagesList.length > 0 && retryPass <= maxRetryPasses) {
-        console.warn(`[WARN] Starting retry pass ${retryPass} for ${failedPagesList.length} failed pages...`);
+        console.warn(`[WARN] Starting retry pass ${retryPass} for ${failedPagesList.length} failed transient pages...`);
         await new Promise(resolve => setTimeout(resolve, 2000 * retryPass));
 
         let nextFailedIndex = 0;
@@ -155,7 +161,7 @@ const LeetCodeRankingSearchService = {
               pageErrors.delete(currentPage);
             } catch (err) {
               pageErrors.set(currentPage, err);
-              const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare;
+              const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK';
               if (isCf) {
                 console.warn(`[WARN] Cloudflare blocked page ${currentPage} again`);
               } else {

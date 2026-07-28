@@ -49,7 +49,7 @@ test('LeetCode Ranking Sync - Matching, Backoff, and Database Upserts', async (t
     const insertRes = await db.query(`
       INSERT INTO Users (name, roll_no, department, section, leetcode_username, academic_batch, academic_start_date, academic_end_date, status)
       VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 'active')
-    `, ['Test Scraper Student', testRollNo, 'CSE', 'A', testUsername, '2024-2028']);
+    `, ['Test Scraper Student', testRollNo, 'CSE', 'TEST_SEC_A', testUsername, '2024-2028']);
     const studentId = insertRes.insertId;
 
     const activeUsers = await db.query("SELECT id, roll_no, leetcode_username, status FROM Users WHERE status = 'active'");
@@ -132,7 +132,7 @@ test('LeetCode Ranking Sync - Matching, Backoff, and Database Upserts', async (t
         contestSlug,
         department: 'CSE',
         batch: '2024-2028',
-        section: 'A'
+        section: 'TEST_SEC_A'
       }
     };
     const mockRes = {

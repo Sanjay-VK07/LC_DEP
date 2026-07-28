@@ -1,41 +1,33 @@
 /**
  * utils/networkService.js
  * =======================
- * Reusable portable networking service with transport abstraction, retries,
- * backoff, rate limiting, and error normalization.
+ * Reusable portable networking service with persistent HTTP session reuse,
+ * Cloudflare challenge detection, zero-retry abort on security blocks,
+ * exponential backoff retry for transient errors, throttling, and caching.
  */
 
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
 const { exec } = require('child_process');
 
-class CloudflareBlockedError extends Error {
-  constructor(message = 'Cloudflare block detected') {
-    super(message);
-    this.name = 'CloudflareBlockedError';
-    this.isCloudflare = true;
-  }
-}
+const CloudflareBlockedError = require('./CloudflareBlockedError');
+const { detectCloudflare } = require('./cloudflareDetector');
+const { isRetryableError, executeWithRetry } = require('./retryHelper');
+const { globalThrottler } = require('./throttler');
+const { contestRankingCache } = require('./contestRankingCache');
+const DetailedLogger = require('./detailedLogger');
 
-function isHtmlOrCloudflare(content) {
-  if (typeof content !== 'string') return false;
-  const trimmed = content.trim();
-  const lower = trimmed.toLowerCase();
-  
-  if (
-    trimmed.startsWith('<') ||
-    lower.includes('<!doctype html>') ||
-    lower.includes('<html') ||
-    lower.includes('just a moment') ||
-    lower.includes('cf-browser-verification') ||
-    lower.includes('cf-challenge') ||
-    lower.includes('cloudflare') ||
-    lower.includes('challenge-platform') ||
-    lower.includes('window._cf_chl_opt')
-  ) {
-    return true;
-  }
-  return false;
-}
+// Requirement 8: Reuse a single persistent HTTP/HTTPS client session with keep-alive
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
+
+const persistentAxios = axios.create({
+  httpAgent,
+  httpsAgent,
+  timeout: 15000,
+  validateStatus: () => true // Resolve for all HTTP statuses to inspect headers/body
+});
 
 let curlCapabilities = null;
 let capabilityPromise = null;
@@ -45,9 +37,8 @@ async function detectCurlCapabilities() {
   if (capabilityPromise) return capabilityPromise;
 
   capabilityPromise = new Promise((resolve) => {
-    exec('curl --version', (err, stdout, stderr) => {
+    exec('curl --version', (err, stdout) => {
       if (err) {
-        console.warn('[NetworkService] cURL executable not found in PATH or failed to execute:', err.message);
         curlCapabilities = { supported: false, version: 'N/A', protocols: [], features: [], compression: ['gzip', 'deflate'] };
         return resolve(curlCapabilities);
       }
@@ -55,26 +46,12 @@ async function detectCurlCapabilities() {
       const lines = raw.split(/\r?\n/);
       const versionLine = lines[0] || '';
       
-      const protocolsLine = lines.find(l => l.toLowerCase().startsWith('protocols:')) || '';
       const featuresLine = lines.find(l => l.toLowerCase().startsWith('features:')) || '';
-      
       const features = featuresLine ? featuresLine.substring(9).trim().split(/\s+/) : [];
-      const protocols = protocolsLine ? protocolsLine.substring(10).trim().split(/\s+/) : [];
       
-      // Extract SSL backend
-      let sslBackend = 'Unknown';
-      const sslMatch = versionLine.match(/libcurl\/[^\s]+\s+([^\s]+)/i);
-      if (sslMatch) {
-        sslBackend = sslMatch[1];
-      }
-
-      // Determine compression support
       const compression = ['gzip', 'deflate'];
       if (features.some(f => f.toLowerCase() === 'brotli' || f.toLowerCase() === 'br')) {
         compression.push('br');
-      }
-      if (features.some(f => f.toLowerCase() === 'zstd')) {
-        compression.push('zstd');
       }
       
       const verMatch = versionLine.match(/curl\s+([^\s]+)/i);
@@ -83,25 +60,11 @@ async function detectCurlCapabilities() {
       curlCapabilities = {
         supported: true,
         version: curlVer,
-        sslBackend,
         features,
-        protocols,
         compression,
         raw
       };
       
-      console.log(`
-Curl Version
-${curlVer}
-SSL Backend
-${sslBackend}
-Protocols
-${protocols.join(' ').toUpperCase()}
-Features
-${features.join('\n')}
-Compression
-${compression.join('\n')}
-`);
       resolve(curlCapabilities);
     });
   });
@@ -109,8 +72,7 @@ ${compression.join('\n')}
   return capabilityPromise;
 }
 
-// Trigger capability check on startup asynchronously
-detectCurlCapabilities().catch(err => console.error('[NetworkService] Failed to detect cURL capabilities:', err));
+detectCurlCapabilities().catch(() => {});
 
 function classifyCurlError(err, stdout, stderr) {
   const exitCode = err.code !== undefined ? Number(err.code) : null;
@@ -119,354 +81,190 @@ function classifyCurlError(err, stdout, stderr) {
   if (err.killed || exitCode === 28 || stderrStr.includes('timed out') || stderrStr.includes('timeout')) {
     return { code: 'NETWORK_TIMEOUT', message: 'Connection timed out after 15 seconds' };
   }
-  if (exitCode === 127 || stderrStr.includes('not found') || stderrStr.includes('not recognized')) {
+  if (exitCode === 127 || stderrStr.includes('not found')) {
     return { code: 'CURL_NOT_FOUND', message: 'curl executable not found in PATH' };
   }
-  if (exitCode === 6 || stderrStr.includes('could not resolve host') || stderrStr.includes('resolve')) {
+  if (exitCode === 6 || stderrStr.includes('could not resolve host')) {
     return { code: 'DNS_FAILURE', message: 'DNS resolution failed' };
   }
-  if (exitCode === 7 || stderrStr.includes('connection refused') || stderrStr.includes('failed to connect')) {
-    return { code: 'CONNECTION_FAILED', message: 'Failed to connect to host (connection refused)' };
+  if (exitCode === 7 || stderrStr.includes('connection refused')) {
+    return { code: 'CONNECTION_FAILED', message: 'Failed to connect to host' };
   }
-  if (exitCode === 35 || stderrStr.includes('tls handshake') || stderrStr.includes('handshake failed')) {
-    return { code: 'TLS_HANDSHAKE_FAILED', message: 'TLS handshake failed' };
-  }
-  if (exitCode === 47 || stderrStr.includes('redirect loop') || stderrStr.includes('too many redirects')) {
-    return { code: 'REDIRECT_LOOP', message: 'Maximum redirect limit exceeded (redirect loop)' };
-  }
-  if (exitCode === 51 || stderrStr.includes('ssl certificate') || stderrStr.includes('peer certificate')) {
-    return { code: 'SSL_CERTIFICATE_ERROR', message: 'SSL certificate validation failed' };
-  }
-  if (exitCode === 52 || stderrStr.includes('empty response') || stderrStr.includes('returned nothing')) {
-    return { code: 'EMPTY_RESPONSE', message: 'Server returned nothing (empty response)' };
-  }
-  if (exitCode === 56 || stderrStr.includes('connection reset') || stderrStr.includes('recv failure')) {
+  if (exitCode === 56 || stderrStr.includes('connection reset')) {
     return { code: 'CONNECTION_RESET', message: 'Connection reset by peer' };
-  }
-  if (exitCode === 60 || stderrStr.includes('certificate verify') || stderrStr.includes('ca cert')) {
-    return { code: 'SSL_CERTIFICATE_VERIFY_FAILED', message: 'TLS certificate verification failed' };
-  }
-  if (exitCode === 61 || stderrStr.includes('unrecognized transfer encoding') || stderrStr.includes('bad content encoding') || stderrStr.includes('unrecognized content encoding')) {
-    return { code: 'UNSUPPORTED_CONTENT_ENCODING', message: 'Unrecognized transfer or content encoding (cURL failed to decompress response - server sent Brotli or other unsupported compression format that this cURL binary cannot decode)' };
   }
   return { code: `CURL_EXIT_CODE_${err.code}`, message: `cURL exited with code ${err.code}: ${stderr || err.message}` };
 }
 
-function isRetryableError(err) {
-  const code = err.code || '';
-  const status = err.status || (err.response && err.response.status);
-
-  // Do NOT retry 404
-  if (status === 404 || code === 'HTTP_404' || code === 'INVALID_CONTEST') {
-    return false;
-  }
-
-  // Do NOT retry SSL certificate failures, missing cURL bin, or unsupported encoding errors
-  if (
-    code === 'SSL_ERROR' ||
-    code === 'SSL_CERTIFICATE_ERROR' ||
-    code === 'SSL_CERTIFICATE_VERIFY_FAILED' ||
-    code === 'CURL_NOT_FOUND' ||
-    code === 'UNSUPPORTED_CONTENT_ENCODING'
-  ) {
-    return false;
-  }
-
-  // Retry 403 (Cloudflare block)
-  if (status === 403 || code === 'HTTP_403' || code === 'CLOUDFLARE_BLOCK') {
-    return true;
-  }
-
-  // Retry 429
-  if (status === 429 || code === 'HTTP_429') {
-    return true;
-  }
-
-  // Retry server errors
-  if (status >= 500 && status < 600) {
-    return true;
-  }
-
-  // Retry timeouts, DNS temporary failure, Connection reset
-  if (
-    code === 'NETWORK_TIMEOUT' ||
-    code === 'DNS_FAILURE' ||
-    code === 'CONNECTION_RESET' ||
-    code === 'EMPTY_RESPONSE'
-  ) {
-    return true;
-  }
-
-  const message = (err.message || '').toLowerCase();
-  if (
-    message.includes('timeout') ||
-    message.includes('econnreset') ||
-    message.includes('enotfound') ||
-    message.includes('econnrefused') ||
-    message.includes('etimedout') ||
-    message.includes('socket')
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
 class NetworkService {
-  static printRichLog({
-    requestId,
-    contest,
-    page,
-    url,
-    workerId,
-    attempt,
-    cmd,
-    exitCode,
-    status,
-    duration,
-    stdout,
-    stderr,
-    headers,
-    body,
-    retryDecision
-  }) {
-    console.log(`
-==================================================
-Request ID: ${requestId}
-Contest: ${contest}
-Page: ${page}
-URL: ${url}
-Worker ID: ${workerId || 'Main'}
-Attempt: ${attempt}
-Curl Command: ${cmd || 'N/A'}
-Exit Code: ${exitCode !== null ? exitCode : '0'}
-HTTP Status: ${status || 'N/A'}
-Duration: ${duration}ms
-stdout: ${stdout ? (stdout.length > 500 ? stdout.slice(0, 500) + '...' : stdout) : 'N/A'}
-stderr: ${stderr || 'N/A'}
-Headers: ${headers ? JSON.stringify(headers, null, 2) : 'N/A'}
-Body Preview (first 500 chars):
-${body ? body.slice(0, 500) : 'N/A'}
-Retry Decision: ${retryDecision}
-==================================================
-`);
-  }
-
   /**
-   * Performs an HTTP request with retry logic, backoff, and transport abstraction.
+   * Helper to build configurable browser-like headers
+   * Requirement 9: Configurable browser-like request headers
    */
-  static async request(url, options = {}) {
-    const requestId = `REQ-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-    const method = (options.method || 'GET').toUpperCase();
-
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': 'https://leetcode.com/contest/',
-      'Origin': 'https://leetcode.com',
+  static getDefaultHeaders(overrideHeaders = {}) {
+    return {
+      'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      'Accept': process.env.LEETCODE_ACCEPT || 'application/json, text/plain, */*',
+      'Accept-Language': process.env.LEETCODE_ACCEPT_LANGUAGE || 'en-US,en;q=0.9',
+      'Referer': process.env.LEETCODE_REFERER || 'https://leetcode.com/contest/',
+      'Origin': process.env.LEETCODE_ORIGIN || 'https://leetcode.com',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
-      ...options.headers
+      ...overrideHeaders
     };
-
-    // Capability-based compression filtering for manual Accept-Encoding headers
-    const acceptEncodingKey = Object.keys(headers).find(k => k.toLowerCase() === 'accept-encoding');
-    if (acceptEncodingKey) {
-      const capabilities = await detectCurlCapabilities();
-      const requestedEncodings = headers[acceptEncodingKey]
-        .split(',')
-        .map(s => s.trim().toLowerCase());
-      
-      const supportedEncodings = requestedEncodings.filter(enc => 
-        capabilities.compression.includes(enc)
-      );
-
-      if (supportedEncodings.length > 0) {
-        headers[acceptEncodingKey] = supportedEncodings.join(', ');
-      } else {
-        // Automatically downgrade to only supported encodings instead of failing
-        headers[acceptEncodingKey] = capabilities.compression.join(', ');
-      }
-    }
-    const timeout = options.timeout || 15000;
-    
-    // Parse contest slug and page from URL
-    let contest = 'N/A';
-    let page = 'N/A';
-    try {
-      const match = url.match(/\/ranking\/([^\/]+)\//);
-      if (match) contest = match[1];
-      const pageMatch = url.match(/pagination=(\d+)/);
-      if (pageMatch) page = pageMatch[1];
-    } catch (_) {}
-
-    const maxRetries = options.retries !== undefined 
-      ? options.retries 
-      : (parseInt(process.env.LEETCODE_MAX_RETRIES, 10) || 4);
-    const backoffBase = options.backoffFactor !== undefined 
-      ? options.backoffFactor 
-      : (parseInt(process.env.LEETCODE_BACKOFF_BASE_MS, 10) || 2000);
-      
-    const useCurlTransport = !!options.useCurlTransport;
-    const workerId = options.workerId || 'Main';
-
-    let lastError;
-
-    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-      if (options.onRequestAttempt) {
-        await options.onRequestAttempt(attempt);
-      }
-
-      const attemptStartTime = Date.now();
-      try {
-        let result;
-        if (useCurlTransport) {
-          result = await this.fetchWithCurl(url, headers, timeout);
-        } else {
-          result = await this.fetchWithAxios(url, method, headers, timeout);
-        }
-
-        const duration = Date.now() - attemptStartTime;
-        
-        // Log success
-        this.printRichLog({
-          requestId,
-          contest,
-          page,
-          url,
-          workerId,
-          attempt,
-          cmd: result.cmd || (useCurlTransport ? 'curl' : 'axios'),
-          exitCode: 0,
-          status: 200,
-          duration,
-          stdout: JSON.stringify(result),
-          stderr: '',
-          headers: result.headers || { 'content-type': 'application/json' },
-          body: JSON.stringify(result),
-          retryDecision: 'SUCCESS (No Retry Required)'
-        });
-
-        return result;
-      } catch (err) {
-        lastError = err;
-        const duration = Date.now() - attemptStartTime;
-        const willRetry = attempt <= maxRetries && isRetryableError(err);
-        const retryDecision = willRetry ? 'RETRY (Will retry after delay)' : 'ABORT (Non-retryable error)';
-
-        // Log failure
-        this.printRichLog({
-          requestId,
-          contest,
-          page,
-          url,
-          workerId,
-          attempt,
-          cmd: err.cmd || (useCurlTransport ? 'curl' : 'axios'),
-          exitCode: err.exitCode !== undefined ? err.exitCode : (err.code ? err.code : null),
-          status: err.status || null,
-          duration,
-          stdout: err.stdout || null,
-          stderr: err.stderr || err.message,
-          headers: err.headers || {},
-          body: err.body || null,
-          retryDecision
-        });
-
-        const isCloudflare = err instanceof CloudflareBlockedError || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK';
-        if (isCloudflare) {
-          console.warn(`[WARN] Cloudflare blocked page request to: ${url}`);
-        } else {
-          console.warn(`[WARN] Attempt ${attempt} failed for: ${url} - ${err.message}`);
-        }
-
-        if (willRetry) {
-          // Exponential backoff with random jitter
-          const baseDelay = backoffBase * Math.pow(2, attempt - 1);
-          // Jitter of 250ms to 750ms
-          const jitter = Math.floor(Math.random() * 500) + 250;
-          const delay = baseDelay + jitter;
-          
-          console.warn(`[WARN] Retrying page request to: ${url} (Attempt ${attempt + 1}) after ${delay}ms`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        } else {
-          break;
-        }
-      }
-    }
-
-    throw this.normalizeError(lastError, url);
   }
 
   /**
-   * Standard Axios fetch method. Requests text first, validates, and parses.
+   * Parses contest slug and page number from a LeetCode ranking API URL.
    */
-  static async fetchWithAxios(url, method, headers, timeout) {
+  static parseContestAndPage(url) {
+    let contestSlug = 'N/A';
+    let pageNumber = 1;
+    try {
+      const match = url.match(/\/ranking\/([^\/]+)\//);
+      if (match) contestSlug = match[1];
+      const pageMatch = url.match(/pagination=(\d+)/);
+      if (pageMatch) pageNumber = parseInt(pageMatch[1], 10);
+    } catch (_) {}
+    return { contestSlug, pageNumber };
+  }
+
+  /**
+   * Main HTTP request method.
+   * Incorporates caching, Cloudflare detection, exponential retries, throttling, and logging.
+   * 
+   * @param {string} url 
+   * @param {object} [options={}] 
+   * @returns {Promise<object>} Parsed JSON response
+   */
+  static async request(url, options = {}) {
+    const { contestSlug, pageNumber } = NetworkService.parseContestAndPage(url);
+    const isRankingEndpoint = url.includes('/contest/api/ranking/');
+    const bypassCache = !!options.bypassCache;
+
+    // Requirement 10: Cache successful contest ranking pages
+    if (isRankingEndpoint && !bypassCache) {
+      const cachedData = contestRankingCache.get(contestSlug, pageNumber);
+      if (cachedData) {
+        DetailedLogger.logRequest({
+          contestSlug,
+          pageNumber,
+          httpStatus: 200,
+          retryCount: 0,
+          errorType: 'NONE',
+          durationMs: 0,
+          message: 'Serving response from in-memory cache',
+          cached: true
+        });
+        return cachedData;
+      }
+    }
+
+    const headers = NetworkService.getDefaultHeaders(options.headers);
+    const timeout = options.timeout || 15000;
+    const useCurlTransport = !!options.useCurlTransport;
+
+    // Wrap request logic inside throttler and retry helper
+    return globalThrottler.throttle(async () => {
+      return executeWithRetry(
+        async (attempt) => {
+          const startTime = Date.now();
+          try {
+            let result;
+            if (useCurlTransport) {
+              result = await NetworkService.fetchWithCurl(url, headers, timeout, contestSlug, pageNumber);
+            } else {
+              result = await NetworkService.fetchWithAxios(url, options.method || 'GET', headers, timeout, contestSlug, pageNumber);
+            }
+
+            const durationMs = Date.now() - startTime;
+
+            // Cache successful ranking page
+            if (isRankingEndpoint) {
+              contestRankingCache.set(contestSlug, pageNumber, result, options.cacheTtlMs);
+            }
+
+            DetailedLogger.logRequest({
+              contestSlug,
+              pageNumber,
+              httpStatus: 200,
+              retryCount: attempt,
+              errorType: 'NONE',
+              durationMs,
+              message: 'Request successful'
+            });
+
+            return result;
+          } catch (err) {
+            const durationMs = Date.now() - startTime;
+            const errorType = (err instanceof CloudflareBlockedError || err.isCloudflare)
+              ? 'CLOUDFLARE_BLOCK'
+              : (err.code || 'REQUEST_FAILED');
+
+            DetailedLogger.logRequest({
+              contestSlug,
+              pageNumber,
+              httpStatus: err.status || 'N/A',
+              retryCount: attempt,
+              errorType,
+              durationMs,
+              message: err.message
+            });
+
+            throw err;
+          }
+        },
+        {
+          retries: options.retries,
+          backoffBaseMs: options.backoffFactor,
+          onRetry: (err, attempt, delayMs) => {
+            console.warn(`[WARN] Retrying request to ${url} (Attempt ${attempt + 1}) after ${delayMs}ms due to: ${err.message}`);
+          }
+        }
+      );
+    });
+  }
+
+  /**
+   * Axios fetch with Cloudflare detection BEFORE JSON parsing.
+   */
+  static async fetchWithAxios(url, method, headers, timeout, contestSlug, pageNumber) {
     const config = {
       url,
       method,
       headers,
       timeout,
-      responseType: 'text', // Request raw text first
-      validateStatus: () => true // Resolve for any status code so we can inspect headers/body
+      responseType: 'text' // Raw text first for safe inspection
     };
 
-    const response = await axios(config);
-    const contentType = response.headers['content-type'] || '';
+    const response = await persistentAxios(config);
     const body = response.data;
+    const statusCode = response.status;
+    const parsedHeaders = response.headers || {};
 
-    // Parse Axios headers into normalized headers format
-    const parsedHeaders = {
-      httpVersion: '1.1',
-      statusCode: response.status,
-      ...response.headers
-    };
+    // Requirements 1 & 3: Detect Cloudflare and HTML responses before JSON parsing
+    const cfCheck = detectCloudflare({ statusCode, headers: parsedHeaders, body });
 
-    if (isHtmlOrCloudflare(body)) {
-      let reason = 'Cloudflare block detected';
-      const lowerBody = body.toLowerCase();
-      if (lowerBody.includes('access denied')) {
-        reason = 'Access Denied';
-      } else if (lowerBody.includes('captcha')) {
-        reason = 'Captcha verification required';
-      } else if (lowerBody.includes('maintenance')) {
-        reason = 'Maintenance page';
-      } else if (lowerBody.includes('login') || lowerBody.includes('signin')) {
-        reason = 'Redirected to login page';
-      } else if (lowerBody.includes('just a moment') || lowerBody.includes('cf-challenge')) {
-        reason = 'Cloudflare challenge page';
-      }
-      
-      const cfErr = new CloudflareBlockedError(`Cloudflare block detected (${reason}) for URL: ${url}`);
-      cfErr.code = 'CLOUDFLARE_BLOCK';
-      cfErr.status = response.status;
-      cfErr.headers = parsedHeaders;
-      cfErr.body = body;
-      throw cfErr;
+    if (cfCheck.isBlocked) {
+      const bodyPreview = typeof body === 'string' ? body.slice(0, 300) : null;
+      throw new CloudflareBlockedError(
+        `Cloudflare block detected (${cfCheck.reason}) for URL: ${url}`,
+        {
+          status: statusCode,
+          url,
+          contestSlug,
+          pageNumber,
+          headers: parsedHeaders,
+          bodyPreview,
+          reason: cfCheck.reason
+        }
+      );
     }
 
-    if (contentType && !contentType.toLowerCase().includes('application/json')) {
-      const cTypeErr = new Error(`Invalid content-type: "${contentType}". Expected "application/json".`);
-      cTypeErr.code = 'INVALID_JSON';
-      cTypeErr.status = response.status;
-      cTypeErr.headers = parsedHeaders;
-      cTypeErr.body = body;
-      throw cTypeErr;
-    }
-
-    if (response.status !== 200) {
-      let errCode = `HTTP_${response.status}`;
-      if (response.status === 404) {
-        errCode = 'HTTP_404';
-      } else if (response.status === 403) {
-        errCode = 'HTTP_403';
-      } else if (response.status === 429) {
-        errCode = 'HTTP_429';
-      }
-      const err = new Error(`Request failed with status code ${response.status}`);
-      err.code = errCode;
-      err.status = response.status;
+    if (statusCode !== 200) {
+      const err = new Error(`Request failed with status code ${statusCode}`);
+      err.code = `HTTP_${statusCode}`;
+      err.status = statusCode;
       err.headers = parsedHeaders;
       err.body = body;
       throw err;
@@ -474,13 +272,12 @@ Retry Decision: ${retryDecision}
 
     try {
       const data = JSON.parse(body);
-      Object.defineProperty(data, 'cmd', { value: 'axios', enumerable: false, writable: true });
       Object.defineProperty(data, 'headers', { value: parsedHeaders, enumerable: false, writable: true });
       return data;
     } catch (parseErr) {
       const jsonErr = new Error(`Failed to parse response JSON: ${parseErr.message}`);
       jsonErr.code = 'INVALID_JSON';
-      jsonErr.status = response.status;
+      jsonErr.status = statusCode;
       jsonErr.headers = parsedHeaders;
       jsonErr.body = body;
       throw jsonErr;
@@ -488,10 +285,9 @@ Retry Decision: ${retryDecision}
   }
 
   /**
-   * CLI curl fetch method. Works portably across Windows, Linux, and Docker.
-   * Requests raw text first, validates, and parses.
+   * cURL CLI fetch method with Cloudflare detection BEFORE JSON parsing.
    */
-  static fetchWithCurl(url, headers, timeout) {
+  static fetchWithCurl(url, headers, timeout, contestSlug, pageNumber) {
     return new Promise((resolve, reject) => {
       let headerFlags = '';
       if (headers) {
@@ -509,32 +305,19 @@ Retry Decision: ${retryDecision}
           const classification = classifyCurlError(err, stdout, stderr);
           const errorObj = new Error(classification.message);
           errorObj.code = classification.code;
-          errorObj.cmd = cmd;
-          errorObj.exitCode = err.code;
-          errorObj.stdout = stdout;
-          errorObj.stderr = stderr;
-          errorObj.killed = err.killed;
-          errorObj.signal = err.signal;
           errorObj.status = null;
           return reject(errorObj);
         }
-        
-        // Parse curl -i output
+
         const httpHeaderRegex = /^HTTP\/\d+\.\d+\s+\d+/gmi;
-        let matches;
-        try {
-          matches = [...stdout.matchAll(httpHeaderRegex)];
-        } catch (matchErr) {
-          return reject(matchErr); // Preserve original stack trace for matchAll TypeError
-        }
+        let matches = [...stdout.matchAll(httpHeaderRegex)];
         
         let body = stdout;
         let headersStr = '';
-        
+
         if (matches.length > 0) {
           const lastMatch = matches[matches.length - 1];
-          const lastHeaderIndex = lastMatch.index;
-          const headerAndBody = stdout.substring(lastHeaderIndex);
+          const headerAndBody = stdout.substring(lastMatch.index);
           const doubleNewlineIndex = headerAndBody.search(/\r?\n\r?\n/);
           
           if (doubleNewlineIndex !== -1) {
@@ -545,16 +328,13 @@ Retry Decision: ${retryDecision}
 
         const parsedHeaders = {};
         let statusCode = 200;
-        let contentType = '';
 
         if (headersStr) {
           const lines = headersStr.split(/\r?\n/);
-          const firstLine = lines[0];
-          const httpMatch = firstLine.match(/^HTTP\/(\d+\.\d+)\s+(\d+)/i);
+          const httpMatch = lines[0].match(/^HTTP\/(\d+\.\d+)\s+(\d+)/i);
           if (httpMatch) {
-            parsedHeaders.httpVersion = httpMatch[1];
-            parsedHeaders.statusCode = parseInt(httpMatch[2], 10);
-            statusCode = parsedHeaders.statusCode;
+            statusCode = parseInt(httpMatch[2], 10);
+            parsedHeaders.statusCode = statusCode;
           }
           for (let idx = 1; idx < lines.length; idx++) {
             const line = lines[idx];
@@ -565,128 +345,61 @@ Retry Decision: ${retryDecision}
               parsedHeaders[name] = value;
             }
           }
-          if (parsedHeaders['content-type']) {
-            contentType = parsedHeaders['content-type'].toLowerCase();
-          }
         }
 
-        if (statusCode === 403 || isHtmlOrCloudflare(body) || contentType.includes('text/html')) {
-          let reason = 'Cloudflare block detected';
-          let errCode = 'CLOUDFLARE_BLOCK';
-          const lowerBody = body.toLowerCase();
-          
-          if (lowerBody.includes('access denied')) {
-            reason = 'Access Denied';
-            errCode = 'HTTP_403';
-          } else if (lowerBody.includes('captcha')) {
-            reason = 'Captcha verification required';
-          } else if (lowerBody.includes('maintenance')) {
-            reason = 'Maintenance page';
-          } else if (lowerBody.includes('login') || lowerBody.includes('signin')) {
-            reason = 'Redirected to login page';
-          } else if (lowerBody.includes('just a moment') || lowerBody.includes('cf-challenge')) {
-            reason = 'Cloudflare challenge page';
-          } else if (lowerBody.includes('redirect')) {
-            reason = 'Redirect page';
-          } else {
-            reason = 'HTML response received';
-          }
-          
-          const cfErr = new CloudflareBlockedError(`Cloudflare block detected (${reason}) for URL: ${url}`);
-          cfErr.code = errCode;
-          cfErr.status = statusCode;
-          cfErr.cmd = cmd;
-          cfErr.headers = parsedHeaders;
-          cfErr.body = body;
-          cfErr.stdout = stdout;
-          cfErr.stderr = stderr;
-          return reject(cfErr);
-        }
+        // Requirements 1 & 3: Detect Cloudflare and HTML responses before JSON parsing
+        const cfCheck = detectCloudflare({ statusCode, headers: parsedHeaders, body });
 
-        if (contentType && !contentType.includes('application/json')) {
-          const cTypeErr = new Error(`Invalid content-type: "${contentType}". Expected "application/json".`);
-          cTypeErr.code = 'INVALID_JSON';
-          cTypeErr.status = statusCode;
-          cTypeErr.cmd = cmd;
-          cTypeErr.headers = parsedHeaders;
-          cTypeErr.body = body;
-          cTypeErr.stdout = stdout;
-          cTypeErr.stderr = stderr;
-          return reject(cTypeErr);
+        if (cfCheck.isBlocked) {
+          const bodyPreview = typeof body === 'string' ? body.slice(0, 300) : null;
+          return reject(new CloudflareBlockedError(
+            `Cloudflare block detected (${cfCheck.reason}) for URL: ${url}`,
+            {
+              status: statusCode,
+              url,
+              contestSlug,
+              pageNumber,
+              headers: parsedHeaders,
+              bodyPreview,
+              reason: cfCheck.reason
+            }
+          ));
         }
 
         if (statusCode !== 200) {
-          let errCode = `HTTP_${statusCode}`;
-          if (statusCode === 404) {
-            errCode = 'HTTP_404';
-          } else if (statusCode === 429) {
-            errCode = 'HTTP_429';
-          }
           const httpErr = new Error(`Request failed with status code ${statusCode}`);
-          httpErr.code = errCode;
+          httpErr.code = `HTTP_${statusCode}`;
           httpErr.status = statusCode;
-          httpErr.cmd = cmd;
           httpErr.headers = parsedHeaders;
           httpErr.body = body;
-          httpErr.stdout = stdout;
-          httpErr.stderr = stderr;
           return reject(httpErr);
         }
 
         try {
           const data = JSON.parse(body);
-          Object.defineProperty(data, 'cmd', { value: cmd, enumerable: false, writable: true });
           Object.defineProperty(data, 'headers', { value: parsedHeaders, enumerable: false, writable: true });
           resolve(data);
         } catch (parseErr) {
           const jsonErr = new Error(`Failed to parse response JSON: ${parseErr.message}`);
           jsonErr.code = 'INVALID_JSON';
           jsonErr.status = statusCode;
-          jsonErr.cmd = cmd;
           jsonErr.headers = parsedHeaders;
           jsonErr.body = body;
-          jsonErr.stdout = stdout;
-          jsonErr.stderr = stderr;
           reject(jsonErr);
         }
       });
     });
   }
 
-  /**
-   * Exposes detectCurlCapabilities externally.
-   */
-  static async detectCurlCapabilities() {
-    return await detectCurlCapabilities();
-  }
-
-  /**
-   * Normalizes errors into standard user-friendly formats.
-   */
   static normalizeError(err, url) {
     if (err instanceof CloudflareBlockedError || err.name === 'CloudflareBlockedError' || err.isCloudflare) {
-      const prefix = err.code ? `[${err.code}] ` : '[CLOUDFLARE_BLOCK] ';
-      if (!err.message.startsWith('[')) {
-        err.message = `${prefix}${err.message}`;
-      }
       return err;
     }
     const errCode = err.code || 'REQUEST_FAILED';
-    const prefix = `[${errCode}] `;
-    let originalMessage = err.message || 'Request failed';
-    if (!originalMessage.startsWith('[')) {
-      originalMessage = `${prefix}${originalMessage}`;
-    }
-    const error = new Error(originalMessage);
+    const error = new Error(`[${errCode}] ${err.message || 'Request failed'}`);
     error.url = url;
     error.code = errCode;
-    if (err.status) {
-      error.status = err.status;
-    }
-    if (err.response) {
-      error.status = err.response.status;
-      error.data = err.response.data;
-    }
+    error.status = err.status || null;
     return error;
   }
 }
