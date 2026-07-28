@@ -83,45 +83,40 @@ class LeetCodeAdapter extends BaseAdapter {
     }
 
     // ------------------------------------------------------------------
-    // 1. Check ContestParticipants cache with TTL and completeness check
-    // ------------------------------------------------------------------
-    const cacheResult = await this._checkCache(slug);
-
-    if (cacheResult.usable) {
-      const elapsed = Date.now() - startTime;
-      console.log(`[LeetCodeAdapter] [DIAGNOSTICS] Contest: "${slug}" | Cache: HIT (${cacheResult.count} participants, age: ${Math.round(cacheResult.ageMs / 1000)}s) | Time: ${elapsed}ms`);
-      return cacheResult.participants;
-    }
-
-    if (cacheResult.count > 0) {
-      console.log(`[LeetCodeAdapter] Cache for "${slug}" is ${cacheResult.reason}. Re-fetching full leaderboard...`);
-    }
-
-    // ------------------------------------------------------------------
-    // 2. Fetch complete leaderboard from LeetCode API (all pages)
+    // 1. Primary: Use StudentContestSyncService (GraphQL / Provider Abstraction)
     // ------------------------------------------------------------------
     try {
-      const result = await this._fetchFullLeaderboard(slug);
-
-      if (result.participants.length > 0) {
-        // Guard: only update cache if the fetch is sufficiently complete.
-        // Partial fetches (due to page failures) must not poison the cache.
-        const completeness = result.totalExpected > 0
-          ? result.participants.length / result.totalExpected
-          : 1;
-
-        if (completeness >= MIN_CACHE_COMPLETENESS) {
-          await this._updateCache(slug, result.participants);
-        } else {
-          console.warn(`[LeetCodeAdapter] Skipping cache update for "${slug}": fetch is incomplete (${result.participants.length}/${result.totalExpected} = ${(completeness * 100).toFixed(1)}%, threshold: ${(MIN_CACHE_COMPLETENESS * 100).toFixed(1)}%).`);
-        }
-
+      const StudentContestSyncService = require('../StudentContestSyncService');
+      const syncReport = await StudentContestSyncService.syncContestAttendance({ contestSlug: slug });
+      
+      if (syncReport && syncReport.success) {
+        const rows = await db.query(
+          "SELECT username, `rank`, score, solved as problemsSolved FROM ContestAttendance WHERE contestId = ? AND attendanceStatus = 'Present'",
+          [syncReport.contestId]
+        );
+        const participants = rows.map(r => ({
+          username: normalizeUsername(r.username),
+          rank: r.rank,
+          score: r.score ? parseFloat(r.score) : 0.00,
+          problemsSolved: r.problemsSolved || 0,
+          finishTime: 0
+        }));
         const elapsed = Date.now() - startTime;
-        console.log(`[LeetCodeAdapter] [DIAGNOSTICS] Contest: "${slug}" | Cache: MISS | Expected: ${result.totalExpected} | Fetched: ${result.participants.length} | Completeness: ${(completeness * 100).toFixed(1)}% | Cached: ${completeness >= MIN_CACHE_COMPLETENESS ? 'YES' : 'NO'} | Pages: ${result.pagesFetched} | Time: ${elapsed}ms`);
-        return result.participants;
+        console.log(`[LeetCodeAdapter] Contest "${slug}" synced via StudentContestSyncService (${participants.length} present participants) in ${elapsed}ms.`);
+        return participants;
       }
     } catch (err) {
-      console.warn(`[LeetCodeAdapter] Failed to fetch full leaderboard for "${slug}":`, err.message);
+      console.warn(`[LeetCodeAdapter] StudentContestSyncService failed for "${slug}":`, err.message);
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Check ContestParticipants cache fallback
+    // ------------------------------------------------------------------
+    const cacheResult = await this._checkCache(slug);
+    if (cacheResult.usable) {
+      const elapsed = Date.now() - startTime;
+      console.log(`[LeetCodeAdapter] Contest "${slug}" resolved from cache (${cacheResult.count} participants) in ${elapsed}ms.`);
+      return cacheResult.participants;
     }
 
     // ------------------------------------------------------------------
@@ -129,10 +124,8 @@ class LeetCodeAdapter extends BaseAdapter {
     // ------------------------------------------------------------------
     const standingsProvider = require('../../utils/standingsProvider');
     const ehList = await standingsProvider.fetchStandings('LeetCode', slug);
-
     const elapsed = Date.now() - startTime;
-    console.log(`[LeetCodeAdapter] [DIAGNOSTICS] Contest: "${slug}" | Source: standingsProvider fallback | Participants: ${ehList.length} | Time: ${elapsed}ms`);
-
+    console.log(`[LeetCodeAdapter] Contest "${slug}" resolved via standingsProvider (${ehList.length} participants) in ${elapsed}ms.`);
     return ehList;
   }
 

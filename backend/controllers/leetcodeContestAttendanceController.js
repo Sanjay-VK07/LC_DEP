@@ -12,30 +12,26 @@ const LeetCodeContestAttendanceController = {
    */
   async syncContest(req, res) {
     console.log("Attendance sync endpoint reached");
-    const { contestSlug } = req.body;
+    const { contestSlug, providerType } = req.body;
     if (!contestSlug || typeof contestSlug !== 'string' || !contestSlug.trim()) {
       return res.status(400).json({ success: false, message: 'LeetCode contest slug is required.' });
     }
 
     const slug = contestSlug.trim().toLowerCase();
     console.log("Contest Slug:", slug);
-    console.log("Starting sync...");
-    console.log("Calling ranking service...");
+    console.log("Starting sync with StudentContestSyncService...");
 
     try {
-      const result = await LeetCodeRankingSearchService.syncContestAttendance(slug);
-      console.log("Ranking service completed.");
-      console.log("Returning response...");
-      if (result === 'SYNC_SKIPPED') {
-        return res.json({
-          success: true,
-          message: `Contest sync skipped for '${slug}'. Reason: Official participant provider returned zero participants.`,
-          data: { status: 'SYNC_SKIPPED' }
-        });
-      }
+      const StudentContestSyncService = require('../services/StudentContestSyncService');
+      const result = await StudentContestSyncService.syncContestAttendance({
+        contestSlug: slug,
+        providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
+        actor: req.user?.username || 'ADMIN_API'
+      });
+
       return res.json({
         success: true,
-        message: `Successfully synchronized attendance for contest '${slug}'!`,
+        message: `Successfully synchronized attendance for contest '${slug}' using provider ${result.provider}!`,
         data: result
       });
     } catch (error) {
@@ -275,6 +271,41 @@ const LeetCodeContestAttendanceController = {
       return res.status(500).json({
         success: false,
         message: 'Failed to retrieve contest attendance records.'
+      });
+    }
+  },
+
+  /**
+   * Post endpoint to import contest attendance from CSV/Excel spreadsheet data
+   */
+  async importCsv(req, res) {
+    const { contestSlug, rows, filename } = req.body;
+    if (!contestSlug || typeof contestSlug !== 'string' || !contestSlug.trim()) {
+      return res.status(400).json({ success: false, message: 'contestSlug parameter is required.' });
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'rows parameter must be a non-empty array of parsed spreadsheet objects.' });
+    }
+
+    try {
+      const ContestImportService = require('../services/contestImportService');
+      const result = await ContestImportService.importContestAttendance({
+        contestSlug: contestSlug.trim().toLowerCase(),
+        rows,
+        filename: filename || 'upload.csv',
+        uploadedBy: req.user?.username || 'ADMIN_API'
+      });
+
+      return res.json({
+        success: true,
+        message: `Successfully imported CSV attendance for contest '${contestSlug}'! Processed: ${result.processedRows}, Rejected: ${result.rejectedRows}`,
+        data: result
+      });
+    } catch (error) {
+      console.error(`[CSV Import Controller Error]:`, error);
+      return res.status(500).json({
+        success: false,
+        message: `CSV import failed: ${error.message}`
       });
     }
   }

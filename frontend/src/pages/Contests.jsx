@@ -150,6 +150,49 @@ function TypeBadge({ type }) {
   );
 }
 
+function SyncSourceBadge({ source, status }) {
+  if (status === 'BLOCKED_UPSTREAM') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400 border border-rose-200 dark:border-rose-900/30">
+        ⚠ Upstream Blocked
+      </span>
+    );
+  }
+  if (status === 'PARTIAL_SYNC') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border border-amber-200 dark:border-amber-900/30">
+        ⚠ Partial Sync
+      </span>
+    );
+  }
+  if (status === 'UNKNOWN') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+        ❓ Unknown
+      </span>
+    );
+  }
+  if (source === 'CSV_IMPORT' || source === 'CSV') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:text-violet-400 border border-violet-200 dark:border-violet-900/30">
+        📁 CSV Imported
+      </span>
+    );
+  }
+  if (source === 'MANUAL') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-400 border border-sky-200 dark:border-sky-900/30">
+        ✏️ Manual
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-extrabold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/30">
+      ✓ GraphQL Synced
+    </span>
+  );
+}
+
 function AttendanceBadge({ contest }) {
   const timing = getContestTiming(contest.date, contest.duration || 5400);
   const isOngoing = timing === 'active';
