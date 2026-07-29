@@ -27,8 +27,8 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
     const targetSlug = slugifyTitle(contestSlug);
     const results = [];
 
-    const CONCURRENCY = parseInt(process.env.LEETCODE_GRAPHQL_CONCURRENCY, 10) || 2;
-    const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 300;
+    const CONCURRENCY = parseInt(process.env.LEETCODE_GRAPHQL_CONCURRENCY, 10) || 5;
+    const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 50;
 
     let index = 0;
 
@@ -66,7 +66,12 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
         }
 
         try {
-          const data = await leetcodeUtils.getUserContestRankingAndHistory(normHandle);
+          // Bounded 6-second timeout per student GraphQL lookup
+          const queryPromise = leetcodeUtils.getUserContestRankingAndHistory(normHandle);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`GraphQL request timeout for ${normHandle} after 6s`)), 6000)
+          );
+          const data = await Promise.race([queryPromise, timeoutPromise]);
           const history = data?.userContestRankingHistory || [];
           const userRanking = data?.userContestRanking || {};
 

@@ -11,28 +11,48 @@ const LeetCodeContestAttendanceController = {
    * Post endpoint to trigger contest synchronization
    */
   async syncContest(req, res) {
-    console.log("Attendance sync endpoint reached");
+    const { performance } = require('perf_hooks');
+    const reqStart = performance.now();
+    const requestId = req.requestId || `sync_${Date.now()}`;
+
+    const authMs = Math.round(performance.now() - reqStart);
+    console.log(`[LeetCode Sync Telemetry] Request Started -> Authentication (${authMs} ms)`);
+
     const { contestSlug, providerType } = req.body;
     if (!contestSlug || typeof contestSlug !== 'string' || !contestSlug.trim()) {
       return res.status(400).json({ success: false, message: 'LeetCode contest slug is required.' });
     }
 
     const slug = contestSlug.trim().toLowerCase();
-    console.log("Contest Slug:", slug);
-    console.log("Starting sync with StudentContestSyncService...");
 
     try {
+      const dbStart = performance.now();
       const StudentContestSyncService = require('../services/StudentContestSyncService');
+      const dbMs = Math.round(performance.now() - dbStart);
+
+      console.log(`[LeetCode Sync Telemetry] Starting sync for "${slug}" using provider "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"...`);
+
+      const syncStart = performance.now();
       const result = await StudentContestSyncService.syncContestAttendance({
         contestSlug: slug,
         providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
         actor: req.user?.username || 'ADMIN_API'
       });
+      const syncMs = Math.round(performance.now() - syncStart);
+
+      const totalMs = Math.round(performance.now() - reqStart);
+      console.log(`[LeetCode Sync Telemetry] Request Started -> Authentication (${authMs} ms) -> Database (${dbMs} ms) -> LeetCode GraphQL & Attendance (${syncMs} ms) -> Response Sent (${totalMs} ms) [reqId="${requestId}"]`);
 
       return res.json({
         success: true,
         message: `Successfully synchronized attendance for contest '${slug}' using provider ${result.provider}!`,
-        data: result
+        data: result,
+        telemetry: {
+          authMs,
+          dbMs,
+          syncMs,
+          totalMs
+        }
       });
     } catch (error) {
       console.error(`[Contest Sync Controller Error]:`, error);

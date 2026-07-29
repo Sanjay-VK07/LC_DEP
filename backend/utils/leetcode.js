@@ -563,10 +563,9 @@ async function getUserContestRankingAndHistory(username) {
   try {
     const json = await queryLeetCode(query, { username });
     
-    // Print the entire API response before processing
-    console.log("---------------- [RAW LEETCODE API RESPONSE] ----------------");
-    console.log(JSON.stringify(json, null, 2));
-    console.log("-------------------------------------------------------------");
+    if (process.env.DEBUG_LEETCODE === 'true') {
+      console.log(`[LeetCode API Debug] Received response for ${username}:`, json?.data ? 'OK' : 'No Data');
+    }
 
     // Verification step
     if (json && json.data) {
