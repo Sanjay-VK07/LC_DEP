@@ -45,6 +45,16 @@ function Attendance() {
   const [lcSyncJobId, setLcSyncJobId] = useState(null);
   const [lcSyncProgress, setLcSyncProgress] = useState(0);
   const [lcSyncMessage, setLcSyncMessage] = useState('');
+  const syncPollRef = useRef(null);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (syncPollRef.current) {
+        clearInterval(syncPollRef.current);
+      }
+    };
+  }, []);
   const [lcDeptFilter, setLcDeptFilter] = useState('');
   const [lcBatchFilter, setLcBatchFilter] = useState('');
   const [lcSectionFilter, setLcSectionFilter] = useState('');
@@ -453,7 +463,8 @@ function Attendance() {
         setSuccess(`Attendance sync running in background${jobId ? ` (Job ${jobId})` : ''}. Polling for completion...`);
 
         // Poll GET /api/jobs/:id every 3 seconds until COMPLETED or FAILED
-        const poll = setInterval(async () => {
+        if (syncPollRef.current) clearInterval(syncPollRef.current);
+        syncPollRef.current = setInterval(async () => {
           try {
             const jobRes = await axios.get(`${API_URL}/jobs/${jobId}`);
             const job = jobRes.data.data;
@@ -461,7 +472,7 @@ function Attendance() {
               setLcSyncProgress(job.progress || 10);
               setLcSyncMessage(job.message || 'Processing...');
               if (job.status === 'COMPLETED') {
-                clearInterval(poll);
+                if (syncPollRef.current) clearInterval(syncPollRef.current);
                 setSyncingLcContest(false);
                 setLcSyncJobId(null);
                 setLcSyncProgress(100);
@@ -470,7 +481,7 @@ function Attendance() {
                 fetchLcContestStats();
                 setTimeout(() => { setLcSyncProgress(0); setSuccess(''); }, 5000);
               } else if (job.status === 'FAILED') {
-                clearInterval(poll);
+                if (syncPollRef.current) clearInterval(syncPollRef.current);
                 setSyncingLcContest(false);
                 setLcSyncJobId(null);
                 setLcSyncProgress(0);
@@ -479,8 +490,16 @@ function Attendance() {
               }
             }
           } catch (pollErr) {
-            // Ignore transient polling errors (network blips)
-            console.warn('[LC Sync Poll] Transient error:', pollErr.message);
+            if (pollErr.response?.status === 404) {
+              if (syncPollRef.current) clearInterval(syncPollRef.current);
+              setSyncingLcContest(false);
+              setLcSyncJobId(null);
+              setLcSyncProgress(0);
+              setLcSyncMessage('');
+              setError('Job status expired or backend service restarted. Please check database stats.');
+            } else {
+              console.warn('[LC Sync Poll] Transient error:', pollErr.message);
+            }
           }
         }, 3000);
       } else {

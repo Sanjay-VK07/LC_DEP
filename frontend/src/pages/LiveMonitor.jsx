@@ -36,6 +36,7 @@ function LiveMonitor() {
   const [timeRemaining, setTimeRemaining] = useState('');
 
   const eventSourceRef = useRef(null);
+  const sseTimerRef = useRef(null);
 
   // Fetch initial data
   const fetchData = async () => {
@@ -132,8 +133,9 @@ function LiveMonitor() {
       source.onerror = () => {
         setSseConnected(false);
         source.close();
-        // Retry connection after 5 seconds
-        setTimeout(connectSSE, 5000);
+        // Retry connection after 5 seconds with tracked timer
+        if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
+        sseTimerRef.current = setTimeout(connectSSE, 5000);
       };
 
       source.addEventListener('StudentUpdated', (event) => {
@@ -195,6 +197,9 @@ function LiveMonitor() {
     connectSSE();
 
     return () => {
+      if (sseTimerRef.current) {
+        clearTimeout(sseTimerRef.current);
+      }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
