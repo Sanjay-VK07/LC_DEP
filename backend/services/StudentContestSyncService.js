@@ -239,9 +239,9 @@ class StudentContestSyncService {
       );
 
       await db.query(
-        `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count)
-         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0)`,
-        [liveContestId, startTime, processedItems.length, blockedCount]
+        `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count, syncStarted)
+         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0, FROM_UNIXTIME(? / 1000))`,
+        [liveContestId, startTime, processedItems.length, blockedCount, startTime]
       );
 
       await db.query(

@@ -441,8 +441,11 @@ function Attendance() {
         contestSlug: lcContestSlug
       });
       if (res.data.success) {
-        setSuccess(`Successfully scanned and marked attendance! Present: ${res.data.data.presentCount}, Absent: ${res.data.data.absentCount}`);
-        fetchLcContestStats();
+        const jobId = res.data.jobId;
+        setSuccess(`Attendance sync running in background${jobId ? ` (Job ${jobId})` : ''}. Stats will update shortly.`);
+        setTimeout(() => fetchLcContestStats(), 4000);
+      } else {
+        setError(res.data.message || res.data.error || 'Sync failed — check backend logs.');
       }
     } catch (err) {
       const data = err.response?.data;
