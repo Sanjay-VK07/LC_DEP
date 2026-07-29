@@ -119,90 +119,132 @@ class StudentContestSyncService {
       });
     }
 
-    // 6. Execute atomic database upserts inside transaction
+    // 6. Execute atomic database upserts in progressive batches of 50 with automatic deadlock retry
     const pool = db.getPool();
-    const conn = await pool.getConnection();
+    const BATCH_SIZE = 50;
+    const MAX_DEADLOCK_RETRIES = 3;
 
-    try {
-      await conn.beginTransaction();
+    for (let i = 0; i < processedItems.length; i += BATCH_SIZE) {
+      const batch = processedItems.slice(i, i + BATCH_SIZE);
+      let attempt = 0;
+      let batchSuccess = false;
 
-      for (const item of processedItems) {
-        const studentId = item.studentId;
-        const normHandle = normalizeUsername(item.username) || item.username || '';
-        const finalStatus = item.finalStatus;
-        const caStatus = finalStatus === 'PRESENT' ? 'Present' : (finalStatus === 'ABSENT' ? 'Absent' : 'Unknown');
-        const arStatus = finalStatus === 'PRESENT' ? 'PRESENT' : 'ABSENT';
+      while (attempt < MAX_DEADLOCK_RETRIES && !batchSuccess) {
+        attempt++;
+        const conn = await pool.getConnection();
 
-        // Upsert into ContestAttendance
-        await conn.query(
-          `INSERT INTO ContestAttendance (
-            contestId, studentId, username, attendanceStatus, \`rank\`, solved, score,
-            ratingBefore, ratingAfter, ratingChange, syncProvider, attendanceSource,
-            verificationMethod, syncStatus, upstreamError, firstDetectedAt, lastUpdatedAt
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-          ON DUPLICATE KEY UPDATE
-            username = VALUES(username),
-            attendanceStatus = VALUES(attendanceStatus),
-            \`rank\` = COALESCE(VALUES(\`rank\`), \`rank\`),
-            solved = GREATEST(VALUES(solved), solved),
-            score = GREATEST(VALUES(score), score),
-            ratingAfter = COALESCE(VALUES(ratingAfter), ratingAfter),
-            ratingChange = COALESCE(VALUES(ratingChange), ratingChange),
-            syncProvider = VALUES(syncProvider),
-            attendanceSource = VALUES(attendanceSource),
-            verificationMethod = VALUES(verificationMethod),
-            syncStatus = VALUES(syncStatus),
-            upstreamError = VALUES(upstreamError),
-            lastUpdatedAt = NOW()`,
-          [
-            liveContestId, studentId, normHandle, caStatus, item.rank, item.problemsSolved, item.score,
-            null, item.rating, item.ratingChange, provider.providerName, item.source,
-            item.provider === 'GRAPHQL' ? 'GRAPHQL_HISTORY' : 'MANUAL',
-            'COMPLETED', item.error || null
-          ]
-        );
+        try {
+          await conn.beginTransaction();
 
-        // Upsert into AttendanceRecords
-        await conn.query(
-          `INSERT INTO AttendanceRecords (
-            user_id, contest_id, contest_name, contest_slug, contest_date, contest_status,
-            attendance_status, attendance_source, sync_provider, verification_method,
-            sync_status, upstream_error, \`rank\`, score, participated, last_updated
-          ) VALUES (?, ?, ?, ?, NOW(), 'Rated', ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, NOW())
-          ON DUPLICATE KEY UPDATE
-            attendance_status = VALUES(attendance_status),
-            attendance_source = VALUES(attendance_source),
-            sync_provider = VALUES(sync_provider),
-            verification_method = VALUES(verification_method),
-            sync_status = VALUES(sync_status),
-            upstream_error = VALUES(upstream_error),
-            \`rank\` = COALESCE(VALUES(\`rank\`), \`rank\`),
-            score = GREATEST(VALUES(score), score),
-            participated = VALUES(participated),
-            last_updated = NOW()`,
-          [
-            studentId, realContestId, contestTitle, contestSlug, arStatus, item.source,
-            provider.providerName, item.provider === 'GRAPHQL' ? 'GRAPHQL_HISTORY' : 'MANUAL',
-            item.error || null, item.rank, item.score, item.attended ? 1 : 0
-          ]
-        );
+          for (const item of batch) {
+            const studentId = item.studentId;
+            const normHandle = normalizeUsername(item.username) || item.username || '';
+            const finalStatus = item.finalStatus;
+            const caStatus = finalStatus === 'PRESENT' ? 'Present' : (finalStatus === 'ABSENT' ? 'Absent' : 'Unknown');
+            const arStatus = finalStatus === 'PRESENT' ? 'PRESENT' : 'ABSENT';
 
-        // Update LeetCodeProfiles if rating/stats available
-        if (item.rating) {
-          await conn.query(
-            `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, last_synced)
-             VALUES (?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE
-               current_rating = VALUES(current_rating),
-               highest_rating = GREATEST(highest_rating, VALUES(current_rating)),
-               last_synced = NOW()`,
-            [studentId, item.rating, item.rating]
-          );
+            // Upsert into ContestAttendance
+            await conn.query(
+              `INSERT INTO ContestAttendance (
+                contestId, studentId, username, attendanceStatus, \`rank\`, solved, score,
+                ratingBefore, ratingAfter, ratingChange, syncProvider, attendanceSource,
+                verificationMethod, syncStatus, upstreamError, firstDetectedAt, lastUpdatedAt
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+              ON DUPLICATE KEY UPDATE
+                username = VALUES(username),
+                attendanceStatus = VALUES(attendanceStatus),
+                \`rank\` = COALESCE(VALUES(\`rank\`), \`rank\`),
+                solved = GREATEST(VALUES(solved), solved),
+                score = GREATEST(VALUES(score), score),
+                ratingAfter = COALESCE(VALUES(ratingAfter), ratingAfter),
+                ratingChange = COALESCE(VALUES(ratingChange), ratingChange),
+                syncProvider = VALUES(syncProvider),
+                attendanceSource = VALUES(attendanceSource),
+                verificationMethod = VALUES(verificationMethod),
+                syncStatus = VALUES(syncStatus),
+                upstreamError = VALUES(upstreamError),
+                lastUpdatedAt = NOW()`,
+              [
+                liveContestId, studentId, normHandle, caStatus, item.rank, item.problemsSolved, item.score,
+                null, item.rating, item.ratingChange, provider.providerName, item.source,
+                item.provider === 'GRAPHQL' ? 'GRAPHQL_HISTORY' : 'MANUAL',
+                'COMPLETED', item.error || null
+              ]
+            );
+
+            // Upsert into AttendanceRecords
+            await conn.query(
+              `INSERT INTO AttendanceRecords (
+                user_id, contest_id, contest_name, contest_slug, contest_date, contest_status,
+                attendance_status, attendance_source, sync_provider, verification_method,
+                sync_status, upstream_error, \`rank\`, score, participated, last_updated
+              ) VALUES (?, ?, ?, ?, NOW(), 'Rated', ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, NOW())
+              ON DUPLICATE KEY UPDATE
+                attendance_status = VALUES(attendance_status),
+                attendance_source = VALUES(attendance_source),
+                sync_provider = VALUES(sync_provider),
+                verification_method = VALUES(verification_method),
+                sync_status = VALUES(sync_status),
+                upstream_error = VALUES(upstream_error),
+                \`rank\` = COALESCE(VALUES(\`rank\`), \`rank\`),
+                score = GREATEST(VALUES(score), score),
+                participated = VALUES(participated),
+                last_updated = NOW()`,
+              [
+                studentId, realContestId, contestTitle, contestSlug, arStatus, item.source,
+                provider.providerName, item.provider === 'GRAPHQL' ? 'GRAPHQL_HISTORY' : 'MANUAL',
+                item.error || null, item.rank, item.score, item.attended ? 1 : 0
+              ]
+            );
+
+            // Update LeetCodeProfiles if rating/stats available
+            if (item.rating) {
+              await conn.query(
+                `INSERT INTO LeetCodeProfiles (user_id, current_rating, highest_rating, last_synced)
+                 VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE
+                   current_rating = VALUES(current_rating),
+                   highest_rating = GREATEST(highest_rating, VALUES(current_rating)),
+                   last_synced = NOW()`,
+                [studentId, item.rating, item.rating]
+              );
+            }
+          }
+
+          await conn.commit();
+          batchSuccess = true;
+        } catch (err) {
+          await conn.rollback();
+          const isDeadlock = err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213 || err.code === 'ER_LOCK_WAIT_TIMEOUT';
+          
+          if (isDeadlock && attempt < MAX_DEADLOCK_RETRIES) {
+            const jitterMs = Math.floor(Math.random() * 200) + 100 * attempt;
+            console.warn(`[StudentContestSyncService] Deadlock detected on batch ${i}-${i + BATCH_SIZE} (Attempt ${attempt}/${MAX_DEADLOCK_RETRIES}). Retrying in ${jitterMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, jitterMs));
+          } else {
+            console.error(`[StudentContestSyncService] Database batch insert error (${i}-${i + BATCH_SIZE}) after attempt ${attempt}:`, err.message);
+            break;
+          }
+        } finally {
+          conn.release();
         }
       }
+    }
 
-      // Record AuditLog telemetry
-      await conn.query(
+    // Record persistent telemetry in ContestSyncLog & LiveContests
+    try {
+      await db.query(
+        `UPDATE LiveContests SET totalParticipants = ?, lastSyncAt = NOW(), status = 'Completed' WHERE id = ?`,
+        [processedItems.length, liveContestId]
+      );
+
+      await db.query(
+        `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count)
+         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0)`,
+        [liveContestId, startTime, processedItems.length, blockedCount]
+      );
+
+      await db.query(
         `INSERT INTO AuditLog (action, actor, target_type, target_id, details, severity, result, duration_ms, source_platform)
          VALUES ('CONTEST_STUDENT_SYNC', ?, 'CONTEST', ?, ?, 'INFO', ?, ?, ?)`,
         [
@@ -214,15 +256,8 @@ class StudentContestSyncService {
           provider.providerName
         ]
       );
-
-      await conn.commit();
-      console.log(`[StudentContestSyncService] Sync completed for "${contestSlug}". Processed: ${students.length} | Present: ${presentCount} | Absent: ${absentCount} | Unknown: ${unknownCount} | Blocked: ${blockedCount}`);
-    } catch (err) {
-      await conn.rollback();
-      console.error(`[StudentContestSyncService] Database transaction failed for "${contestSlug}":`, err.message);
-      throw err;
-    } finally {
-      conn.release();
+    } catch (logErr) {
+      console.warn(`[StudentContestSyncService] ContestSyncLog telemetry update skipped:`, logErr.message);
     }
 
     const overallSyncStatus = blockedCount > 0 ? 'PARTIAL_SYNC' : 'COMPLETED';

@@ -26,31 +26,41 @@ const LeetCodeContestAttendanceController = {
     const slug = contestSlug.trim().toLowerCase();
 
     try {
-      const dbStart = performance.now();
+      const jobQueue = require('../services/jobQueueService');
       const StudentContestSyncService = require('../services/StudentContestSyncService');
-      const dbMs = Math.round(performance.now() - dbStart);
 
-      console.log(`[LeetCode Sync Telemetry] Starting sync for "${slug}" using provider "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"...`);
+      console.log(`[LeetCode Sync Telemetry] Enqueuing background sync job for "${slug}" using provider "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"...`);
 
-      const syncStart = performance.now();
-      const result = await StudentContestSyncService.syncContestAttendance({
-        contestSlug: slug,
-        providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
-        actor: req.user?.username || 'ADMIN_API'
-      });
-      const syncMs = Math.round(performance.now() - syncStart);
+      const jobId = jobQueue.enqueue(
+        jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
+        { contestSlug: slug, providerType, actor: req.user?.username || 'ADMIN_API' },
+        async (job, updateProgress) => {
+          updateProgress(10, `Initiating background sync for contest '${slug}'...`);
+          const result = await StudentContestSyncService.syncContestAttendance({
+            contestSlug: slug,
+            providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
+            actor: req.user?.username || 'ADMIN_API',
+            onProgress: (pct, msg) => updateProgress(pct, msg)
+          });
+          return result;
+        }
+      );
 
       const totalMs = Math.round(performance.now() - reqStart);
-      console.log(`[LeetCode Sync Telemetry] Request Started -> Authentication (${authMs} ms) -> Database (${dbMs} ms) -> LeetCode GraphQL & Attendance (${syncMs} ms) -> Response Sent (${totalMs} ms) [reqId="${requestId}"]`);
+      console.log(`[LeetCode Sync Telemetry] Request Started -> Authentication (${authMs} ms) -> Job Enqueued (${totalMs} ms) -> Response Sent (${totalMs} ms) [jobId="${jobId}", reqId="${requestId}"]`);
 
       return res.json({
         success: true,
-        message: `Successfully synchronized attendance for contest '${slug}' using provider ${result.provider}!`,
-        data: result,
+        message: `Successfully enqueued attendance synchronization job for contest '${slug}'!`,
+        jobId,
+        data: {
+          jobId,
+          status: 'RUNNING',
+          contestSlug: slug,
+          provider: providerType || process.env.SYNC_PROVIDER || 'HYBRID'
+        },
         telemetry: {
           authMs,
-          dbMs,
-          syncMs,
           totalMs
         }
       });
