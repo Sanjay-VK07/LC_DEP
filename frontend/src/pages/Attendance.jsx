@@ -42,6 +42,9 @@ function Attendance() {
   const [lcRecords, setLcRecords] = useState([]);
   const [loadingLcStats, setLoadingLcStats] = useState(false);
   const [syncingLcContest, setSyncingLcContest] = useState(false);
+  const [lcSyncJobId, setLcSyncJobId] = useState(null);
+  const [lcSyncProgress, setLcSyncProgress] = useState(0);
+  const [lcSyncMessage, setLcSyncMessage] = useState('');
   const [lcDeptFilter, setLcDeptFilter] = useState('');
   const [lcBatchFilter, setLcBatchFilter] = useState('');
   const [lcSectionFilter, setLcSectionFilter] = useState('');
@@ -434,6 +437,8 @@ function Attendance() {
   const handleSyncLcContest = async () => {
     if (!lcContestSlug.trim()) return;
     setSyncingLcContest(true);
+    setLcSyncProgress(5);
+    setLcSyncMessage('Enqueuing sync job...');
     setError('');
     setSuccess('');
     try {
@@ -442,20 +447,58 @@ function Attendance() {
       });
       if (res.data.success) {
         const jobId = res.data.jobId;
-        setSuccess(`Attendance sync running in background${jobId ? ` (Job ${jobId})` : ''}. Stats will update shortly.`);
-        setTimeout(() => fetchLcContestStats(), 4000);
+        setLcSyncJobId(jobId);
+        setLcSyncProgress(10);
+        setLcSyncMessage('Sync job started — scraping LeetCode rankings...');
+        setSuccess(`Attendance sync running in background${jobId ? ` (Job ${jobId})` : ''}. Polling for completion...`);
+
+        // Poll GET /api/jobs/:id every 3 seconds until COMPLETED or FAILED
+        const poll = setInterval(async () => {
+          try {
+            const jobRes = await axios.get(`${API_URL}/jobs/${jobId}`);
+            const job = jobRes.data.data;
+            if (job) {
+              setLcSyncProgress(job.progress || 10);
+              setLcSyncMessage(job.message || 'Processing...');
+              if (job.status === 'COMPLETED') {
+                clearInterval(poll);
+                setSyncingLcContest(false);
+                setLcSyncJobId(null);
+                setLcSyncProgress(100);
+                setLcSyncMessage('');
+                setSuccess(`Attendance sync completed! Refreshing stats...`);
+                fetchLcContestStats();
+                setTimeout(() => { setLcSyncProgress(0); setSuccess(''); }, 5000);
+              } else if (job.status === 'FAILED') {
+                clearInterval(poll);
+                setSyncingLcContest(false);
+                setLcSyncJobId(null);
+                setLcSyncProgress(0);
+                setLcSyncMessage('');
+                setError(`Sync failed: ${job.error || 'Unknown error — check backend logs.'}`);
+              }
+            }
+          } catch (pollErr) {
+            // Ignore transient polling errors (network blips)
+            console.warn('[LC Sync Poll] Transient error:', pollErr.message);
+          }
+        }, 3000);
       } else {
+        setSyncingLcContest(false);
+        setLcSyncProgress(0);
+        setLcSyncMessage('');
         setError(res.data.message || res.data.error || 'Sync failed — check backend logs.');
       }
     } catch (err) {
+      setSyncingLcContest(false);
+      setLcSyncProgress(0);
+      setLcSyncMessage('');
       const data = err.response?.data;
       if (data && data.stage && data.error) {
         setError(`[${data.stage} Error] ${data.error}`);
       } else {
         setError(data?.message || 'Failed to sync LeetCode contest rankings.');
       }
-    } finally {
-      setSyncingLcContest(false);
     }
   };
 
@@ -1365,6 +1408,28 @@ function Attendance() {
               </button>
             </div>
           </div>
+
+          {/* Live Sync Progress Bar — visible only while job is running */}
+          {syncingLcContest && lcSyncProgress > 0 && (
+            <div className="rounded-2xl border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50 dark:bg-indigo-950/30 p-4 flex flex-col gap-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                <span className="flex items-center gap-1.5">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  {lcSyncMessage || 'Syncing...'}
+                </span>
+                <span>{lcSyncProgress}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-indigo-200 dark:bg-indigo-900 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                  style={{ width: `${lcSyncProgress}%` }}
+                />
+              </div>
+              {lcSyncJobId && (
+                <span className="text-[10px] text-indigo-400 dark:text-indigo-500">Job ID: {lcSyncJobId}</span>
+              )}
+            </div>
+          )}
 
           {/* Sync Telemetry Alert Messages */}
           {error && (
