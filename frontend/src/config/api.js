@@ -28,12 +28,12 @@ export const API_URL = getNormalizedApiUrl();
 
 // Configure Axios default baseURL
 axios.defaults.baseURL = API_URL;
-axios.defaults.timeout = 30000; // 30 second timeout for cold starts
+axios.defaults.timeout = 90000; // 30 second timeout for cold starts
 
 // Centralized Axios instance
 export const apiClient = axios.create({
   baseURL: API_URL,
-  timeout: 30000,
+  timeout: 90000,
 });
 
 // Response interceptor for clear Network Error diagnostics
