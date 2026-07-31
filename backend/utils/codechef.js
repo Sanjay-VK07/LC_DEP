@@ -276,7 +276,7 @@ async function verifyCodeChefUsername(username) {
 
   // 2. Scraping fallback from codechef.com/users/<username>
   try {
-    const response = await fetchUrl(`https://www.codechef.com/users/${encodeURIComponent(trimmedUsername)}`);
+    const response = await fetchUrl(`https://www.codechef.com/users/${encodeURIComponent(trimmedUsername)}`, { timeout: 30000 });
     if (response.statusCode === 200 && !response.redirectedToHome) {
       const parsed = parseCodeChefHtml(response.data);
       if (isCodeChefProfilePage(response.data, trimmedUsername)) {
@@ -291,10 +291,16 @@ async function verifyCodeChefUsername(username) {
       return { exists: false, error: 'CodeChef username not found' };
     } else if (response.statusCode === 404 || response.redirectedToHome) {
       return { exists: false, error: 'CodeChef username not found' };
+    } else if (response.statusCode === 429 || response.statusCode === 403) {
+      const err = new Error(`CodeChef returned HTTP status ${response.statusCode}`);
+      err.status = response.statusCode;
+      err.headers = response.headers;
+      throw err;
     } else {
       return { exists: false, error: `CodeChef returned HTTP status ${response.statusCode}` };
     }
   } catch (err) {
+    if (err.status === 429 || err.status === 403) throw err;
     return { exists: false, error: `Network error connecting to CodeChef: ${err.message}` };
   }
 }
@@ -319,7 +325,7 @@ async function getUserCodeChefStats(username) {
   try {
     const response = await fetchUrl(
       `https://www.codechef.com/users/${encodeURIComponent(trimmedUsername)}`,
-      { timeout: 15000 }
+      { timeout: 30000 }
     );
 
     console.log(`[CodeChef Stats] Profile page status for ${trimmedUsername}: HTTP ${response.statusCode}`);
@@ -327,6 +333,13 @@ async function getUserCodeChefStats(username) {
     if (response.statusCode === 404 || response.redirectedToHome) {
       console.log(`[CodeChef Scraper] ERROR: Invalid username / profile not found on CodeChef: ${trimmedUsername}`);
       return { success: false, error: 'CodeChef username not found' };
+    }
+
+    if (response.statusCode === 429 || response.statusCode === 403) {
+      const err = new Error(`CodeChef rate limit or Cloudflare block (HTTP ${response.statusCode})`);
+      err.status = response.statusCode;
+      err.headers = response.headers;
+      throw err;
     }
 
     if (response.statusCode === 200) {
@@ -384,14 +397,12 @@ async function getUserCodeChefStats(username) {
         unrated: rating === null
       };
 
-    } else if (response.statusCode === 403) {
-      console.error(`[CodeChef Scraper] ERROR: Cloudflare/Rate limit (HTTP 403) for ${trimmedUsername}`);
-      return { success: false, error: 'CodeChef rate limit or Cloudflare block (HTTP 403)' };
     } else {
       console.error(`[CodeChef Scraper] ERROR: Unexpected HTTP status ${response.statusCode} for ${trimmedUsername}`);
       return { success: false, error: `CodeChef returned HTTP status ${response.statusCode}` };
     }
   } catch (primaryErr) {
+    if (primaryErr.status === 429 || primaryErr.status === 403) throw primaryErr;
     console.warn(`[CodeChef Stats] Primary scrape failed for ${trimmedUsername}: ${primaryErr.message}. Trying Vercel fallback...`);
   }
 

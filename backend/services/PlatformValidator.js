@@ -1,6 +1,9 @@
 /**
  * Lightweight Orchestration Service for Multi-Platform Verification
+ * Refactored Enterprise Edition: Adaptive Token-Bucket Rate Limiting, Circuit Breakers,
+ * Stale-While-Revalidate Caching, Correlation Tracing, and Batch Chunking.
  */
+
 const platformRegistry = require('./PlatformRegistry');
 const VerificationRepository = require('../repositories/VerificationRepository');
 const { getAdapter } = require('./adapters/AdapterFactory');
@@ -9,9 +12,15 @@ const {
   ENABLE_CACHE,
   VALIDATION_POLICY,
   VERIFICATION_CACHE_DAYS,
-  MAX_RETRIES,
-  RETRY_DELAY_MS
+  VALIDATION_BATCH_SIZE,
+  BATCH_DELAY_MS,
+  MAX_RETRIES
 } = require('../config/verificationConfig');
+
+const { platformScheduler } = require('../utils/platformScheduler');
+const { verificationCache } = require('../utils/cacheModule');
+const { executeWithRetry } = require('../utils/retryModule');
+const { circuitBreaker } = require('../utils/circuitBreaker');
 const { logEvent } = require('../utils/verificationLogger');
 
 class PlatformValidator {
@@ -32,16 +41,21 @@ class PlatformValidator {
   }
 
   getMetrics() {
-    const totalLookups = this.metrics.cacheHits + this.metrics.cacheMisses;
-    const cacheHitRate = totalLookups > 0 ? parseFloat(((this.metrics.cacheHits / totalLookups) * 100).toFixed(2)) : 0.00;
+    const schedulerMetrics = platformScheduler.getOperationalMetrics();
+    const cacheStats = verificationCache.getStats();
+
+    const cacheHitRate = cacheStats.hitRate;
     const avgVerificationTimeMs = this.metrics.totalVerifications > 0
       ? Math.round(this.metrics.totalDurationMs / this.metrics.totalVerifications)
       : 0;
 
     return {
       ...this.metrics,
+      cacheHits: this.metrics.cacheHits,
+      cacheMisses: this.metrics.cacheMisses,
       cacheHitRate,
-      avgVerificationTimeMs
+      avgVerificationTimeMs,
+      scheduler: schedulerMetrics
     };
   }
 
@@ -84,7 +98,7 @@ class PlatformValidator {
     if (!normalized) return null;
 
     try {
-      // 1. Check HandleVerifications table
+      // 1. Check HandleVerifications table directly for expiry verification
       const record = await VerificationRepository.findByPlatformAndUsername(p, normalized);
       if (record) {
         const isVerified = record.verification_status === 'VERIFIED';
@@ -105,11 +119,19 @@ class PlatformValidator {
         } else if (isExpired) {
           logEvent('cache_expired', { platform: p, username: original, status: 'EXPIRED' });
           await VerificationRepository.invalidateCache(p, normalized);
+          await verificationCache.invalidate(p, original);
           return null; // Triggers fresh verification
         }
       }
 
-      // 2. Backward compatibility fallback: Check Users table
+      // 2. Memory cache check
+      const cacheRes = await verificationCache.get(p, original);
+      if (cacheRes && cacheRes.hit && !cacheRes.isStale) {
+        logEvent('cache_hit', { platform: p, username: original, status: 'VERIFIED' });
+        return { ...cacheRes.data, source: 'CACHE' };
+      }
+
+      // 3. DB Users table fallback
       const db = require('../config/db');
       if (p === 'leetcode') {
         const users = await db.query(
@@ -156,13 +178,15 @@ class PlatformValidator {
    */
   async verifySingleUsername(platform, username, options = {}) {
     const startTime = Date.now();
-    const { retries = MAX_RETRIES, delayMs = RETRY_DELAY_MS, skipCache = false, jobId = null, userId = null } = options;
+    const { retries = MAX_RETRIES, skipCache = false, jobId = null, userId = null, staleWhileRevalidate = false } = options;
     const p = (platform || 'leetcode').toLowerCase().trim();
+    const verificationId = options.verificationId || `verif-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     // Policy DISABLED check
     if (VALIDATION_POLICY === 'DISABLED' || !ENABLE_PLATFORM_VALIDATION) {
       const { original } = PlatformValidator.normalizeUsername(p, username);
       return {
+        verificationId,
         verified: true,
         status: 'UNVERIFIED',
         username: original,
@@ -173,211 +197,272 @@ class PlatformValidator {
 
     const formatRes = PlatformValidator.validateFormat(p, username);
     if (!formatRes.valid) {
-      return { verified: false, status: 'INVALID', username: username || '', reason: formatRes.reason };
+      return { verificationId, verified: false, status: 'INVALID', username: username || '', reason: formatRes.reason };
     }
 
     const { original, normalized } = PlatformValidator.normalizeUsername(p, formatRes.username);
 
-    // 1. Cache Check
+    // 1. Cache Check (with Stale-While-Revalidate if requested)
     if (!skipCache) {
-      const cached = await PlatformValidator.checkLocalCache(p, original);
-      if (cached) {
+      const cachedRes = await verificationCache.get(p, original, { allowStale: staleWhileRevalidate });
+      if (cachedRes && cachedRes.hit) {
         this.metrics.cacheHits++;
         this.metrics.totalVerifications++;
         this.metrics.totalDurationMs += (Date.now() - startTime);
-        return cached;
+
+        const responseData = { verificationId, ...cachedRes.data, source: 'CACHE' };
+
+        if (cachedRes.isStale && staleWhileRevalidate) {
+          logEvent('stale_while_revalidate_triggered', { verificationId, platform: p, username: original });
+          setImmediate(() => {
+            this.verifySingleUsername(p, original, { ...options, skipCache: true }).catch(err => {
+              console.warn(`[PlatformValidator] Background revalidation failed for ${p}:${original}:`, err.message);
+            });
+          });
+        }
+
+        return responseData;
       }
       this.metrics.cacheMisses++;
     }
 
-    // 2. Network verification via Adapter
-    let lastError = null;
+    // 2. Schedule Request through PlatformScheduler & Execute with Retry
     this.metrics.apiRequests++;
+    logEvent('verification_started', { verificationId, jobId, platform: p, username: original });
 
-    logEvent('verification_started', { jobId, platform: p, username: original });
+    try {
+      const result = await platformScheduler.schedule(
+        p,
+        original,
+        async () => {
+          return executeWithRetry(
+            async (attempt) => {
+              if (attempt > 1) this.metrics.totalRetries++;
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt > 0) this.metrics.totalRetries++;
+              const spec = platformRegistry.get(p);
+              const adapterName = spec ? spec.adapterName : p;
+              const adapter = getAdapter(adapterName);
+              const profile = await adapter.getProfile(original);
 
-      try {
-        const spec = platformRegistry.get(p);
-        const adapterName = spec ? spec.adapterName : p;
-        const adapter = getAdapter(adapterName);
-        const profile = await adapter.getProfile(original);
+              if (profile && profile.verified) {
+                const verifiedAt = new Date();
+                const verificationExpiry = new Date(Date.now() + (VERIFICATION_CACHE_DAYS * 24 * 60 * 60 * 1000));
+                const verifiedUsername = profile.username || original;
 
-        if (profile && profile.verified) {
-          const verifiedAt = new Date();
-          const verificationExpiry = new Date(Date.now() + (VERIFICATION_CACHE_DAYS * 24 * 60 * 60 * 1000));
-          const verifiedUsername = profile.username || original;
+                const record = {
+                  userId,
+                  platform: p,
+                  usernameOriginal: verifiedUsername,
+                  usernameNormalized: normalized,
+                  verificationStatus: 'VERIFIED',
+                  verificationSource: 'API',
+                  verifiedAt,
+                  verificationExpiry,
+                  lastError: null
+                };
 
-          const record = {
-            userId,
-            platform: p,
-            usernameOriginal: verifiedUsername,
-            usernameNormalized: normalized,
-            verificationStatus: 'VERIFIED',
-            verificationSource: 'API',
-            verifiedAt,
-            verificationExpiry,
-            lastError: null
-          };
+                await VerificationRepository.upsertVerification(record);
 
-          await VerificationRepository.upsertVerification(record);
+                const data = {
+                  verificationId,
+                  verified: true,
+                  status: 'VERIFIED',
+                  username: verifiedUsername,
+                  usernameNormalized: normalized,
+                  source: 'API',
+                  rating: profile.rating || null,
+                  verifiedAt,
+                  verificationExpiry,
+                  reason: ''
+                };
 
-          logEvent('verification_completed', { jobId, platform: p, username: verifiedUsername, status: 'VERIFIED', duration: Date.now() - startTime });
-          this.metrics.totalVerifications++;
-          this.metrics.totalDurationMs += (Date.now() - startTime);
+                // Populate Cache
+                await verificationCache.set(p, original, data);
+                return data;
+              } else {
+                // Explicit platform rejection
+                const msg = profile?.message || '';
+                let reason = 'Account does not exist';
+                if (msg.includes('Cloudflare') || msg.includes('cloudflare')) {
+                  reason = 'Cloudflare blocked';
+                } else if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('too many requests')) {
+                  reason = 'Rate limited';
+                } else if (msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('timed out')) {
+                  reason = 'Verification timeout';
+                }
 
-          return {
-            verified: true,
-            status: 'VERIFIED',
-            username: verifiedUsername,
-            usernameNormalized: normalized,
-            source: 'API',
-            rating: profile.rating || null,
-            verifiedAt,
-            verificationExpiry,
-            reason: ''
-          };
-        } else {
-          // Explicit platform rejection
-          const msg = profile?.message || '';
-          let reason = 'Account does not exist';
-          if (msg.includes('Cloudflare') || msg.includes('cloudflare')) {
-            reason = 'Cloudflare blocked';
-          } else if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('too many requests')) {
-            reason = 'Rate limited';
-          } else if (msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('timed out')) {
-            reason = 'Verification timeout';
-          }
+                const isSoft = VALIDATION_POLICY === 'SOFT';
+                const status = isSoft ? 'PENDING' : 'INVALID';
 
-          const isSoft = VALIDATION_POLICY === 'SOFT';
-          const status = isSoft ? 'PENDING' : 'INVALID';
+                await VerificationRepository.upsertVerification({
+                  userId,
+                  platform: p,
+                  usernameOriginal: original,
+                  usernameNormalized: normalized,
+                  verificationStatus: status,
+                  verificationSource: 'API',
+                  verifiedAt: null,
+                  verificationExpiry: null,
+                  lastError: reason
+                });
 
-          await VerificationRepository.upsertVerification({
-            userId,
-            platform: p,
-            usernameOriginal: original,
-            usernameNormalized: normalized,
-            verificationStatus: status,
-            verificationSource: 'API',
-            verifiedAt: null,
-            verificationExpiry: null,
-            lastError: reason
-          });
+                const data = {
+                  verificationId,
+                  verified: isSoft,
+                  status,
+                  username: original,
+                  usernameNormalized: normalized,
+                  reason
+                };
 
-          this.metrics.apiFailures++;
-          logEvent('verification_completed', { jobId, platform: p, username: original, status, duration: Date.now() - startTime, meta: { reason } });
-          this.metrics.totalVerifications++;
-          this.metrics.totalDurationMs += (Date.now() - startTime);
+                if (!isSoft && reason === 'Account does not exist') {
+                  await verificationCache.set(p, original, data, 600000); // cache invalid user for 10 min
+                }
 
-          return {
-            verified: isSoft,
-            status,
-            username: original,
-            usernameNormalized: normalized,
-            reason
-          };
-        }
-      } catch (err) {
-        lastError = err;
-        const msg = err.message || '';
-        const isNotFound = msg.includes('not found') || msg.includes('404') || msg.includes('does not exist') || msg.includes('User not found');
+                return data;
+              }
+            },
+            {
+              maxRetries: retries,
+              onRetry: (err, attempt, delayMs) => {
+                logEvent('retry', { verificationId, jobId, platform: p, username: original, meta: { attempt, delayMs, error: err.message } });
+              }
+            }
+          );
+        },
+        { verificationId, retryCount: retries, jobId }
+      );
 
-        if (isNotFound) {
-          const isSoft = VALIDATION_POLICY === 'SOFT';
-          const status = isSoft ? 'PENDING' : 'INVALID';
+      this.metrics.totalVerifications++;
+      this.metrics.totalDurationMs += (Date.now() - startTime);
+      return { verificationId, ...result };
 
-          await VerificationRepository.upsertVerification({
-            userId,
-            platform: p,
-            usernameOriginal: original,
-            usernameNormalized: normalized,
-            verificationStatus: status,
-            verificationSource: 'API',
-            lastError: 'Account does not exist'
-          });
+    } catch (err) {
+      this.metrics.apiFailures++;
+      this.metrics.totalVerifications++;
+      this.metrics.totalDurationMs += (Date.now() - startTime);
 
-          this.metrics.apiFailures++;
-          this.metrics.totalVerifications++;
-          this.metrics.totalDurationMs += (Date.now() - startTime);
+      const msg = err.message || '';
+      const isNotFound = msg.includes('not found') || msg.includes('404') || msg.includes('does not exist');
+      const isCloudflare = err.name === 'CloudflareBlockedError' || err.isCloudflare || msg.toLowerCase().includes('cloudflare');
+      const isRateLimit = err.status === 429 || msg.includes('429') || msg.toLowerCase().includes('rate limit');
+      const isTimeout = err.code === 'ETIMEDOUT' || msg.toLowerCase().includes('timeout');
 
-          return { verified: isSoft, status, username: original, usernameNormalized: normalized, reason: 'Account does not exist' };
-        }
+      let reason = 'Unable to verify after retries';
+      if (isNotFound) reason = 'Account does not exist';
+      else if (isCloudflare) reason = 'Cloudflare blocked';
+      else if (isRateLimit) reason = 'Rate limited';
+      else if (isTimeout) reason = 'Verification timeout';
+      else if (err.code === 'QUEUE_FULL') reason = 'Verification queue capacity full';
 
-        if (attempt < retries) {
-          logEvent('retry', { jobId, platform: p, username: original, meta: { attempt, error: msg } });
-          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
-        }
-      }
+      const isSoft = VALIDATION_POLICY === 'SOFT';
+      const status = isNotFound ? (isSoft ? 'PENDING' : 'INVALID') : (isSoft ? 'PENDING' : 'TEMPORARILY_UNAVAILABLE');
+
+      await VerificationRepository.upsertVerification({
+        userId,
+        platform: p,
+        usernameOriginal: original,
+        usernameNormalized: normalized,
+        verificationStatus: status,
+        verificationSource: 'API',
+        lastError: reason
+      }).catch(() => {});
+
+      return {
+        verificationId,
+        verified: false,
+        status,
+        username: original,
+        usernameNormalized: normalized,
+        reason
+      };
     }
-
-    // All retries failed
-    const errMsg = lastError?.message || '';
-    const isCloudflare = lastError?.name === 'CloudflareBlockedError' || lastError?.isCloudflare || errMsg.toLowerCase().includes('cloudflare');
-    const isRateLimit = lastError?.status === 429 || errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
-    const isTimeout = lastError?.code === 'ETIMEDOUT' || errMsg.toLowerCase().includes('timeout');
-
-    let reason = 'Unable to verify after retries';
-    if (isCloudflare) reason = 'Cloudflare blocked';
-    else if (isRateLimit) reason = 'Rate limited';
-    else if (isTimeout) reason = 'Verification timeout';
-
-    const isSoft = VALIDATION_POLICY === 'SOFT';
-    const status = isSoft ? 'PENDING' : 'FAILED';
-
-    await VerificationRepository.upsertVerification({
-      userId,
-      platform: p,
-      usernameOriginal: original,
-      usernameNormalized: normalized,
-      verificationStatus: status,
-      verificationSource: 'API',
-      lastError: reason
-    });
-
-    this.metrics.apiFailures++;
-    this.metrics.totalVerifications++;
-    this.metrics.totalDurationMs += (Date.now() - startTime);
-
-    return { verified: isSoft, status, username: original, usernameNormalized: normalized, reason };
   }
 
   /**
-   * Batch validate usernames concurrently
+   * Batch validate handles with Chunking (20 per batch), Inter-Batch Delay, and Progress Reporting.
    */
   async validateBatch(platform, usernames = [], options = {}) {
-    const { concurrency = 20, retries = MAX_RETRIES, onProgress = null, skipCache = false, jobId = null } = options;
+    const {
+      batchSize = VALIDATION_BATCH_SIZE,
+      batchDelayMs = BATCH_DELAY_MS,
+      retries = MAX_RETRIES,
+      onProgress = null,
+      skipCache = false,
+      jobId = null
+    } = options;
+
     const results = new Map();
     const uniqueUsernames = Array.from(new Set(usernames.map(u => (u ? String(u).trim() : '')).filter(Boolean)));
 
     let completedCount = 0;
-    const queue = [...uniqueUsernames];
+    const totalCount = uniqueUsernames.length;
 
-    const runWorker = async () => {
-      while (queue.length > 0) {
-        const username = queue.shift();
-        if (!username) continue;
+    // Chunk input into batches of batchSize (e.g. 20)
+    for (let i = 0; i < totalCount; i += batchSize) {
+      const batch = uniqueUsernames.slice(i, i + batchSize);
 
+      // Submit tasks in current batch independently to PlatformScheduler
+      const batchPromises = batch.map(async (username) => {
         const res = await this.verifySingleUsername(platform, username, { retries, skipCache, jobId });
         const key = res.usernameNormalized || username.toLowerCase();
         results.set(key, res);
 
         completedCount++;
         if (typeof onProgress === 'function') {
-          onProgress(completedCount, uniqueUsernames.length);
+          onProgress(completedCount, totalCount);
         }
-      }
-    };
+      });
 
-    const workerCount = Math.min(concurrency, queue.length);
-    const workers = [];
-    for (let i = 0; i < workerCount; i++) {
-      workers.push(runWorker());
+      await Promise.all(batchPromises);
+
+      // Inter-batch delay
+      if (i + batchSize < totalCount && batchDelayMs > 0) {
+        await new Promise(r => setTimeout(r, batchDelayMs));
+      }
     }
 
-    await Promise.all(workers);
     return { results, metrics: this.getMetrics() };
+  }
+
+  /**
+   * Verify a student across multiple platforms with Graceful Degradation.
+   * If one platform fails, returns partial results with platform-specific errors.
+   */
+  async verifyStudentMultiPlatform(studentHandles = {}, options = {}) {
+    const platformResults = {};
+    const platformErrors = {};
+
+    const platforms = Object.keys(studentHandles);
+    const verificationPromises = platforms.map(async (platform) => {
+      const handle = studentHandles[platform];
+      if (!handle) return;
+
+      try {
+        const res = await this.verifySingleUsername(platform, handle, options);
+        platformResults[platform] = res;
+        if (!res.verified) {
+          platformErrors[platform] = res.reason || 'Verification failed';
+        }
+      } catch (err) {
+        platformErrors[platform] = err.message || 'Platform verification error';
+        platformResults[platform] = {
+          verified: false,
+          status: 'FAILED',
+          username: handle,
+          platform,
+          reason: platformErrors[platform]
+        };
+      }
+    });
+
+    await Promise.all(verificationPromises);
+
+    return {
+      success: Object.keys(platformErrors).length === 0,
+      platforms: platformResults,
+      errors: platformErrors
+    };
   }
 
   // ==========================================
@@ -394,7 +479,7 @@ class PlatformValidator {
 
   async invalidateCache(platform, username) {
     const { normalized } = PlatformValidator.normalizeUsername(platform, username);
-    return VerificationRepository.invalidateCache(platform, normalized);
+    return verificationCache.invalidate(platform, normalized);
   }
 
   async refreshCache(platform, username) {

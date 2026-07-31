@@ -1,10 +1,26 @@
 /**
  * Verification Controller - Phase 2 API Endpoints
- * (Architecture Stubs & Interfaces for REST verification endpoints)
  */
 const PlatformValidator = require('../services/PlatformValidator');
+const { platformScheduler } = require('../utils/platformScheduler');
 
 class VerificationController {
+  /**
+   * GET /api/verification/metrics
+   * Live Operational Metrics Dashboard endpoint
+   */
+  static async getOperationalMetrics(req, res) {
+    try {
+      const metrics = platformScheduler.getOperationalMetrics();
+      return res.json({
+        success: true,
+        data: metrics
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
   /**
    * GET /api/verification/:platform/:username
    * Query single verification status for a platform handle
@@ -19,7 +35,8 @@ class VerificationController {
         data: result
       });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      const status = err.status || 500;
+      return res.status(status).json({ success: false, message: err.message });
     }
   }
 

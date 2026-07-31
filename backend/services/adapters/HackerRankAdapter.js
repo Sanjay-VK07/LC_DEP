@@ -17,6 +17,9 @@ class HackerRankAdapter extends BaseAdapter {
         rawData
       };
     } catch (err) {
+      if (err.status === 429 || err.status === 403 || err.code === 'ETIMEDOUT' || err.code === 'NETWORK_TIMEOUT') {
+        throw err;
+      }
       const msg = err.message || '';
       if (msg.includes('not found') || msg.includes('404') || msg.includes('does not exist') || msg.includes('invalid') || msg.includes('unrecognized')) {
         return {

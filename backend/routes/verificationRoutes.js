@@ -10,9 +10,10 @@ const adminFacultyAuth = authorize(['Super Admin', 'HOD', 'Faculty']);
 
 // Route Specifications for Audit & Safe Registration
 const routeDefinitions = [
-  { method: 'get', path: '/:platform/:username', middlewares: [authenticate], handler: VerificationController.getVerificationStatus, handlerName: 'getVerificationStatus' },
+  { method: 'get', path: '/metrics', middlewares: [authenticate, adminFacultyAuth], handler: VerificationController.getOperationalMetrics, handlerName: 'getOperationalMetrics' },
+  { method: 'get', path: '/job/:jobId', middlewares: [authenticate], handler: VerificationController.getJobVerificationStatus, handlerName: 'getJobVerificationStatus' },
   { method: 'post', path: '/refresh', middlewares: [authenticate, adminFacultyAuth], handler: VerificationController.refreshVerification, handlerName: 'refreshVerification' },
-  { method: 'get', path: '/job/:jobId', middlewares: [authenticate], handler: VerificationController.getJobVerificationStatus, handlerName: 'getJobVerificationStatus' }
+  { method: 'get', path: '/:platform/:username', middlewares: [authenticate], handler: VerificationController.getVerificationStatus, handlerName: 'getVerificationStatus' }
 ];
 
 console.log('[Verification Routes Diagnostic]');
@@ -49,4 +50,3 @@ routeDefinitions.forEach(route => {
 });
 
 module.exports = router;
-
