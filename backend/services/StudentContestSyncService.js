@@ -12,7 +12,7 @@ class StudentContestSyncService {
    * @param {string} [options.actor] - Initiator of the sync job (default 'SYSTEM')
    * @returns {Promise<object>} - Telemetry & sync summary report
    */
-  static async syncContestAttendance({ contestSlug, providerType, csvRecords = [], actor = 'SYSTEM' }) {
+  static async syncContestAttendance({ contestSlug, providerType, csvRecords = [], actor = 'SYSTEM', onProgress = null }) {
     const startTime = Date.now();
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] ========== Student Contest Sync Start ==========`);
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contest Slug Received: "${contestSlug}"`);
@@ -88,7 +88,17 @@ class StudentContestSyncService {
 
     // 3. Obtain provider instance & resolve attendance records
     const provider = AttendanceProviderFactory.getProvider(providerType, { csvRecords });
-    const resolvedItems = await provider.resolveAttendance({ contestSlug, students });
+    const resolvedItems = await provider.resolveAttendance({
+      contestSlug,
+      students,
+      onProgress: typeof onProgress === 'function'
+        ? (completed, total) => {
+            // Map per-student scan progress into the 15-90% band, leaving room for setup/finalization.
+            const pct = total > 0 ? 15 + Math.round((completed / total) * 75) : 15;
+            onProgress(pct, `Scanned ${completed}/${total} students...`);
+          }
+        : null
+    });
 
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Provider Resolved Items Count: ${resolvedItems.length}`);
 

@@ -1,6 +1,8 @@
 const GraphQLAttendanceProvider = require('./GraphQLAttendanceProvider');
 const CsvAttendanceProvider = require('./CsvAttendanceProvider');
 const LegacyAttendanceProvider = require('./LegacyAttendanceProvider');
+const RankingPageAttendanceProvider = require('./RankingPageAttendanceProvider');
+const HybridAttendanceProvider = require('./HybridAttendanceProvider');
 
 class AttendanceProviderFactory {
   /**
@@ -20,10 +22,15 @@ class AttendanceProviderFactory {
         return new CsvAttendanceProvider(options.csvRecords || []);
       case 'LEGACY':
         return new LegacyAttendanceProvider();
+      case 'RANKING_PAGE':
+        return new RankingPageAttendanceProvider();
       case 'HYBRID':
       default:
-        // HYBRID defaults to GraphQL as primary provider
-        return new GraphQLAttendanceProvider();
+        // HYBRID defaults to the live ranking-page leaderboard, since it reflects
+        // real contest results immediately. GraphQL's userContestRankingHistory
+        // field can lag a day or more behind, so it's used only as a fallback
+        // (see HybridAttendanceProvider).
+        return new HybridAttendanceProvider();
     }
   }
 }

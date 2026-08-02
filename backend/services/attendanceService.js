@@ -1366,13 +1366,19 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
 
   // 1. Fetch platform contests
   const contests = await db.query(
-    `SELECT contest_id, title as contest_name, slug as contest_slug, start_time as contest_date, contest_status, contest_type, duration, total_problems 
-     FROM Contests 
+    `SELECT contest_id, title as contest_name, slug as contest_slug, start_time as contest_date, contest_status, contest_type, duration, total_problems
+     FROM Contests
      WHERE platform = ?
        AND slug NOT LIKE 'upcoming-live-%'
        AND slug NOT LIKE 'starting-%'
        AND slug NOT LIKE 'temporary-%'
        AND slug NOT LIKE 'placeholder-%'
+       AND slug NOT LIKE 'test-%'
+       AND slug NOT LIKE 'mock-%'
+       AND slug NOT LIKE 'dummy-%'
+       AND slug NOT LIKE 'crashed-contest-%'
+       AND slug NOT LIKE 'retry-contest-%'
+       AND slug NOT LIKE 'stale-contest-%'
      ORDER BY start_time DESC`,
     [dbPlatform]
   );

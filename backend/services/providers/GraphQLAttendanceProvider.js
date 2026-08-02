@@ -44,7 +44,7 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
    * @param {Array<object>} options.students - Active student records
    * @returns {Promise<Array<object>>}
    */
-  async resolveAttendance({ contestSlug, students = [] }) {
+  async resolveAttendance({ contestSlug, students = [], onProgress = null }) {
     const targetSlug = slugifyTitle(contestSlug);
     console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] ========== Resolve Attendance Start ==========`);
     console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Target Contest Slug Received: "${contestSlug}"`);
@@ -59,11 +59,22 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
     const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 50;
 
     let index = 0;
+    let completed = 0;
+    const total = students.length;
+
+    const reportProgress = () => {
+      completed++;
+      if (typeof onProgress === 'function' && total > 0) {
+        onProgress(completed, total);
+      }
+    };
 
     const worker = async () => {
       while (index < students.length) {
         const student = students[index++];
         if (!student) continue;
+
+        try {
 
         const rawHandle = student.leetcode_username || student.username;
         const normHandle = normalizeUsername(rawHandle);
@@ -189,6 +200,10 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
             provider: 'GRAPHQL',
             error: err.message
           });
+        }
+
+        } finally {
+          reportProgress();
         }
       }
     };

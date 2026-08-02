@@ -35,13 +35,14 @@ const LeetCodeContestAttendanceController = {
         jobQueue.JOB_TYPE.CONTEST_ATTENDANCE_SYNC,
         { contestSlug: slug, providerType, actor: req.user?.username || 'ADMIN_API' },
         async (job, updateProgress) => {
-          updateProgress(10, `Initiating background sync for contest '${slug}'...`);
+          updateProgress(5, `Fetching active student roster for '${slug}'...`);
           const result = await StudentContestSyncService.syncContestAttendance({
             contestSlug: slug,
             providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
             actor: req.user?.username || 'ADMIN_API',
             onProgress: (pct, msg) => updateProgress(pct, msg)
           });
+          updateProgress(95, 'Saving attendance records to database...');
           return result;
         }
       );
@@ -283,7 +284,7 @@ const LeetCodeContestAttendanceController = {
           cacheStatus,
           retryCount: syncLog ? syncLog.retry_count : 0,
           cacheSize,
-          attendanceFinalized: contest ? contest.status === 'Completed' : false,
+          attendanceFinalized: contest ? (contest.status === 'Completed' && !!contest.lastSyncAt) : false,
           attendancePercentage
         },
         records: records || [],

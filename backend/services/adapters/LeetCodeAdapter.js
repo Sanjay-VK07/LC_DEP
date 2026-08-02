@@ -83,47 +83,30 @@ class LeetCodeAdapter extends BaseAdapter {
     }
 
     // ------------------------------------------------------------------
-    // 1. Primary: Use StudentContestSyncService (GraphQL / Provider Abstraction)
-    // ------------------------------------------------------------------
-    try {
-      const StudentContestSyncService = require('../StudentContestSyncService');
-      const syncReport = await StudentContestSyncService.syncContestAttendance({ contestSlug: slug });
-      
-      if (syncReport && syncReport.success) {
-        const targetContestId = syncReport.liveContestId || syncReport.contestId;
-        let rows = await db.query(
-          "SELECT username, `rank`, score, solved as problemsSolved FROM ContestAttendance WHERE contestId = ? AND attendanceStatus = 'Present'",
-          [targetContestId]
-        );
-        if (rows.length === 0 && syncReport.contestId && syncReport.contestId !== targetContestId) {
-          rows = await db.query(
-            "SELECT username, `rank`, score, solved as problemsSolved FROM ContestAttendance WHERE contestId = ? AND attendanceStatus = 'Present'",
-            [syncReport.contestId]
-          );
-        }
-        const participants = rows.map(r => ({
-          username: normalizeUsername(r.username),
-          rank: r.rank,
-          score: r.score ? parseFloat(r.score) : 0.00,
-          problemsSolved: r.problemsSolved || 0,
-          finishTime: 0
-        }));
-        const elapsed = Date.now() - startTime;
-        console.log(`[LeetCodeAdapter] Contest "${slug}" synced via StudentContestSyncService (${participants.length} present participants) in ${elapsed}ms.`);
-        return participants;
-      }
-    } catch (err) {
-      console.warn(`[LeetCodeAdapter] StudentContestSyncService failed for "${slug}":`, err.message);
-    }
-
-    // ------------------------------------------------------------------
-    // 2. Check ContestParticipants cache fallback
+    // 1. Check ContestParticipants cache first (fast path if fresh)
     // ------------------------------------------------------------------
     const cacheResult = await this._checkCache(slug);
     if (cacheResult.usable) {
       const elapsed = Date.now() - startTime;
       console.log(`[LeetCodeAdapter] Contest "${slug}" resolved from cache (${cacheResult.count} participants) in ${elapsed}ms.`);
       return cacheResult.participants;
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Primary: scrape the live LeetCode ranking-page leaderboard directly.
+    // This reflects real contest results immediately (unlike the GraphQL
+    // userContestRankingHistory field, which can lag a day or more behind).
+    // ------------------------------------------------------------------
+    try {
+      const { participants } = await this._fetchFullLeaderboard(slug);
+      if (participants.length > 0) {
+        await this._updateCache(slug, participants);
+        const elapsed = Date.now() - startTime;
+        console.log(`[LeetCodeAdapter] Contest "${slug}" resolved via live ranking-page scrape (${participants.length} participants) in ${elapsed}ms.`);
+        return participants;
+      }
+    } catch (err) {
+      console.warn(`[LeetCodeAdapter] Live leaderboard scrape failed for "${slug}":`, err.message);
     }
 
     // ------------------------------------------------------------------
