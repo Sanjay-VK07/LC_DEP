@@ -42,9 +42,8 @@ class ContestService {
         c.start_time as date,
         c.duration,
         c.contest_status as status,
-        c.sync_source,
-        c.sync_status,
-        c.url,
+        IFNULL(c.source, 'MANUAL') as sync_source,
+        IFNULL(c.last_synced_at, 'SYNCHRONIZED') as sync_status,
         (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) as registration_count,
         (SELECT COUNT(*) FROM AttendanceRecords ar WHERE ar.contest_id = c.contest_id AND ar.attendance_status = 'present') as attendance_count
       FROM Contests c
@@ -74,9 +73,10 @@ class ContestService {
     const totalResult = await db.query(countQuery, params);
     const total = totalResult[0]?.total || 0;
 
-    const offset = (Math.max(1, parseInt(page)) - 1) * parseInt(limit);
-    query += ` LIMIT ? OFFSET ?`;
-    params.push(parseInt(limit), offset);
+    const safeLimit = Math.max(1, parseInt(limit) || 10);
+    const safeOffset = Math.max(0, (Math.max(1, parseInt(page) || 1) - 1) * safeLimit);
+
+    query += ` LIMIT ${safeLimit} OFFSET ${safeOffset}`;
 
     const contests = await db.query(query, params);
 
@@ -84,9 +84,9 @@ class ContestService {
       contests,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit)
+        page: parseInt(page) || 1,
+        limit: safeLimit,
+        totalPages: Math.ceil(total / safeLimit)
       }
     };
   }
