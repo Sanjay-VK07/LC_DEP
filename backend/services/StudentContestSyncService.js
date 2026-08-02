@@ -14,12 +14,16 @@ class StudentContestSyncService {
    */
   static async syncContestAttendance({ contestSlug, providerType, csvRecords = [], actor = 'SYSTEM' }) {
     const startTime = Date.now();
-    console.log(`[StudentContestSyncService] Initiating sync for contest "${contestSlug}" using provider "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"...`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] ========== Student Contest Sync Start ==========`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contest Slug Received: "${contestSlug}"`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Provider: "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"`);
 
     // 1. Fetch active students from database
     const students = await db.query(
       "SELECT id, name, roll_no, leetcode_username, academic_batch, status FROM Users WHERE status = 'active'"
     );
+
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Active Students Count: ${students?.length || 0}`);
 
     if (!students || students.length === 0) {
       console.warn('[StudentContestSyncService] No active students found in database.');
@@ -68,9 +72,15 @@ class StudentContestSyncService {
       liveContestId = liveRes.insertId;
     }
 
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Resolved Target Title: "${contestTitle}"`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contests.contest_id: ${realContestId}`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] LiveContests.id: ${liveContestId}`);
+
     // 3. Obtain provider instance & resolve attendance records
     const provider = AttendanceProviderFactory.getProvider(providerType, { csvRecords });
     const resolvedItems = await provider.resolveAttendance({ contestSlug, students });
+
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Provider Resolved Items Count: ${resolvedItems.length}`);
 
     // 4. Fetch existing database attendance records to enforce Downgrade Protection Guard
     const existingCaRows = await db.query(
@@ -118,6 +128,10 @@ class StudentContestSyncService {
         finalStatus
       });
     }
+
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Filtered Present Count: ${presentCount}`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Filtered Absent Count: ${absentCount}`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Filtered Blocked Count: ${blockedCount}`);
 
     // 6. Execute atomic database upserts in progressive batches of 50 with automatic deadlock retry
     const pool = db.getPool();
@@ -197,6 +211,24 @@ class StudentContestSyncService {
               ]
             );
 
+            // Upsert into ContestParticipants if Present
+            if (finalStatus === 'PRESENT' && normHandle) {
+              await conn.query(
+                `INSERT INTO ContestParticipants (
+                  contest_slug, username, \`rank\`, score, problems_solved, finish_time, page_number, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, NOW())
+                ON DUPLICATE KEY UPDATE
+                  \`rank\` = VALUES(\`rank\`),
+                  score = VALUES(score),
+                  problems_solved = VALUES(problems_solved),
+                  finish_time = VALUES(finish_time),
+                  updated_at = NOW()`,
+                [
+                  contestSlug, normHandle, item.rank || 0, item.score || 0.00, item.problemsSolved || 0, item.finishTime || 0
+                ]
+              ).catch(() => {}); // Non-fatal if ContestParticipants table schema differs
+            }
+
             // Update LeetCodeProfiles if rating/stats available
             if (item.rating) {
               await conn.query(
@@ -231,7 +263,7 @@ class StudentContestSyncService {
       }
     }
 
-    // Record persistent telemetry in ContestSyncLog & LiveContests
+    // Record persistent telemetry in ContestSyncLog, ContestSnapshots, LiveContests & AuditLog
     try {
       await db.query(
         `UPDATE LiveContests SET totalParticipants = ?, lastSyncAt = NOW(), status = 'Completed' WHERE id = ?`,
@@ -239,10 +271,24 @@ class StudentContestSyncService {
       );
 
       await db.query(
-        `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count, syncStarted)
-         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0, FROM_UNIXTIME(? / 1000))`,
-        [liveContestId, startTime, processedItems.length, blockedCount, startTime]
-      );
+        `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count, syncStarted, participantsFetched, pagesFetched)
+         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0, FROM_UNIXTIME(? / 1000), ?, 1)`,
+        [liveContestId, startTime, processedItems.length, blockedCount, startTime, presentCount]
+      ).catch(() => {
+        // Fallback for variation in ContestSyncLog column names
+        return db.query(
+          `INSERT INTO ContestSyncLog (contestId, syncStarted, syncCompleted, pagesFetched, participantsFetched)
+           VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), 1, ?)`,
+          [liveContestId, startTime, presentCount]
+        );
+      });
+
+      const attPct = students.length > 0 ? Number(((presentCount / students.length) * 100).toFixed(2)) : 0.00;
+      await db.query(
+        `INSERT INTO ContestSnapshots (contestId, participants, attendancePercentage, snapshotTime)
+         VALUES (?, ?, ?, NOW())`,
+        [liveContestId, presentCount, attPct]
+      ).catch(() => {});
 
       await db.query(
         `INSERT INTO AuditLog (action, actor, target_type, target_id, details, severity, result, duration_ms, source_platform)
@@ -257,10 +303,13 @@ class StudentContestSyncService {
         ]
       );
     } catch (logErr) {
-      console.warn(`[StudentContestSyncService] ContestSyncLog telemetry update skipped:`, logErr.message);
+      console.warn(`[StudentContestSyncService] Telemetry update skipped:`, logErr.message);
     }
 
     const overallSyncStatus = blockedCount > 0 ? 'PARTIAL_SYNC' : 'COMPLETED';
+
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] ========== Student Contest Sync Complete ==========`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Processed: ${students.length}, Present: ${presentCount}, Absent: ${absentCount}, LiveContestId: ${liveContestId}, RealContestId: ${realContestId}`);
 
     return {
       success: true,

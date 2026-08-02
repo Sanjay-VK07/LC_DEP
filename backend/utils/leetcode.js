@@ -554,6 +554,7 @@ async function getUserContestRankingAndHistory(username) {
         finishTimeInSeconds
         contest {
           title
+          titleSlug
           startTime
         }
       }

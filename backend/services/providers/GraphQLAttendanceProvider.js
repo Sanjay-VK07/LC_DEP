@@ -11,6 +11,27 @@ function slugifyTitle(title) {
     .replace(/[^a-z0-9-]/g, '');
 }
 
+async function fetchWithRetry(normHandle, timeoutMs = 20000, maxRetries = 3) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      const queryPromise = leetcodeUtils.getUserContestRankingAndHistory(normHandle);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`GraphQL request timeout for ${normHandle} after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs)
+      );
+      return await Promise.race([queryPromise, timeoutPromise]);
+    } catch (err) {
+      if (attempt >= maxRetries) {
+        throw err;
+      }
+      const backoffMs = 1000 * Math.pow(2, attempt - 1);
+      console.warn(`[GraphQLAttendanceProvider] Retry attempt ${attempt}/${maxRetries} for ${normHandle} after error: "${err.message}". Retrying in ${backoffMs}ms...`);
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+  }
+}
+
 class GraphQLAttendanceProvider extends AttendanceProvider {
   constructor() {
     super('GRAPHQL');
@@ -25,7 +46,14 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
    */
   async resolveAttendance({ contestSlug, students = [] }) {
     const targetSlug = slugifyTitle(contestSlug);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] ========== Resolve Attendance Start ==========`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Target Contest Slug Received: "${contestSlug}"`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Normalized Target Slug: "${targetSlug}"`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Active Students Count to Process: ${students.length}`);
+
     const results = [];
+    const failedUsernames = [];
+    const timeoutUsernames = [];
 
     const CONCURRENCY = parseInt(process.env.LEETCODE_GRAPHQL_CONCURRENCY, 10) || 5;
     const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 50;
@@ -41,6 +69,7 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
         const normHandle = normalizeUsername(rawHandle);
 
         if (!normHandle) {
+          failedUsernames.push(rawHandle || `Student_ID_${student.id}`);
           results.push({
             studentId: student.id,
             username: rawHandle || '',
@@ -66,19 +95,20 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
         }
 
         try {
-          // Bounded 6-second timeout per student GraphQL lookup
-          const queryPromise = leetcodeUtils.getUserContestRankingAndHistory(normHandle);
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`GraphQL request timeout for ${normHandle} after 6s`)), 6000)
-          );
-          const data = await Promise.race([queryPromise, timeoutPromise]);
+          // Bounded 20-second timeout per student GraphQL lookup with 3 retries (exponential backoff)
+          const data = await fetchWithRetry(normHandle, 20000, 3);
           const history = data?.userContestRankingHistory || [];
           const userRanking = data?.userContestRanking || {};
 
           // Find contest in user's history
           let match = history.find(h => {
-            const hSlug = slugifyTitle(h?.contest?.title || '');
-            return hSlug === targetSlug || (h?.contest?.title && h.contest.title.toLowerCase() === contestSlug.toLowerCase());
+            const hTitle = h?.contest?.title || '';
+            const hSlug = h?.contest?.titleSlug || slugifyTitle(hTitle);
+            const slugifiedTitle = slugifyTitle(hTitle);
+
+            return hSlug === targetSlug || 
+                   slugifiedTitle === targetSlug || 
+                   (hTitle && hTitle.toLowerCase() === contestSlug.toLowerCase());
           });
 
           if (match) {
@@ -97,6 +127,8 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
               ? Math.round(rating - prevContest.rating) 
               : 0;
 
+            console.log(`[GraphQLAttendanceProvider] [MATCH] User "${normHandle}": Contest Title="${match.contest?.title}", TitleSlug="${match.contest?.titleSlug || 'N/A'}", Attended=${isAttended}, Solved=${problemsSolved}`);
+
             results.push({
               studentId: student.id,
               username: normHandle,
@@ -107,7 +139,7 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
               problemsSolved: isAttended ? problemsSolved : 0,
               totalProblems: isAttended ? totalProblems : 4,
               finishTime: isAttended ? finishTime : 0,
-              rating: rating || userRanking.rating ? Math.round(userRanking.rating) : null,
+              rating: rating || (userRanking.rating ? Math.round(userRanking.rating) : null),
               ratingChange: isAttended ? ratingChange : 0,
               status: isAttended ? 'PRESENT' : 'ABSENT',
               source: 'GRAPHQL',
@@ -135,6 +167,10 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
           }
         } catch (err) {
           console.warn(`[GraphQLAttendanceProvider] Query failed for ${normHandle}:`, err.message);
+          failedUsernames.push(normHandle);
+          if (err.message && err.message.includes('timeout')) {
+            timeoutUsernames.push(normHandle);
+          }
           const isCf = err.name === 'CloudflareBlockedError' || err.message?.includes('Cloudflare') || err.message?.includes('403');
           results.push({
             studentId: student.id,
@@ -148,7 +184,7 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
             finishTime: 0,
             rating: null,
             ratingChange: 0,
-            status: isCf ? 'BLOCKED_UPSTREAM' : 'BLOCKED_UPSTREAM',
+            status: 'BLOCKED_UPSTREAM',
             source: 'GRAPHQL',
             provider: 'GRAPHQL',
             error: err.message
@@ -162,6 +198,20 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
       pool.push(worker());
     }
     await Promise.all(pool);
+
+    const presentCount = results.filter(r => r.status === 'PRESENT').length;
+    const absentCount = results.filter(r => r.status === 'ABSENT').length;
+    const blockedCount = results.filter(r => r.status === 'BLOCKED_UPSTREAM').length;
+
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] ========== Resolve Attendance Complete ==========`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Contest Slug: "${contestSlug}"`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Number of participants before filtering: ${students.length}`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Number of results resolved: ${results.length}`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Present Participants: ${presentCount}`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Absent Participants: ${absentCount}`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Blocked/Upstream Errors: ${blockedCount}`);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Failed Usernames (${failedUsernames.length}):`, failedUsernames);
+    console.log(`[GraphQLAttendanceProvider] [DIAGNOSTICS] Timeout Usernames (${timeoutUsernames.length}):`, timeoutUsernames);
 
     return results;
   }

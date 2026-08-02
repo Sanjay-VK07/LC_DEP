@@ -192,8 +192,19 @@ class ContestAttendanceSyncService {
 
     // Zero Participant Protection
     if (fetchSuccess && participants.length === 0) {
-      console.warn(`[Sync Worker] [WARNING] Official participant provider returned zero participants for contest "${slug}". Aborting sync to prevent marking everyone absent.`);
-      updateProgress(100, 'Synchronization aborted: 0 participants returned.');
+      console.warn(`[Sync Worker] [WARNING] Official participant provider returned zero participants for contest "${slug}".`);
+      console.warn(`[Sync Worker] [DIAGNOSTICS] Target Contest Slug: "${slug}"`);
+      console.warn(`[Sync Worker] [DIAGNOSTICS] Contests.contest_id: ${realContestId}`);
+      console.warn(`[Sync Worker] [DIAGNOSTICS] LiveContests.id: ${liveContest?.id || 'N/A'}`);
+      console.warn(`[Sync Worker] [DIAGNOSTICS] Participant Map Size: ${participantMap.size}`);
+      console.warn(`[Sync Worker] [PROTECTION] Preserving previous attendance records. Aborting sync without overwriting or marking students absent.`);
+
+      await db.query(
+        "INSERT INTO sync_logs (status, message, started_at, completed_at) VALUES ('warning', ?, NOW(), NOW())",
+        [`Zero participants returned for contest "${slug}". Preserving existing attendance records.`]
+      ).catch(() => {});
+
+      updateProgress(100, 'Synchronization aborted: 0 participants returned. Existing attendance preserved.');
       return 'SYNC_SKIPPED';
     }
 

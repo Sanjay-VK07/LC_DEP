@@ -90,10 +90,17 @@ class LeetCodeAdapter extends BaseAdapter {
       const syncReport = await StudentContestSyncService.syncContestAttendance({ contestSlug: slug });
       
       if (syncReport && syncReport.success) {
-        const rows = await db.query(
+        const targetContestId = syncReport.liveContestId || syncReport.contestId;
+        let rows = await db.query(
           "SELECT username, `rank`, score, solved as problemsSolved FROM ContestAttendance WHERE contestId = ? AND attendanceStatus = 'Present'",
-          [syncReport.contestId]
+          [targetContestId]
         );
+        if (rows.length === 0 && syncReport.contestId && syncReport.contestId !== targetContestId) {
+          rows = await db.query(
+            "SELECT username, `rank`, score, solved as problemsSolved FROM ContestAttendance WHERE contestId = ? AND attendanceStatus = 'Present'",
+            [syncReport.contestId]
+          );
+        }
         const participants = rows.map(r => ({
           username: normalizeUsername(r.username),
           rank: r.rank,
