@@ -385,12 +385,24 @@ async function getBatchAttendanceSummary({ department, section, academicBatch, p
 
   const studentIds = students.map(s => s.id);
 
-  // Load attendance records
+  // Load attendance records from AttendanceRecords with fallback to ContestAttendance
   let attendanceSql = `
-    SELECT ar.user_id, c.platform, ar.attendance_status, c.contest_status
+    SELECT ar.user_id, c.platform, UPPER(ar.attendance_status) as attendance_status, c.contest_status
     FROM AttendanceRecords ar
     JOIN Contests c ON ar.contest_id = c.contest_id
     WHERE ar.user_id IN (${studentIds.join(',')})
+    UNION ALL
+    SELECT ca.studentId as user_id, lc.platform, 
+           CASE WHEN UPPER(ca.attendanceStatus) = 'PRESENT' OR UPPER(ca.attendanceStatus) = 'PARTICIPATING' THEN 'PRESENT' ELSE 'ABSENT' END as attendance_status, 
+           'RATED' as contest_status
+    FROM ContestAttendance ca
+    JOIN LiveContests lc ON ca.contestId = lc.id
+    WHERE ca.studentId IN (${studentIds.join(',')})
+      AND NOT EXISTS (
+        SELECT 1 FROM AttendanceRecords ar2 
+        JOIN Contests c2 ON ar2.contest_id = c2.contest_id 
+        WHERE ar2.user_id = ca.studentId AND c2.slug = lc.contestSlug
+      )
   `;
   const attendanceParams = [];
   if (startDate) {
