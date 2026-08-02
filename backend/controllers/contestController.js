@@ -88,6 +88,7 @@ async function getContests(req, res) {
     query += ` ORDER BY c.start_time DESC`;
 
     const contests = await db.query(query, params);
+    const { getLeetCodeOfficialStartTime } = require('../utils/contestLifecycle');
 
     // Enrich with type and status
     const enriched = contests.map((c) => {
@@ -107,11 +108,13 @@ async function getContests(req, res) {
         }
       }
       const status = c.contest_status ? c.contest_status.toUpperCase() : 'RATED';
+      const officialDate = getLeetCodeOfficialStartTime(c.contest_slug) || c.date;
+
       return {
         id: c.contest_id,
         contest_id: c.contest_slug,
         name: c.name,
-        date: c.date,
+        date: officialDate instanceof Date ? officialDate.toISOString() : officialDate,
         type: contestType,
         status: status,
         registration_count: c.registration_count || 0,

@@ -39,7 +39,10 @@ class StudentContestSyncService {
       };
     }
 
-    // 2. Resolve contest ID from Contests & LiveContests tables (auto-create if missing)
+    // 2. Resolve contest ID from Contests & LiveContests tables (auto-create or heal start_time if missing/inaccurate)
+    const { getLeetCodeOfficialStartTime } = require('../utils/contestLifecycle');
+    let officialStartTime = getLeetCodeOfficialStartTime(contestSlug) || new Date();
+
     let realContestId = null;
     let liveContestId = null;
     let contestTitle = contestSlug;
@@ -49,11 +52,14 @@ class StudentContestSyncService {
     if (contestRows.length > 0) {
       realContestId = contestRows[0].contest_id;
       contestTitle = contestRows[0].title || contestSlug;
+      if (getLeetCodeOfficialStartTime(contestSlug)) {
+        await db.query("UPDATE Contests SET start_time = ? WHERE contest_id = ?", [officialStartTime, realContestId]);
+      }
     } else {
       const formattedTitle = contestSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
       const res = await db.query(
-        "INSERT INTO Contests (slug, title, start_time, contest_type, contest_status, source) VALUES (?, ?, NOW(), 'Weekly', 'Rated', 'ENTRANTHUB')",
-        [contestSlug, formattedTitle]
+        "INSERT INTO Contests (slug, title, start_time, contest_type, contest_status, source) VALUES (?, ?, ?, 'Weekly', 'Rated', 'ENTRANTHUB')",
+        [contestSlug, formattedTitle, officialStartTime]
       );
       realContestId = res.insertId;
       contestTitle = formattedTitle;
@@ -61,13 +67,17 @@ class StudentContestSyncService {
 
     // B. Resolve LiveContests row (for ContestAttendance.contestId)
     const liveRows = await db.query("SELECT id FROM LiveContests WHERE contestSlug = ?", [contestSlug]);
+    const officialEndTime = new Date(officialStartTime.getTime() + 90 * 60 * 1000);
     if (liveRows.length > 0) {
       liveContestId = liveRows[0].id;
+      if (getLeetCodeOfficialStartTime(contestSlug)) {
+        await db.query("UPDATE LiveContests SET startTime = ?, endTime = ? WHERE id = ?", [officialStartTime, officialEndTime, liveContestId]);
+      }
     } else {
       const liveRes = await db.query(
         `INSERT INTO LiveContests (platform, contestSlug, contestName, contestType, startTime, endTime, status)
-         VALUES ('LeetCode', ?, ?, 'Weekly', NOW(), DATE_ADD(NOW(), INTERVAL 90 MINUTE), 'Completed')`,
-        [contestSlug, contestTitle]
+         VALUES ('LeetCode', ?, ?, 'Weekly', ?, ?, 'Completed')`,
+        [contestSlug, contestTitle, officialStartTime, officialEndTime]
       );
       liveContestId = liveRes.insertId;
     }

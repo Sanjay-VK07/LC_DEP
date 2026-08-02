@@ -1,7 +1,39 @@
 /**
- * Central utility to determine contest lifecycle state.
+ * Central utility to determine contest lifecycle state and official start times.
  * This is the Centralized Source of Truth for contest state across the application.
  */
+
+/**
+ * Calculates the exact official start time for a LeetCode Weekly or Biweekly Contest.
+ * - Weekly Contest N: Every Sunday at 02:30:00 UTC (08:00 AM IST)
+ * - Biweekly Contest N: Every alternate Saturday at 14:30:00 UTC (08:00 PM IST)
+ *
+ * @param {string} slug - Contest slug (e.g. 'weekly-contest-512' or 'biweekly-contest-135')
+ * @returns {Date|null} - Exact official start Date in UTC
+ */
+function getLeetCodeOfficialStartTime(slug) {
+  if (!slug || typeof slug !== 'string') return null;
+  const clean = slug.toLowerCase().trim();
+
+  // Biweekly Contest Check FIRST (must precede weekly check because 'biweekly' contains 'weekly')
+  const biweeklyMatch = clean.match(/biweekly-contest-(\d+)/);
+  if (biweeklyMatch) {
+    const n = parseInt(biweeklyMatch[1], 10);
+    // Anchor: Biweekly Contest 135 = 2024-07-20 14:30:00 UTC (1721485800 seconds)
+    const sec = 1721485800 + (n - 135) * 1209600;
+    return new Date(sec * 1000);
+  }
+
+  const weeklyMatch = clean.match(/weekly-contest-(\d+)/);
+  if (weeklyMatch) {
+    const n = parseInt(weeklyMatch[1], 10);
+    // Anchor: Weekly Contest 512 = 2026-07-26 02:30:00 UTC (1785033000 seconds)
+    const sec = 1785033000 + (n - 512) * 604800;
+    return new Date(sec * 1000);
+  }
+
+  return null;
+}
 
 function getContestStatus(contest) {
   if (!contest) {
@@ -19,6 +51,9 @@ function getContestStatus(contest) {
 
   // 1. Resolve Start Time
   let startTimeVal = contest.start_time || contest.startTime || contest.contest_date || contest.contestDate;
+  if (!startTimeVal && contest.slug) {
+    startTimeVal = getLeetCodeOfficialStartTime(contest.slug);
+  }
   if (!startTimeVal) {
     startTimeVal = now;
   }
@@ -67,5 +102,6 @@ function getContestStatus(contest) {
 }
 
 module.exports = {
-  getContestStatus
+  getContestStatus,
+  getLeetCodeOfficialStartTime
 };
