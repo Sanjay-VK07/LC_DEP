@@ -78,3 +78,4 @@ class ContestImportService {
 }
 
 module.exports = ContestImportService;
+//completed
