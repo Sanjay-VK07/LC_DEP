@@ -514,10 +514,12 @@ function Contests() {
 
   /* ── platform category breakdowns (Right Sidebar) ── */
   const platformBreakdowns = useMemo(() => {
-    const eligibleRecords = contests.filter(c => c.eligibility_status === 'Eligible' && (c.status === 'attended' || c.status === 'not attended'));
-    
     const computeBreakdown = (filterFn, label) => {
-      const records = eligibleRecords.filter(filterFn);
+      const allMatching = contests.filter(c => filterFn({ ...c, type: (c.type || '').toLowerCase() }));
+      // Only average over contests that have actually been synced for attendance -
+      // otherwise hundreds of never-synced historical contests (attendance_count: 0)
+      // drag the average down to a meaningless number.
+      const records = allMatching.filter(c => !!c.last_attendance_sync_at);
       const eligibleContests = records.length;
       if (eligibleContests === 0) {
         return { label, eligible: 0, attended: 0, missed: 0, rate: null, percentage: 0 };

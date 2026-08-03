@@ -45,7 +45,8 @@ class ContestService {
         IFNULL(c.source, 'MANUAL') as sync_source,
         IFNULL(c.last_synced_at, 'SYNCHRONIZED') as sync_status,
         (SELECT COUNT(*) FROM Users u WHERE u.status = 'active') as registration_count,
-        (SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar WHERE ar.contest_id = c.contest_id AND UPPER(ar.attendance_status) = 'PRESENT') as attendance_count
+        (SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar WHERE ar.contest_id = c.contest_id AND UPPER(ar.attendance_status) = 'PRESENT') as attendance_count,
+        (SELECT lc.lastSyncAt FROM LiveContests lc WHERE lc.contestSlug = c.slug) as last_attendance_sync_at
       FROM Contests c
       WHERE c.platform = ?
         AND c.slug NOT LIKE 'test-%'
