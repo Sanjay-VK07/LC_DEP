@@ -1364,7 +1364,7 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
   const dbPlatform = dbPlatformMap[platform.toLowerCase()];
   if (!dbPlatform) return [];
 
-  // 1. Fetch platform contests
+  const isProdEnv = process.env.NODE_ENV === 'production';
   const contests = await db.query(
     `SELECT contest_id, title as contest_name, slug as contest_slug, start_time as contest_date, contest_status, contest_type, duration, total_problems
      FROM Contests
@@ -1373,12 +1373,7 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
        AND slug NOT LIKE 'starting-%'
        AND slug NOT LIKE 'temporary-%'
        AND slug NOT LIKE 'placeholder-%'
-       AND slug NOT LIKE 'test-%'
-       AND slug NOT LIKE 'mock-%'
-       AND slug NOT LIKE 'dummy-%'
-       AND slug NOT LIKE 'crashed-contest-%'
-       AND slug NOT LIKE 'retry-contest-%'
-       AND slug NOT LIKE 'stale-contest-%'
+       ${isProdEnv ? "AND slug NOT LIKE 'test-%' AND slug NOT LIKE 'mock-%' AND slug NOT LIKE 'dummy-%' AND slug NOT LIKE 'crashed-contest-%' AND slug NOT LIKE 'retry-contest-%' AND slug NOT LIKE 'stale-contest-%'" : ''}
      ORDER BY start_time DESC`,
     [dbPlatform]
   );
@@ -1559,7 +1554,7 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
       }
     }
 
-    if (registered === 0) continue;
+    // If registered === 0, continue building snapshot with 0 registrations and N/A display rate instead of skipping.
 
     const validationIssues = [];
     let validationStatus = 'PASSED';
@@ -1574,7 +1569,7 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
 
     let status = 'not attended';
     let attendanceStatus = 'ABSENT';
-    let eligibilityStatus = 'Eligible';
+    let eligibilityStatus = registered > 0 ? 'Eligible' : 'Outside Academic Period';
     let remarks = null;
     let lastUpdated = null;
     let problemsSolved = null;
@@ -1666,6 +1661,17 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
       resolvedType = classifyCodeforcesType(c.contest_name);
     }
 
+    const { safeNumber, calculateContestSnapshotMetrics } = require('../utils/contestMetrics');
+    const safeRegistered = safeNumber(registered, 0);
+    const safeAttended = safeNumber(attended, 0);
+
+    const snapshotMetrics = calculateContestSnapshotMetrics({
+      registered: safeRegistered,
+      attended: safeAttended,
+      contestId: c.contest_id,
+      contestSlug: c.contest_slug
+    });
+
     resultContests.push({
       id: c.contest_id,
       contest_id: c.contest_slug,
@@ -1687,8 +1693,10 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
       contestScore,
       total_problems: totalProblems,
       totalProblems,
-      registration_count: registered,
-      attendance_count: attended,
+      registration_count: snapshotMetrics.registration_count,
+      attendance_count: snapshotMetrics.attendance_count,
+      attendance_rate: snapshotMetrics.attendance_rate,
+      displayRate: snapshotMetrics.displayRate,
       validationStatus,
       validationIssues
     });
@@ -1844,12 +1852,18 @@ async function getPlatformAnalytics(platform, studentId, filters = {}) {
     attendancePercentage = totalPossible > 0 ? parseFloat(((totalAttended / totalPossible) * 100).toFixed(1)) : 0.0;
   }
 
+  const { safeNumber } = require('../utils/contestMetrics');
+  const safeEligible = safeNumber(totalRated, 0);
+  const safeAttendedMetrics = safeNumber(attended, 0);
+  const safeMissedMetrics = safeNumber(missed, 0);
+  const safeRate = Math.min(100.0, Math.max(0.0, safeNumber(attendancePercentage, 0.0)));
+
   const metrics = {
-    eligible: totalRated,
-    attended,
-    missed,
-    rate: attendancePercentage,
-    ongoing
+    eligible: safeEligible,
+    attended: safeAttendedMetrics,
+    missed: safeMissedMetrics,
+    rate: parseFloat(safeRate.toFixed(1)),
+    ongoing: safeNumber(ongoing, 0)
   };
 
   // 5. Monthly Attendance Trend

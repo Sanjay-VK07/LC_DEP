@@ -48,14 +48,14 @@ async function getContests(req, res) {
         c.contest_status,
         c.contest_type,
         c.platform,
-        (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id) AS registration_count,
-        (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id) AS attendance_count
+        (SELECT COUNT(DISTINCT r.user_id) FROM Registrations r WHERE r.contest_id = c.contest_id) AS registration_count,
+        (SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar WHERE ar.contest_id = c.contest_id AND UPPER(ar.attendance_status) = 'PRESENT') AS attendance_count
     `;
     const params = [];
     if (userId) {
       query += `,
-        (SELECT COUNT(*) FROM Registrations r WHERE r.contest_id = c.contest_id AND r.user_id = ?) AS is_registered,
-        (SELECT COUNT(*) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id AND p.user_id = ?) AS is_joined
+        (SELECT COUNT(DISTINCT r.user_id) FROM Registrations r WHERE r.contest_id = c.contest_id AND r.user_id = ?) AS is_registered,
+        (SELECT COUNT(DISTINCT p.user_id) FROM ParticipationLogs p WHERE p.contest_id = c.contest_id AND p.user_id = ?) AS is_joined
       `;
       params.push(userId, userId);
     }
@@ -110,6 +110,14 @@ async function getContests(req, res) {
       const status = c.contest_status ? c.contest_status.toUpperCase() : 'RATED';
       const officialDate = getLeetCodeOfficialStartTime(c.contest_slug) || c.date;
 
+      const { calculateContestSnapshotMetrics } = require('../utils/contestMetrics');
+      const snapshotMetrics = calculateContestSnapshotMetrics({
+        registered: c.registration_count,
+        attended: c.attendance_count,
+        contestId: c.contest_id,
+        contestSlug: c.contest_slug
+      });
+
       return {
         id: c.contest_id,
         contest_id: c.contest_slug,
@@ -117,8 +125,10 @@ async function getContests(req, res) {
         date: officialDate instanceof Date ? officialDate.toISOString() : officialDate,
         type: contestType,
         status: status,
-        registration_count: c.registration_count || 0,
-        attendance_count: c.attendance_count || 0,
+        registration_count: snapshotMetrics.registration_count,
+        attendance_count: snapshotMetrics.attendance_count,
+        attendance_rate: snapshotMetrics.attendance_rate,
+        displayRate: snapshotMetrics.displayRate,
         is_registered: userId ? c.is_registered > 0 : false,
         is_joined: userId ? c.is_joined > 0 : false
       };

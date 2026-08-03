@@ -475,6 +475,15 @@ class ContestLeaderboardSyncService {
             last_updated = CURRENT_TIMESTAMP
         `, [contestId, contestTitle, contestSlug, contestDate, contestSlug, batch]);
 
+        // Ensure Registrations table is synchronized for participants (maintaining registration synchronization)
+        await connection.query(`
+          INSERT IGNORE INTO Registrations (user_id, contest_id)
+          SELECT u.id as user_id, ? as contest_id
+          FROM Users u
+          JOIN ContestParticipants cp ON LOWER(u.leetcode_username) = LOWER(cp.username) AND cp.contest_slug = ?
+          WHERE u.academic_batch = ? AND u.status = 'active'
+        `, [contestId, contestSlug, batch]);
+
         // Mark sync log as completed. Include error summary in the ContestSyncLog error field if some pages failed.
         const summaryErrorStr = failedPagesCount > 0
           ? `Incomplete sync. Succeeded: ${successPagesCount}, Failed: ${failedPagesCount} (Cloudflare Blocks: ${cfBlocks}, Network Errors: ${netErrors}).`

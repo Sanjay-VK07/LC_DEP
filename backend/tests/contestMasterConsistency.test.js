@@ -95,7 +95,7 @@ test('Contest Master Consistency - 0 participants', async () => {
     await contestmasterController.getPlatformAnalytics(sumReq, sumRes);
     assert.equal(sumRes.data.success, true);
     
-    const summaryContest = sumRes.data.contests.find(c => c.id === contestId);
+    const summaryContest = sumRes.data.contests.find(c => String(c.id) === String(contestId) || c.contest_id === slug);
     assert.ok(summaryContest);
 
     // 2. Fetch Expanded Details
@@ -169,7 +169,7 @@ test('Contest Master Consistency - Partial attendance', async () => {
     // 1. Summary
     const { req: sumReq, res: sumRes } = makeMockReqRes({ platform: 'leetcode' }, { studentId: 'all', batch });
     await contestmasterController.getPlatformAnalytics(sumReq, sumRes);
-    const summaryContest = sumRes.data.contests.find(c => c.id === contestId);
+    const summaryContest = sumRes.data.contests.find(c => String(c.id) === String(contestId) || c.contest_id === slug);
     assert.ok(summaryContest);
 
     // 2. Details
@@ -247,7 +247,7 @@ test('Contest Master Consistency - 100% attendance', async () => {
     // 1. Summary
     const { req: sumReq, res: sumRes } = makeMockReqRes({ platform: 'leetcode' }, { studentId: 'all', batch });
     await contestmasterController.getPlatformAnalytics(sumReq, sumRes);
-    const summaryContest = sumRes.data.contests.find(c => c.id === contestId);
+    const summaryContest = sumRes.data.contests.find(c => String(c.id) === String(contestId) || c.contest_id === slug);
     assert.ok(summaryContest);
 
     // 2. Details
@@ -322,7 +322,7 @@ test('Contest Master Consistency - Mixed attendance and manual overrides', async
     // 1. Summary
     const { req: sumReq, res: sumRes } = makeMockReqRes({ platform: 'leetcode' }, { studentId: 'all', batch });
     await contestmasterController.getPlatformAnalytics(sumReq, sumRes);
-    const summaryContest = sumRes.data.contests.find(c => c.id === contestId);
+    const summaryContest = sumRes.data.contests.find(c => String(c.id) === String(contestId) || c.contest_id === slug);
     assert.ok(summaryContest);
 
     // 2. Details
@@ -387,7 +387,7 @@ test('Contest Master Consistency - Historical contests and academic eligibility 
     // 1. Summary
     const { req: sumReq, res: sumRes } = makeMockReqRes({ platform: 'leetcode' }, { studentId: 'all', batch });
     await contestmasterController.getPlatformAnalytics(sumReq, sumRes);
-    const summaryContest = sumRes.data.contests.find(c => c.id === contestId);
+    const summaryContest = sumRes.data.contests.find(c => String(c.id) === String(contestId) || c.contest_id === slug);
     assert.ok(summaryContest);
 
     // 2. Details

@@ -87,6 +87,19 @@ async function seedDefaultDataIfNeeded(activePool) {
     } catch (err) {
       console.warn('[DB] Skipping departments seeding (table may not exist yet):', err.message);
     }
+
+    // 3. Self-healing backfill for Registrations synchronization
+    try {
+      await activePool.query(`
+        INSERT IGNORE INTO Registrations (user_id, contest_id)
+        SELECT DISTINCT user_id, contest_id
+        FROM AttendanceRecords
+        WHERE UPPER(attendance_status) = 'PRESENT' AND user_id IS NOT NULL AND contest_id IS NOT NULL
+      `);
+      console.log('[DB] Verified Registrations synchronization backfill.');
+    } catch (err) {
+      console.warn('[DB] Skipping Registrations backfill:', err.message);
+    }
   } catch (err) {
     console.error('[DB] Error in seedDefaultDataIfNeeded:', err.message);
   }
