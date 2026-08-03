@@ -119,7 +119,7 @@ class StartupRecovery {
           UPDATE ContestAttendance ca
           JOIN LiveContests lc ON ca.contestId = lc.id
           JOIN Users u ON ca.studentId = u.id
-          JOIN ContestParticipants cp ON lc.contestSlug = cp.contest_slug AND LOWER(u.leetcode_username) = LOWER(cp.username)
+          JOIN ContestParticipants cp ON lc.contestSlug = cp.contest_slug AND u.leetcode_username = cp.username
           SET ca.attendanceStatus = 'PRESENT',
               ca.\`rank\` = COALESCE(ca.\`rank\`, cp.\`rank\`),
               ca.score = COALESCE(ca.score, cp.score),
@@ -131,7 +131,7 @@ class StartupRecovery {
           UPDATE AttendanceRecords ar
           JOIN Contests c ON ar.contest_id = c.contest_id
           JOIN Users u ON ar.user_id = u.id
-          JOIN ContestParticipants cp ON c.slug = cp.contest_slug AND LOWER(u.leetcode_username) = LOWER(cp.username)
+          JOIN ContestParticipants cp ON c.slug = cp.contest_slug AND u.leetcode_username = cp.username
           SET ar.attendance_status = 'PRESENT',
               ar.\`rank\` = COALESCE(ar.\`rank\`, cp.\`rank\`),
               ar.score = COALESCE(ar.score, cp.score),

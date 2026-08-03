@@ -44,10 +44,20 @@ class ContestService {
         c.contest_status as status,
         IFNULL(c.source, 'MANUAL') as sync_source,
         IFNULL(c.last_synced_at, 'SYNCHRONIZED') as sync_status,
-        (SELECT COUNT(DISTINCT r.user_id) FROM Registrations r WHERE r.contest_id = c.contest_id) as registration_count,
+        (SELECT COUNT(*) FROM Users u WHERE u.status = 'active') as registration_count,
         (SELECT COUNT(DISTINCT ar.user_id) FROM AttendanceRecords ar WHERE ar.contest_id = c.contest_id AND UPPER(ar.attendance_status) = 'PRESENT') as attendance_count
       FROM Contests c
       WHERE c.platform = ?
+        AND c.slug NOT LIKE 'test-%'
+        AND c.slug NOT LIKE 'mock-%'
+        AND c.slug NOT LIKE 'dummy-%'
+        AND c.slug NOT LIKE 'crashed-contest-%'
+        AND c.slug NOT LIKE 'retry-contest-%'
+        AND c.slug NOT LIKE 'stale-contest-%'
+        AND c.slug NOT LIKE 'upcoming-live-%'
+        AND c.slug NOT LIKE 'starting-%'
+        AND c.slug NOT LIKE 'temporary-%'
+        AND c.slug NOT LIKE 'placeholder-%'
     `;
     const params = [dbPlatform];
 

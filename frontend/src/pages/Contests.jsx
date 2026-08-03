@@ -411,7 +411,9 @@ function Contests() {
           studentId: selectedStudentId,
           batch: selectedBatch,
           type: filterType,
-          status: filterStatus
+          status: filterStatus,
+          page: 1,
+          limit: 1000
         }
       });
       if (res.data.success) {
