@@ -1,54 +1,69 @@
 const db = require('./config/db');
 const { getAdapter } = require('./services/adapters/AdapterFactory');
+const StudentContestSyncService = require('./services/StudentContestSyncService');
 const ContestAttendanceSyncService = require('./services/ContestAttendanceSyncService');
 
-async function testE2ESync() {
-  console.log('=== END-TO-END SYNCHRONIZATION VERIFICATION TEST ===\n');
+async function testContest(contestSlug) {
+  console.log(`\n===============================================================`);
+  console.log(`=== END-TO-END SYNCHRONIZATION TEST FOR: "${contestSlug}" ===`);
+  console.log(`===============================================================\n`);
 
-  await db.initializeDatabase();
-
-  const contestSlug = 'weekly-contest-512';
-  console.log(`Testing sync for contest: "${contestSlug}"...`);
-
-  // 1. Run Adapter getContestParticipants
+  // 1. Adapter call
   const adapter = getAdapter('LeetCode');
-  console.log('\n--- Step 1: Calling adapter.getContestParticipants ---');
+  console.log('--- Step 1: Calling adapter.getContestParticipants ---');
   const participants = await adapter.getContestParticipants(contestSlug);
+  console.log(`Adapter Result: ${participants.length} unique scraped participants returned.\n`);
 
-  console.log(`\nAdapter Result: ${participants.length} participants returned.`);
-  if (participants.length > 0) {
-    console.log('Sample participant:', JSON.stringify(participants[0], null, 2));
-  } else {
-    console.warn('WARNING: 0 participants returned!');
-  }
-
-  // 2. Run ContestAttendanceSyncService
-  console.log('\n--- Step 2: Running ContestAttendanceSyncService ---');
-  const syncResult = await ContestAttendanceSyncService.syncContestAttendance(contestSlug);
-  console.log('ContestAttendanceSyncService Result:', JSON.stringify(syncResult, null, 2));
+  // 2. StudentContestSyncService (HYBRID / RankingPage provider path)
+  console.log('--- Step 2: Running StudentContestSyncService (Live Ranking Page Sync) ---');
+  const studentSyncResult = await StudentContestSyncService.syncContestAttendance({
+    contestSlug,
+    providerType: 'HYBRID',
+    actor: 'E2E_TEST'
+  });
+  console.log('StudentContestSyncService Result:', JSON.stringify(studentSyncResult, null, 2));
 
   // 3. Database Telemetry Verification
   console.log('\n--- Step 3: Verifying Database Tables ---');
-  
-  const lcRows = await db.query('SELECT id, contestSlug, totalParticipants, lastSyncAt FROM LiveContests WHERE contestSlug = ?', [contestSlug]);
+  const lcRows = await db.query(
+    'SELECT id, contestSlug, totalParticipants, lastSyncAt, status FROM LiveContests WHERE contestSlug = ?',
+    [contestSlug]
+  );
+  console.log('LiveContests Record:', JSON.stringify(lcRows, null, 2));
+
   const liveContestId = lcRows[0]?.id;
+  if (liveContestId) {
+    const caCount = await db.query(
+      'SELECT attendanceStatus, COUNT(*) as count FROM ContestAttendance WHERE contestId = ? GROUP BY attendanceStatus',
+      [liveContestId]
+    );
+    console.log('ContestAttendance Summary:', JSON.stringify(caCount, null, 2));
+  }
 
-  const caCount = await db.query('SELECT COUNT(*) as count, attendanceStatus FROM ContestAttendance WHERE contestId = ? GROUP BY attendanceStatus', [liveContestId]);
-  console.log('ContestAttendance Summary:', JSON.stringify(caCount, null, 2));
-
-  const cpCount = await db.query('SELECT COUNT(*) as count FROM ContestParticipants WHERE contest_slug = ?', [contestSlug]);
+  const cpCount = await db.query(
+    'SELECT COUNT(*) as count FROM ContestParticipants WHERE contest_slug = ?',
+    [contestSlug]
+  );
   console.log('ContestParticipants Count:', JSON.stringify(cpCount, null, 2));
-
-  const csCount = await db.query('SELECT COUNT(*) as count FROM ContestSnapshots WHERE contestId = ?', [liveContestId]);
-  console.log('ContestSnapshots Count:', JSON.stringify(csCount, null, 2));
-
-  const cslCount = await db.query('SELECT COUNT(*) as count FROM ContestSyncLog WHERE contestId = ?', [liveContestId]);
-  console.log('ContestSyncLog Count:', JSON.stringify(cslCount, null, 2));
-
-  process.exit(0);
 }
 
-testE2ESync().catch(err => {
-  console.error('E2E Sync Error:', err);
-  process.exit(1);
-});
+async function main() {
+  try {
+    await db.initializeDatabase();
+
+    const contests = ['weekly-contest-514', 'weekly-contest-512'];
+    for (const slug of contests) {
+      await testContest(slug);
+    }
+
+    console.log('\n===============================================================');
+    console.log('=== ALL E2E SYNCHRONIZATION TESTS COMPLETED SUCCESSFULLY ===');
+    console.log('===============================================================\n');
+    process.exit(0);
+  } catch (err) {
+    console.error('E2E Sync Test Failed:', err);
+    process.exit(1);
+  }
+}
+
+main();

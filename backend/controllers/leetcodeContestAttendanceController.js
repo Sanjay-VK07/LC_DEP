@@ -40,6 +40,7 @@ const LeetCodeContestAttendanceController = {
             contestSlug: slug,
             providerType: providerType || process.env.SYNC_PROVIDER || 'HYBRID',
             actor: req.user?.username || 'ADMIN_API',
+            bypassCache: true,
             onProgress: (pct, msg) => updateProgress(pct, msg)
           });
           updateProgress(95, 'Saving attendance records to database...');

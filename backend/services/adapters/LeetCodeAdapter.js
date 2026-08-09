@@ -70,9 +70,10 @@ class LeetCodeAdapter extends BaseAdapter {
    * @param {string|number} contestId - Contest ID or slug
    * @returns {Promise<Array<{username: string, rank: number|null, score: number|null, finishTime: number|null}>>}
    */
-  async getContestParticipants(contestId) {
+  async getContestParticipants(contestId, options = {}) {
     const startTime = Date.now();
     let slug = contestId;
+    const bypassCache = Boolean(options.bypassCache || options.forceRefresh);
 
     // Resolve numeric ID to slug
     if (typeof contestId === 'number' || !isNaN(contestId)) {
@@ -82,15 +83,22 @@ class LeetCodeAdapter extends BaseAdapter {
       }
     }
 
+    const cacheKey = `ContestParticipants:${slug}`;
+
     // ------------------------------------------------------------------
-    // 1. Check ContestParticipants cache first (fast path if fresh)
+    // 1. Check ContestParticipants cache first unless bypassCache is set
     // ------------------------------------------------------------------
     const cacheResult = await this._checkCache(slug);
-    if (cacheResult.usable) {
+    if (!bypassCache && cacheResult.usable) {
       const elapsed = Date.now() - startTime;
-      console.log(`[LeetCodeAdapter] Contest "${slug}" resolved from cache (${cacheResult.count} participants) in ${elapsed}ms.`);
-      return cacheResult.participants;
+      console.log(`[LeetCodeAdapter] [CACHE HIT] Cache Key: "${cacheKey}" | Rows: ${cacheResult.count} | Age: ${Math.round(cacheResult.ageMs / 1000)}s | Resolved in ${elapsed}ms`);
+      const cachedList = cacheResult.participants;
+      cachedList.pagesFetched = 1;
+      cachedList.fromCache = true;
+      return cachedList;
     }
+
+    console.log(`[LeetCodeAdapter] [CACHE MISS] Cache Key: "${cacheKey}" | Reason: ${bypassCache ? 'bypassCache flag set' : cacheResult.reason}`);
 
     // ------------------------------------------------------------------
     // 2. Primary: scrape the live LeetCode ranking-page leaderboard directly.
@@ -98,11 +106,14 @@ class LeetCodeAdapter extends BaseAdapter {
     // userContestRankingHistory field, which can lag a day or more behind).
     // ------------------------------------------------------------------
     try {
-      const { participants } = await this._fetchFullLeaderboard(slug);
+      const { participants, pagesFetched, totalExpected } = await this._fetchFullLeaderboard(slug);
       if (participants.length > 0) {
         await this._updateCache(slug, participants);
         const elapsed = Date.now() - startTime;
-        console.log(`[LeetCodeAdapter] Contest "${slug}" resolved via live ranking-page scrape (${participants.length} participants) in ${elapsed}ms.`);
+        console.log(`[LeetCodeAdapter] Contest "${slug}" resolved via live ranking-page scrape (${participants.length} participants, ${pagesFetched} pages) in ${elapsed}ms.`);
+        participants.pagesFetched = pagesFetched;
+        participants.totalExpected = totalExpected;
+        participants.fromCache = false;
         return participants;
       }
     } catch (err) {
@@ -116,6 +127,8 @@ class LeetCodeAdapter extends BaseAdapter {
     const ehList = await standingsProvider.fetchStandings('LeetCode', slug);
     const elapsed = Date.now() - startTime;
     console.log(`[LeetCodeAdapter] Contest "${slug}" resolved via standingsProvider (${ehList.length} participants) in ${elapsed}ms.`);
+    ehList.pagesFetched = 1;
+    ehList.fromCache = false;
     return ehList;
   }
 
@@ -207,8 +220,8 @@ class LeetCodeAdapter extends BaseAdapter {
       };
     }
 
-    // Set page ceiling to prevent scraping thousands of pages
-    const maxPagesCeiling = parseInt(process.env.LEETCODE_MAX_PAGES_LIMIT, 10) || 50;
+    // Set page ceiling to cover full contest unless LEETCODE_MAX_PAGES_LIMIT is explicitly defined
+    const maxPagesCeiling = parseInt(process.env.LEETCODE_MAX_PAGES_LIMIT, 10) || totalPages;
     const pagesToFetchLimit = Math.min(totalPages, maxPagesCeiling);
 
     console.log(`[LeetCodeAdapter] Contest "${slug}": ${totalUsers} participants across ${totalPages} pages. Fetching up to ${pagesToFetchLimit} pages (Ceiling: ${maxPagesCeiling})...`);

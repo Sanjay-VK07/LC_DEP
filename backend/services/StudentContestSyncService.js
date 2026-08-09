@@ -284,26 +284,31 @@ class StudentContestSyncService {
     }
 
     // Record persistent telemetry in ContestSyncLog, ContestSnapshots, LiveContests & AuditLog
+    const scrapedParticipantCount = resolvedItems.scrapedParticipantCount || presentCount || 0;
+    const pagesFetched = resolvedItems.pagesFetched || 1;
+    const totalRequests = pagesFetched;
+    const studentsProcessed = students.length;
+
     try {
       await db.query(
         `UPDATE LiveContests SET totalParticipants = ?, lastSyncAt = NOW(), status = 'Completed' WHERE id = ?`,
-        [processedItems.length, liveContestId]
+        [scrapedParticipantCount, liveContestId]
       );
 
       await db.query(
         `INSERT INTO ContestSyncLog (contestId, started_at, completed_at, total_requests, failed_requests, retry_count, syncStarted, participantsFetched, pagesFetched)
-         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0, FROM_UNIXTIME(? / 1000), ?, 1)`,
-        [liveContestId, startTime, processedItems.length, blockedCount, startTime, presentCount]
+         VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?, 0, FROM_UNIXTIME(? / 1000), ?, ?)`,
+        [liveContestId, startTime, totalRequests, blockedCount, startTime, scrapedParticipantCount, pagesFetched]
       ).catch(() => {
         // Fallback for variation in ContestSyncLog column names
         return db.query(
           `INSERT INTO ContestSyncLog (contestId, syncStarted, syncCompleted, pagesFetched, participantsFetched)
-           VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), 1, ?)`,
-          [liveContestId, startTime, presentCount]
+           VALUES (?, FROM_UNIXTIME(? / 1000), NOW(), ?, ?)`,
+          [liveContestId, startTime, pagesFetched, scrapedParticipantCount]
         );
       });
 
-      const attPct = students.length > 0 ? Number(((presentCount / students.length) * 100).toFixed(2)) : 0.00;
+      const attPct = studentsProcessed > 0 ? Number(((presentCount / studentsProcessed) * 100).toFixed(2)) : 0.00;
       await db.query(
         `INSERT INTO ContestSnapshots (contestId, participants, attendancePercentage, snapshotTime)
          VALUES (?, ?, ?, NOW())`,
@@ -316,7 +321,7 @@ class StudentContestSyncService {
         [
           actor,
           contestSlug,
-          JSON.stringify({ processed: students.length, presentCount, absentCount, unknownCount, blockedCount }),
+          JSON.stringify({ processed: studentsProcessed, scrapedParticipants: scrapedParticipantCount, presentCount, absentCount, unknownCount, blockedCount }),
           blockedCount > 0 ? 'PARTIAL_SUCCESS' : 'SUCCESS',
           Date.now() - startTime,
           provider.providerName
@@ -329,7 +334,7 @@ class StudentContestSyncService {
     const overallSyncStatus = blockedCount > 0 ? 'PARTIAL_SYNC' : 'COMPLETED';
 
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] ========== Student Contest Sync Complete ==========`);
-    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Processed: ${students.length}, Present: ${presentCount}, Absent: ${absentCount}, LiveContestId: ${liveContestId}, RealContestId: ${realContestId}`);
+    console.log(`[StudentContestSyncService] [DIAGNOSTICS] Students Processed: ${studentsProcessed}, Scraped Participants: ${scrapedParticipantCount}, Present: ${presentCount}, Absent: ${absentCount}, LiveContestId: ${liveContestId}, RealContestId: ${realContestId}`);
 
     return {
       success: true,
@@ -338,7 +343,10 @@ class StudentContestSyncService {
       liveContestId,
       provider: provider.providerName,
       syncStatus: overallSyncStatus,
-      processedStudents: students.length,
+      studentsProcessed: studentsProcessed,
+      processedStudents: studentsProcessed,
+      totalParticipants: scrapedParticipantCount,
+      scrapedParticipantCount: scrapedParticipantCount,
       presentCount,
       absentCount,
       unknownCount,
