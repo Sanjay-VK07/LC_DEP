@@ -17,10 +17,15 @@ class RankingPageAttendanceProvider extends AttendanceProvider {
   async resolveAttendance({ contestSlug, students = [], onProgress = null, bypassCache = true }) {
     console.log(`[RankingPageAttendanceProvider] [DIAGNOSTICS] Fetching live leaderboard for "${contestSlug}" (bypassCache: ${bypassCache})...`);
     const adapter = new LeetCodeAdapter();
-    const participants = await adapter.getContestParticipants(contestSlug, { bypassCache });
+    let participants;
+    try {
+      participants = await adapter.getContestParticipants(contestSlug, { bypassCache });
+    } catch (err) {
+      throw err;
+    }
 
     if (!participants || participants.length === 0) {
-      throw new Error(`Live ranking-page leaderboard for "${contestSlug}" returned no participants.`);
+      throw new Error(`Contest '${contestSlug}' leaderboard is empty or has 0 participants. Verify contest has started and finished.`);
     }
 
     // Build participant lookup map with explicit normalization on scraped usernames

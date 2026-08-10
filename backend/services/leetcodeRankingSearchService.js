@@ -64,8 +64,8 @@ const LeetCodeRankingSearchService = {
       // 2. Fetch all pages concurrently in rate-limited batches
       const participantMap = new Map(); // username (lower) -> ranking_details
       const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
-      const concurrencyLimit = Math.min(2, Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2);
-      const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 1000;
+      const concurrencyLimit = Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2;
+      const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 500;
 
       // Add page 1 data immediately
       if (page1Data.total_rank) {
@@ -90,95 +90,90 @@ const LeetCodeRankingSearchService = {
         });
       }
 
-      // Fetch remaining pages
-      const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-      const remainingPages = pages.slice(1);
+      // Fetch remaining pages using atomic work queue & explicit Set tracking
+      const fetchedPages = new Set([1]);
+      const inFlightPages = new Set();
+      const pageQueue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
       const fetchedPagesData = new Map();
+      fetchedPagesData.set(1, page1Data);
       const pageErrors = new Map();
-      let nextPageIndex = 0;
 
       const runWorker = async () => {
-        while (nextPageIndex < remainingPages.length) {
-          const currentPage = remainingPages[nextPageIndex++];
+        while (true) {
+          let currentPage;
+          if (pageQueue.length > 0) {
+            currentPage = pageQueue.shift();
+            inFlightPages.add(currentPage);
+          } else {
+            break;
+          }
+
           if (pageDelayMs > 0) {
             await new Promise(resolve => setTimeout(resolve, pageDelayMs));
           }
 
-          console.log(`[INFO] Fetching page ${currentPage}`);
-          try {
-            const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
-            const pageData = await NetworkService.request(url, {
-              method: 'GET',
-              useCurlTransport: true
-            });
-            fetchedPagesData.set(currentPage, pageData);
-          } catch (err) {
-            pageErrors.set(currentPage, err);
-            const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK';
-            if (isCf) {
-              console.warn(`[WARN] Cloudflare blocked page ${currentPage}`);
-            } else {
-              console.error(`[ERROR] Page ${currentPage} failed to fetch: ${err.message}`);
-            }
-          }
-        }
-      };
+          let success = false;
+          let attempts = 0;
+          const maxAttempts = 3;
 
-      const workers = [];
-      for (let i = 0; i < Math.min(concurrencyLimit, remainingPages.length); i++) {
-        workers.push(runWorker());
-      }
-      await Promise.all(workers);
-
-      // Retry Failed Transient Pages Only (Exclude Cloudflare blocks as per Requirement 5)
-      let failedPagesList = Array.from(pageErrors.entries())
-        .filter(([_, err]) => !(err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK'))
-        .map(([pg, _]) => pg);
-
-      let retryPass = 1;
-      const maxRetryPasses = 2;
-
-      while (failedPagesList.length > 0 && retryPass <= maxRetryPasses) {
-        console.warn(`[WARN] Starting retry pass ${retryPass} for ${failedPagesList.length} failed transient pages...`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * retryPass));
-
-        let nextFailedIndex = 0;
-        const runRetryWorker = async () => {
-          while (nextFailedIndex < failedPagesList.length) {
-            const currentPage = failedPagesList[nextFailedIndex++];
-            if (pageDelayMs > 0) {
-              await new Promise(resolve => setTimeout(resolve, pageDelayMs));
-            }
-
-            console.warn(`[WARN] Retrying page ${currentPage} (Attempt ${retryPass + 1})`);
+          while (attempts < maxAttempts && !success) {
+            attempts++;
             try {
               const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
               const pageData = await NetworkService.request(url, {
                 method: 'GET',
                 useCurlTransport: true
               });
-              fetchedPagesData.set(currentPage, pageData);
-              pageErrors.delete(currentPage);
-            } catch (err) {
-              pageErrors.set(currentPage, err);
-              const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare || err.code === 'CLOUDFLARE_BLOCK';
-              if (isCf) {
-                console.warn(`[WARN] Cloudflare blocked page ${currentPage} again`);
+              if (pageData && pageData.total_rank) {
+                fetchedPagesData.set(currentPage, pageData);
+                success = true;
+                inFlightPages.delete(currentPage);
+                fetchedPages.add(currentPage);
               } else {
-                console.error(`[ERROR] Page ${currentPage} failed retry: ${err.message}`);
+                throw new Error(`Empty ranking data returned for page ${currentPage}`);
+              }
+            } catch (err) {
+              if (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+              } else {
+                pageErrors.set(currentPage, err);
+                inFlightPages.delete(currentPage);
+                console.error(`[ERROR] Page ${currentPage} failed after ${maxAttempts} attempts: ${err.message}`);
               }
             }
           }
-        };
-
-        const retryWorkers = [];
-        for (let i = 0; i < Math.min(concurrencyLimit, failedPagesList.length); i++) {
-          retryWorkers.push(runRetryWorker());
         }
-        await Promise.all(retryWorkers);
+      };
 
-        failedPagesList = Array.from(pageErrors.keys());
-        retryPass++;
+      const workers = [];
+      const workerCount = Math.min(concurrencyLimit, pageQueue.length || 1);
+      for (let i = 0; i < workerCount; i++) {
+        workers.push(runWorker());
+      }
+      await Promise.all(workers);
+
+      // Retry Failed Transient Pages
+      let failedPagesList = Array.from(pageErrors.keys());
+      if (failedPagesList.length > 0) {
+        console.warn(`[WARN] Starting retry pass for ${failedPagesList.length} failed transient pages...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        for (const currentPage of failedPagesList) {
+          try {
+            const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
+            const pageData = await NetworkService.request(url, {
+              method: 'GET',
+              useCurlTransport: true
+            });
+            if (pageData && pageData.total_rank) {
+              fetchedPagesData.set(currentPage, pageData);
+              pageErrors.delete(currentPage);
+              fetchedPages.add(currentPage);
+            }
+          } catch (err) {
+            console.error(`[ERROR] Page ${currentPage} retry failed: ${err.message}`);
+          }
+        }
       }
 
       // Merge all successfully fetched pages
@@ -206,8 +201,6 @@ const LeetCodeRankingSearchService = {
               }
             });
           }
-        } else {
-          console.error(`[ERROR] Page ${p} permanently failed`);
         }
       }
 

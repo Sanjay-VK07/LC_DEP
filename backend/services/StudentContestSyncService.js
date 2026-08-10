@@ -88,17 +88,35 @@ class StudentContestSyncService {
 
     // 3. Obtain provider instance & resolve attendance records
     const provider = AttendanceProviderFactory.getProvider(providerType, { csvRecords });
-    const resolvedItems = await provider.resolveAttendance({
-      contestSlug,
-      students,
-      onProgress: typeof onProgress === 'function'
-        ? (completed, total) => {
-            // Map per-student scan progress into the 15-90% band, leaving room for setup/finalization.
-            const pct = total > 0 ? 15 + Math.round((completed / total) * 75) : 15;
-            onProgress(pct, `Scanned ${completed}/${total} students...`);
-          }
-        : null
-    });
+    let resolvedItems;
+    try {
+      resolvedItems = await provider.resolveAttendance({
+        contestSlug,
+        students,
+        onProgress: typeof onProgress === 'function'
+          ? (completed, total) => {
+              // Map per-student scan progress into the 15-90% band, leaving room for setup/finalization.
+              const pct = total > 0 ? 15 + Math.round((completed / total) * 75) : 15;
+              onProgress(pct, `Scanned ${completed}/${total} students...`);
+            }
+          : null
+      });
+    } catch (providerErr) {
+      await db.query(
+        "UPDATE LiveContests SET status = 'Failed', lastSyncAt = NOW() WHERE id = ?",
+        [liveContestId]
+      ).catch(() => {});
+      throw providerErr;
+    }
+
+    const scrapedCount = resolvedItems.scrapedParticipantCount || 0;
+    if (scrapedCount <= 0) {
+      await db.query(
+        "UPDATE LiveContests SET status = 'Failed', totalParticipants = 0, lastSyncAt = NOW() WHERE id = ?",
+        [liveContestId]
+      ).catch(() => {});
+      throw new Error(`Could not fetch contest rankings — verify contest slug '${contestSlug}' exists and has started/ended.`);
+    }
 
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Provider Resolved Items Count: ${resolvedItems.length}`);
 

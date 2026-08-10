@@ -211,12 +211,9 @@ class ContestLeaderboardSyncService {
         updateProgress(5, `Contest validated. Total participants: ${totalParticipants} (~${totalPages} pages).`);
       }
 
-      // 4. Rate Limiting, Concurrency (1-2 workers), and Queue configuration
+      // 4. Rate Limiting, Concurrency, and Queue configuration
       const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
-      const concurrencyLimit = Math.min(
-        2, // Requirement 7: Limit concurrent ranking requests to 1-2 workers
-        Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2
-      );
+      const concurrencyLimit = Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2;
 
       const fetchedPagesData = new Map();
       const pageStatus = new Map(); // page -> 'data' | 'empty'

@@ -18,9 +18,9 @@ class HybridAttendanceProvider extends AttendanceProvider {
       const rankingProvider = new RankingPageAttendanceProvider();
       return await rankingProvider.resolveAttendance({ contestSlug, students, onProgress });
     } catch (err) {
-      console.warn(`[HybridAttendanceProvider] Ranking-page leaderboard failed for "${contestSlug}" (${err.message}). Falling back to GraphQL history...`);
-      const graphqlProvider = new GraphQLAttendanceProvider();
-      return await graphqlProvider.resolveAttendance({ contestSlug, students, onProgress });
+      // Fail fast for live ranking leaderboard errors (Rate limit 429, 404, 0 participants, page 1 failure, timeouts)
+      // Do NOT fall back to multi-minute per-student GraphQL scan when live ranking page 1 fails!
+      throw err;
     }
   }
 }

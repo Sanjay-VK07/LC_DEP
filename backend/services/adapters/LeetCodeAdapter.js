@@ -116,8 +116,10 @@ class LeetCodeAdapter extends BaseAdapter {
         participants.fromCache = false;
         return participants;
       }
+      throw new Error(`Could not fetch contest rankings — verify contest slug '${slug}' exists and has started/ended.`);
     } catch (err) {
       console.warn(`[LeetCodeAdapter] Live leaderboard scrape failed for "${slug}":`, err.message);
+      throw err;
     }
 
     // ------------------------------------------------------------------
@@ -189,15 +191,32 @@ class LeetCodeAdapter extends BaseAdapter {
    * @private
    */
   async _fetchFullLeaderboard(slug) {
-    // Fetch page 1 to get total participant count
-    const page1Data = await leetcodeUtils.getContestRankingPage(slug, 1);
-    if (!page1Data || !page1Data.total_rank || page1Data.total_rank.length === 0) {
-      throw new Error(`Contest "${slug}" leaderboard is empty or inaccessible.`);
+    // 1. Fetch page 1 to verify contest accessibility and get total participant count
+    let page1Data;
+    try {
+      page1Data = await leetcodeUtils.getContestRankingPage(slug, 1);
+    } catch (err) {
+      const isCfOrRateLimit = err.name === 'CloudflareBlockedError' || err.isCloudflare || err.status === 403 || err.status === 429 || (err.message && err.message.includes('429'));
+      if (isCfOrRateLimit) {
+        throw new Error(`LeetCode API rate limit or Cloudflare block detected on page 1 (Status ${err.status || 429}). Please wait a few minutes before retrying.`);
+      }
+      if (err.status === 404 || (err.message && err.message.includes('404'))) {
+        throw new Error(`Contest '${slug}' not found on LeetCode (HTTP 404). Please verify the contest slug.`);
+      }
+      throw new Error(`Failed to fetch page 1 for contest '${slug}': ${err.message}`);
+    }
+
+    if (!page1Data || page1Data.user_num === undefined || page1Data.user_num === null || page1Data.user_num <= 0 || !page1Data.total_rank || page1Data.total_rank.length === 0) {
+      throw new Error(`Contest '${slug}' leaderboard is empty or has 0 participants. Verify contest has started and finished.`);
     }
 
     const totalUsers = page1Data.user_num || 0;
     const pageSize = page1Data.total_rank.length || DEFAULT_PAGE_SIZE;
     const totalPages = Math.ceil(totalUsers / pageSize);
+
+    if (totalPages <= 0 || totalUsers <= 0) {
+      throw new Error(`Contest '${slug}' leaderboard is empty or has 0 participants. Verify contest has started and finished.`);
+    }
 
     // Get active students to support early-exit optimization
     const activeRows = await db.query("SELECT leetcode_username FROM Users WHERE status = 'active'");
@@ -226,37 +245,112 @@ class LeetCodeAdapter extends BaseAdapter {
 
     console.log(`[LeetCodeAdapter] Contest "${slug}": ${totalUsers} participants across ${totalPages} pages. Fetching up to ${pagesToFetchLimit} pages (Ceiling: ${maxPagesCeiling})...`);
 
-    // Fetch remaining pages in controlled concurrent batches
-    const remainingPages = [];
+    // ------------------------------------------------------------------
+    // EXPLICIT PAGE TRACKING & ATOMIC QUEUE (Fixes race conditions & gaps)
+    // ------------------------------------------------------------------
+    const fetchedPages = new Set([1]);
+    const inFlightPages = new Set();
+    const permanentlyFailedPages = new Set();
+    const fetchedPagesData = new Map();
+    fetchedPagesData.set(1, page1Data);
+
+    // Populate work queue with pages 2..pagesToFetchLimit
+    const pageQueue = [];
     for (let p = 2; p <= pagesToFetchLimit; p++) {
-      remainingPages.push(p);
+      pageQueue.push(p);
     }
 
-    const fetchedPagesData = new Map();
-    const pageErrors = new Map();
-    let nextPageIndex = 0;
+    let maxClaimedPage = 1;
 
-    const runWorker = async () => {
-      while (nextPageIndex < remainingPages.length) {
-        // Early check: if we found all students, stop fetching!
+    const runWorker = async (workerId) => {
+      while (true) {
+        // Early exit check: ONLY allowed if ALL active handles are matched,
+        // NO pages are currently in-flight, and ALL pages up to maxClaimedPage are fetched cleanly.
         if (activeHandles.size > 0 && matchedHandles.size >= activeHandles.size) {
-          break;
+          if (inFlightPages.size === 0 && fetchedPages.size === maxClaimedPage) {
+            console.log(`[LeetCodeAdapter] Early-exit condition satisfied cleanly at page ${maxClaimedPage}. All ${activeHandles.size} students matched.`);
+            break;
+          }
         }
 
-        const currentPage = remainingPages[nextPageIndex++];
-        if (!currentPage) continue;
+        // Atomic shift: pull next unclaimed page from shared queue
+        let currentPage;
+        if (pageQueue.length > 0) {
+          currentPage = pageQueue.shift();
+          inFlightPages.add(currentPage);
+          if (currentPage > maxClaimedPage) {
+            maxClaimedPage = currentPage;
+          }
+        } else {
+          // Queue is empty, exit worker loop
+          break;
+        }
 
         if (PAGE_FETCH_DELAY_MS > 0) {
           await new Promise(resolve => setTimeout(resolve, PAGE_FETCH_DELAY_MS));
         }
 
-        console.log(`[INFO] Fetching page ${currentPage}`);
-        try {
-          const data = await leetcodeUtils.getContestRankingPage(slug, currentPage);
-          fetchedPagesData.set(currentPage, data);
+        let success = false;
+        let attempts = 0;
+        const maxAttempts = 3;
 
-          // Update matched handles from the newly fetched page
+        while (attempts < maxAttempts && !success) {
+          attempts++;
+          try {
+            const data = await leetcodeUtils.getContestRankingPage(slug, currentPage);
+            if (data && data.total_rank) {
+              fetchedPagesData.set(currentPage, data);
+              
+              // Update matched handles
+              for (const entry of data.total_rank) {
+                const rawUsername = entry.user_slug || entry.username || '';
+                const normUsername = normalizeUsername(rawUsername);
+                if (activeHandles.has(normUsername)) {
+                  matchedHandles.add(normUsername);
+                }
+              }
+
+              success = true;
+              inFlightPages.delete(currentPage);
+              fetchedPages.add(currentPage);
+            } else {
+              throw new Error(`Empty response returned for page ${currentPage}`);
+            }
+          } catch (err) {
+            if (attempts < maxAttempts) {
+              const backoff = 1000 * attempts;
+              await new Promise(resolve => setTimeout(resolve, backoff));
+            } else {
+              console.error(`[LeetCodeAdapter] Worker ${workerId}: Page ${currentPage} failed after ${maxAttempts} attempts: ${err.message}`);
+              inFlightPages.delete(currentPage);
+              permanentlyFailedPages.add(currentPage);
+            }
+          }
+        }
+      }
+    };
+
+    const workerCount = Math.min(PAGE_CONCURRENCY, pageQueue.length || 1);
+    const workers = [];
+    for (let i = 1; i <= workerCount; i++) {
+      workers.push(runWorker(i));
+    }
+    await Promise.all(workers);
+
+    // Retry Pass for permanently failed pages if any exist
+    if (permanentlyFailedPages.size > 0) {
+      const retryPages = Array.from(permanentlyFailedPages);
+      console.warn(`[LeetCodeAdapter] Starting final retry pass for ${retryPages.length} failed pages: [${retryPages.join(', ')}]...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      for (const pageNum of retryPages) {
+        try {
+          const data = await leetcodeUtils.getContestRankingPage(slug, pageNum);
           if (data && data.total_rank) {
+            fetchedPagesData.set(pageNum, data);
+            permanentlyFailedPages.delete(pageNum);
+            fetchedPages.add(pageNum);
+
             for (const entry of data.total_rank) {
               const rawUsername = entry.user_slug || entry.username || '';
               const normUsername = normalizeUsername(rawUsername);
@@ -265,118 +359,54 @@ class LeetCodeAdapter extends BaseAdapter {
               }
             }
           }
-        } catch (err) {
-          pageErrors.set(currentPage, err);
-          const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare;
-          if (isCf) {
-            console.warn(`[WARN] Cloudflare blocked page ${currentPage}`);
-          } else {
-            console.error(`[ERROR] Page ${currentPage} failed to fetch: ${err.message}`);
-          }
+        } catch (e) {
+          console.error(`[LeetCodeAdapter] Page ${pageNum} failed final retry: ${e.message}`);
         }
       }
-    };
-
-    const workers = [];
-    for (let i = 0; i < Math.min(PAGE_CONCURRENCY, remainingPages.length); i++) {
-      workers.push(runWorker());
-    }
-    await Promise.all(workers);
-
-    // Retry Failed Pages Only (Max 2 Passes)
-    let failedPages = Array.from(pageErrors.keys());
-    let retryPass = 1;
-    const maxRetryPasses = 2;
-
-    while (failedPages.length > 0 && retryPass <= maxRetryPasses) {
-      // Early check before starting retry pass
-      if (activeHandles.size > 0 && matchedHandles.size >= activeHandles.size) {
-        break;
-      }
-
-      console.warn(`[WARN] Starting retry pass ${retryPass} for ${failedPages.length} failed pages...`);
-      await new Promise(resolve => setTimeout(resolve, 2000 * retryPass));
-
-      let nextFailedIndex = 0;
-      const runRetryWorker = async () => {
-        while (nextFailedIndex < failedPages.length) {
-          if (activeHandles.size > 0 && matchedHandles.size >= activeHandles.size) {
-            break;
-          }
-
-          const currentPage = failedPages[nextFailedIndex++];
-          if (!currentPage) continue;
-
-          if (PAGE_FETCH_DELAY_MS > 0) {
-            await new Promise(resolve => setTimeout(resolve, PAGE_FETCH_DELAY_MS));
-          }
-
-          console.warn(`[WARN] Retrying page ${currentPage} (Attempt ${retryPass + 1})`);
-          try {
-            const data = await leetcodeUtils.getContestRankingPage(slug, currentPage);
-            fetchedPagesData.set(currentPage, data);
-            pageErrors.delete(currentPage);
-
-            // Update matched handles from the retried page
-            if (data && data.total_rank) {
-              for (const entry of data.total_rank) {
-                const rawUsername = entry.user_slug || entry.username || '';
-                const normUsername = normalizeUsername(rawUsername);
-                if (activeHandles.has(normUsername)) {
-                  matchedHandles.add(normUsername);
-                }
-              }
-            }
-          } catch (err) {
-            pageErrors.set(currentPage, err);
-            const isCf = err.name === 'CloudflareBlockedError' || err.isCloudflare;
-            if (isCf) {
-              console.warn(`[WARN] Cloudflare blocked page ${currentPage} again`);
-            } else {
-              console.error(`[ERROR] Page ${currentPage} failed retry: ${err.message}`);
-            }
-          }
-        }
-      };
-
-      const retryWorkers = [];
-      for (let i = 0; i < Math.min(PAGE_CONCURRENCY, failedPages.length); i++) {
-        retryWorkers.push(runRetryWorker());
-      }
-      await Promise.all(retryWorkers);
-
-      failedPages = Array.from(pageErrors.keys());
-      retryPass++;
     }
 
-    // Process all successfully fetched pages
-    let consecutiveEmptyPages = 0;
-    for (let p = 2; p <= pagesToFetchLimit; p++) {
-      if (!fetchedPagesData.has(p)) {
-        console.error(`[ERROR] Page ${p} permanently failed`);
-        continue;
+    // ------------------------------------------------------------------
+    // FINAL INTEGRITY CHECK BEFORE MARKING SYNC COMPLETE
+    // ------------------------------------------------------------------
+    const missingPages = [];
+    for (let p = 1; p <= pagesToFetchLimit; p++) {
+      if (!fetchedPages.has(p)) {
+        missingPages.push(p);
       }
+    }
 
+    if (missingPages.length > 0) {
+      const isEarlyExit = (activeHandles.size > 0 && matchedHandles.size >= activeHandles.size && maxClaimedPage < pagesToFetchLimit);
+      if (!isEarlyExit) {
+        const errorMsg = `Contest ranking scrape integrity failure for "${slug}": Scrape in-complete. Expected ${pagesToFetchLimit} pages, fetched ${fetchedPages.size}. Missing pages (${missingPages.length}): [${missingPages.slice(0, 10).join(', ')}${missingPages.length > 10 ? '...' : ''}]`;
+        console.error(`[LeetCodeAdapter] ${errorMsg}`);
+        throw new Error(errorMsg);
+      }
+    }
+
+    // Merge pages in strictly ascending numerical order (1..maxClaimedPage)
+    for (let p = 1; p <= maxClaimedPage; p++) {
+      if (!fetchedPagesData.has(p)) continue;
       const pageData = fetchedPagesData.get(p);
-      if (pageData && pageData.total_rank && pageData.total_rank.length > 0) {
+      if (pageData && pageData.total_rank) {
         this._mergePageIntoMap(participantMap, pageData.total_rank, pageData.submissions || [], activeHandles, matchedHandles);
-        consecutiveEmptyPages = 0;
-      } else {
-        consecutiveEmptyPages++;
-      }
-
-      if (consecutiveEmptyPages >= 3) {
-        console.log(`[LeetCodeAdapter] Stopping pagination after 3 consecutive empty pages at page ${p}.`);
-        break;
       }
     }
 
     const participants = Array.from(participantMap.values());
-    console.log(`[LeetCodeAdapter] Fetched ${participants.length} unique participants (deduped) from ${pagesToFetchLimit} pages for "${slug}". Expected: ${totalUsers}.`);
+
+    // Strict integrity check: totalPages, fetchedPages, and downloadedParticipants must be > 0
+    if (totalPages <= 0 || participants.length <= 0 || fetchedPages.size <= 0) {
+      const errStr = `Sync integrity assertion failed for contest '${slug}': totalPages (${totalPages}) and downloadedParticipants (${participants.length}) must be greater than 0.`;
+      console.error(`[LeetCodeAdapter] ${errStr}`);
+      throw new Error(errStr);
+    }
+
+    console.log(`[LeetCodeAdapter] Scrape complete for "${slug}": ${participants.length} unique participants from ${fetchedPages.size} fetched pages (Expected: ${totalUsers}).`);
 
     return {
       participants,
-      pagesFetched: pagesToFetchLimit,
+      pagesFetched: fetchedPages.size,
       totalExpected: totalUsers
     };
   }

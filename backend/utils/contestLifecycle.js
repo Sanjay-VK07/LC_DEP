@@ -21,7 +21,11 @@ function getLeetCodeOfficialStartTime(slug) {
     const n = parseInt(biweeklyMatch[1], 10);
     // Anchor: Biweekly Contest 135 = 2024-07-20 14:30:00 UTC (1721485800 seconds)
     const sec = 1721485800 + (n - 135) * 1209600;
-    return new Date(sec * 1000);
+    const d = new Date(sec * 1000);
+    if (isNaN(d.getTime()) || d.getFullYear() > 2100 || d.getFullYear() < 2010) {
+      return new Date();
+    }
+    return d;
   }
 
   const weeklyMatch = clean.match(/weekly-contest-(\d+)/);
@@ -29,7 +33,11 @@ function getLeetCodeOfficialStartTime(slug) {
     const n = parseInt(weeklyMatch[1], 10);
     // Anchor: Weekly Contest 512 = 2026-07-26 02:30:00 UTC (1785033000 seconds)
     const sec = 1785033000 + (n - 512) * 604800;
-    return new Date(sec * 1000);
+    const d = new Date(sec * 1000);
+    if (isNaN(d.getTime()) || d.getFullYear() > 2100 || d.getFullYear() < 2010) {
+      return new Date();
+    }
+    return d;
   }
 
   return null;
