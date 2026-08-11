@@ -3,10 +3,11 @@ const RankingPageAttendanceProvider = require('./RankingPageAttendanceProvider')
 const GraphQLAttendanceProvider = require('./GraphQLAttendanceProvider');
 
 /**
- * Tries the live ranking-page leaderboard first (fast, reflects real contest
- * results immediately). Falls back to GraphQL userContestRankingHistory only
- * if the leaderboard scrape fails outright (e.g. contest too old for LeetCode's
- * ranking-page retention, or Cloudflare blocked every page).
+ * Resolves attendance from the live ranking-page leaderboard (fast, reflects
+ * real contest results immediately). Fails fast on any scrape error instead
+ * of falling back to GraphQL userContestRankingHistory, which requires a
+ * slow per-student scan (minutes, not seconds) and can lag real results by
+ * a day or more.
  */
 class HybridAttendanceProvider extends AttendanceProvider {
   constructor() {

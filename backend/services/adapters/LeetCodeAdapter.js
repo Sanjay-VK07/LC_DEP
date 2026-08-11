@@ -118,8 +118,7 @@ class LeetCodeAdapter extends BaseAdapter {
       }
       throw new Error(`Could not fetch contest rankings — verify contest slug '${slug}' exists and has started/ended.`);
     } catch (err) {
-      console.warn(`[LeetCodeAdapter] Live leaderboard scrape failed for "${slug}":`, err.message);
-      throw err;
+      console.warn(`[LeetCodeAdapter] Live leaderboard scrape failed for "${slug}": ${err.message}. Falling back to standingsProvider...`);
     }
 
     // ------------------------------------------------------------------

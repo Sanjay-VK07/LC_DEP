@@ -109,8 +109,11 @@ class StudentContestSyncService {
       throw providerErr;
     }
 
-    const scrapedCount = resolvedItems.scrapedParticipantCount || 0;
-    if (scrapedCount <= 0) {
+    // Only providers that actually scrape a leaderboard (e.g. RankingPageAttendanceProvider)
+    // report scrapedParticipantCount. CSV/Legacy/GraphQL providers don't populate it, and
+    // treating that as 0 would wrongly fail every sync using those providers.
+    const scrapedCount = resolvedItems.scrapedParticipantCount;
+    if (scrapedCount !== undefined && scrapedCount <= 0) {
       await db.query(
         "UPDATE LiveContests SET status = 'Failed', totalParticipants = 0, lastSyncAt = NOW() WHERE id = ?",
         [liveContestId]

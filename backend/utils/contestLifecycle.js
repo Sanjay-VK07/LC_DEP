@@ -23,7 +23,7 @@ function getLeetCodeOfficialStartTime(slug) {
     const sec = 1721485800 + (n - 135) * 1209600;
     const d = new Date(sec * 1000);
     if (isNaN(d.getTime()) || d.getFullYear() > 2100 || d.getFullYear() < 2010) {
-      return new Date();
+      return null;
     }
     return d;
   }
@@ -35,7 +35,7 @@ function getLeetCodeOfficialStartTime(slug) {
     const sec = 1785033000 + (n - 512) * 604800;
     const d = new Date(sec * 1000);
     if (isNaN(d.getTime()) || d.getFullYear() > 2100 || d.getFullYear() < 2010) {
-      return new Date();
+      return null;
     }
     return d;
   }

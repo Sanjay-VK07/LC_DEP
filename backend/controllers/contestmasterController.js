@@ -22,7 +22,20 @@ async function getPlatformAnalytics(req, res) {
   try {
     await syncService.checkAutoSync(platform);
     const analyticsData = await analyticsService.getPlatformAnalytics(platform, studentId, { batch, type, status, startDate, endDate });
-    const contestListData = await contestService.getContests(platform, { type, status, page, limit, search });
+
+    // For a specific student, use the richer per-student contest data (join/attendance
+    // status, rank, rating, etc.) that analyticsData already computes - the leaner
+    // ContestService listing only has aggregate fields and no per-student state.
+    let contests;
+    let pagination;
+    if (studentId !== 'all') {
+      contests = analyticsData.contests;
+      pagination = { total: contests.length, page: 1, limit: contests.length, totalPages: 1 };
+    } else {
+      const contestListData = await contestService.getContests(platform, { type, status, page, limit, search });
+      contests = contestListData.contests;
+      pagination = contestListData.pagination;
+    }
 
     if (typeof res.set === 'function') {
       res.set('Cache-Control', 'no-store');
@@ -30,8 +43,8 @@ async function getPlatformAnalytics(req, res) {
 
     return res.json({
       success: true,
-      contests: contestListData.contests,
-      pagination: contestListData.pagination,
+      contests,
+      pagination,
       metrics: analyticsData.metrics,
       monthlyTrendData: analyticsData.monthlyTrendData,
       semesterAnalyticsData: analyticsData.semesterAnalyticsData,

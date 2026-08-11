@@ -1682,6 +1682,11 @@ async function getPlatformAnalyticsData(platform, studentId, filters = {}) {
       attendance_status: attendanceStatus,
       attendance_source: studentId !== 'all' ? (studentRecord?.attRec?.attendance_source === 'MANUAL' ? 'MANUAL' : 'AUTO') : 'AUTO',
       eligibility_status: eligibilityStatus,
+      // No manual register/join flow in the real (auto-sync) workflow - derive from
+      // the real signals we do have so UI state reflects actual sync results instead
+      // of permanently showing "Register"/"Join Now" even after a real sync ran.
+      is_registered: eligibilityStatus === 'Eligible',
+      is_joined: attendanceStatus === 'PRESENT',
       remarks,
       last_updated: lastUpdated,
       global_rank: contestRank,
