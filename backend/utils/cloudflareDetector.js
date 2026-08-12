@@ -61,10 +61,17 @@ function detectCloudflare({ statusCode, headers = {}, body = '' } = {}) {
   ).toLowerCase();
 
   const cfRayHeader = headers['cf-ray'] || headers['Cf-Ray'];
+  const cfMitigated = (headers['cf-mitigated'] || headers['Cf-Mitigated'] || '').toLowerCase();
 
   // Check Content-Type header
   if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
     isHtml = true;
+  }
+
+  // Check cf-mitigated header
+  if (cfMitigated.includes('challenge') || cfMitigated.includes('jschallenge') || cfMitigated.includes('managed')) {
+    isBlocked = true;
+    reason = 'Cloudflare challenge header (cf-mitigated) detected';
   }
 
   // Check HTML tags in body

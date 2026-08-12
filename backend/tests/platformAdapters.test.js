@@ -44,7 +44,7 @@ test('ContestAttendanceSyncService - runs attendance sync successfully', async (
   await db.initializeDatabase();
 
   // 1. Setup mock contest in DB
-  const slug = `test-sync-contest-${Date.now()}`;
+  const slug = `weekly-contest-999`;
   await db.query(`
     INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
     VALUES ('Test Contest', ?, 'Weekly', 101, NOW(), 5400, 'RATED', 'LeetCode', 'SYNC')
@@ -113,7 +113,7 @@ test('ContestAttendanceSyncService - runs attendance sync successfully', async (
 test('ContestAttendanceSyncService - marks Unknown on adapter failure', async () => {
   await db.initializeDatabase();
 
-  const slug = `test-fail-contest-${Date.now()}`;
+  const slug = `weekly-contest-998`;
   await db.query(`
     INSERT INTO Contests (title, slug, contest_type, contest_number, start_time, duration, contest_status, platform, source)
     VALUES ('Fail Contest', ?, 'Weekly', 102, NOW(), 5400, 'RATED', 'LeetCode', 'SYNC')

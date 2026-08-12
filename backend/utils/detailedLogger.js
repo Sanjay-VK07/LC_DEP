@@ -45,7 +45,7 @@ class DetailedLogger {
     message = '',
     cached = false
   }) {
-    const environment = process.env.RENDER ? 'Render' : 'Local';
+    const environment = (process.env.RENDER && process.env.NODE_ENV === 'production') ? 'Render' : 'Local';
     const statusStr = cached ? 'CACHED' : (httpStatus || 'N/A');
     const statusTextStr = statusText || (httpStatus === 403 ? 'Forbidden' : (httpStatus === 200 ? 'OK' : 'N/A'));
     const previewSnippet = bodyPreview ? bodyPreview.slice(0, 300).replace(/\r?\n/g, ' ') : 'N/A';
@@ -107,7 +107,7 @@ ${previewSnippet}
     failedPages = 0,
     totalExecutionTimeMs = 0
   }) {
-    const environment = process.env.RENDER ? 'Render' : 'Local';
+    const environment = (process.env.RENDER && process.env.NODE_ENV === 'production') ? 'Render' : 'Local';
     const durationSec = (totalExecutionTimeMs / 1000).toFixed(2);
     const summaryBox = `
 ==================================================

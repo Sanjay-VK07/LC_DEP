@@ -47,9 +47,10 @@ function processPendingQueue() {
   });
 }
 
-// Cached CSRF session cookie for the LeetCode GraphQL endpoint (Django requires it on POST).
+// Cached CSRF session cookie and auth token for the LeetCode GraphQL endpoint
 let sessionCookie = null;
 let cookieFetchPromise = null;
+let authToken = process.env.LEETCODE_AUTH_TOKEN || null;
 
 function fetchSessionCookie() {
   if (cookieFetchPromise) return cookieFetchPromise;
@@ -58,7 +59,7 @@ function fetchSessionCookie() {
       hostname: 'leetcode.com',
       path: '/graphql/',
       method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      headers: { 'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36' },
       timeout: 10000
     }, (res) => {
       res.resume(); // drain body, we only need headers
@@ -77,8 +78,33 @@ function fetchSessionCookie() {
   return cookieFetchPromise;
 }
 
-function isCsrfFailure(statusCode, data) {
-  return statusCode === 403 && typeof data === 'string' && data.toLowerCase().includes('csrf');
+/**
+ * Refreshes stale CSRF session cookie and LeetCode auth token.
+ * Can be called before sync jobs or automatically on token expiration errors.
+ * @returns {Promise<{sessionCookie: string|null, authToken: string|null}>}
+ */
+async function refreshLeetCodeAuthToken() {
+  console.log('[LeetCode API] Refreshing LeetCode session token and CSRF cookie...');
+  sessionCookie = null;
+  cookieFetchPromise = null;
+  if (process.env.LEETCODE_AUTH_TOKEN) {
+    authToken = process.env.LEETCODE_AUTH_TOKEN;
+  }
+  const newCookie = await fetchSessionCookie();
+  return { sessionCookie: newCookie, authToken };
+}
+
+function isCsrfOrTokenFailure(statusCode, data) {
+  const dataStr = typeof data === 'string' ? data.toLowerCase() : '';
+  const isCsrf = statusCode === 403 && dataStr.includes('csrf');
+  const isTokenExpired = statusCode === 401 || (statusCode === 403 && (
+    dataStr.includes('authorization') ||
+    dataStr.includes('token') ||
+    dataStr.includes('unauthorized') ||
+    dataStr.includes('expired') ||
+    dataStr.includes('invalid')
+  ));
+  return isCsrf || isTokenExpired;
 }
 
 async function queryLeetCodeRaw(query, variables = {}, isCookieRetry = false) {
@@ -92,12 +118,19 @@ async function queryLeetCodeRaw(query, variables = {}, isCookieRetry = false) {
     const headers = {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(postData),
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
       'Referer': 'https://leetcode.com/'
     };
     if (sessionCookie) {
       headers['Cookie'] = sessionCookie;
-      headers['x-csrftoken'] = sessionCookie.split('=')[1];
+      const csrfToken = sessionCookie.split('=')[1];
+      if (csrfToken) {
+        headers['x-csrftoken'] = csrfToken;
+      }
+    }
+    const currentToken = authToken || process.env.LEETCODE_AUTH_TOKEN;
+    if (currentToken) {
+      headers['Authorization'] = currentToken.startsWith('Bearer ') ? currentToken : `Bearer ${currentToken}`;
     }
 
     const options = {
@@ -114,10 +147,10 @@ async function queryLeetCodeRaw(query, variables = {}, isCookieRetry = false) {
         data += chunk;
       });
       res.on('end', async () => {
-        if (isCsrfFailure(res.statusCode, data) && !isCookieRetry) {
-          // Stale/missing CSRF cookie — refresh once and retry.
-          sessionCookie = null;
-          await fetchSessionCookie();
+        const isExpiredErr = isCsrfOrTokenFailure(res.statusCode, data);
+        if (isExpiredErr && !isCookieRetry) {
+          console.warn(`[LeetCode API] Token or CSRF validation failed (HTTP ${res.statusCode}). Refreshing token and retrying...`);
+          await refreshLeetCodeAuthToken();
           try {
             resolve(await queryLeetCodeRaw(query, variables, true));
           } catch (e) {
@@ -130,7 +163,17 @@ async function queryLeetCodeRaw(query, variables = {}, isCookieRetry = false) {
           try {
             const json = JSON.parse(data);
             if (json.errors && json.errors.length > 0) {
-              const errMsg = json.errors[0].message;
+              const errMsg = json.errors[0].message || '';
+              if ((errMsg.toLowerCase().includes('token') || errMsg.toLowerCase().includes('authorization') || errMsg.toLowerCase().includes('expired')) && !isCookieRetry) {
+                console.warn(`[LeetCode API] GraphQL returned token error: "${errMsg}". Refreshing token and retrying...`);
+                await refreshLeetCodeAuthToken();
+                try {
+                  resolve(await queryLeetCodeRaw(query, variables, true));
+                } catch (e) {
+                  reject(e);
+                }
+                return;
+              }
               const err = new Error(errMsg);
               err.status = res.statusCode;
               reject(err);
@@ -299,17 +342,70 @@ async function getUserContestHistory(username) {
   }
 }
 
+const LEADERBOARD_RPM = parseInt(process.env.LEETCODE_LEADERBOARD_REQUESTS_PER_MINUTE, 10) || 2;
+const LEADERBOARD_DELAY_MS = Math.ceil(60000 / LEADERBOARD_RPM);
+
+let lastLeaderboardTime = 0;
+const leaderboardQueue = [];
+let isProcessingLeaderboardQueue = false;
+
+function throttleLeaderboardRequest(fn) {
+  return new Promise((resolve, reject) => {
+    leaderboardQueue.push({ fn, resolve, reject });
+    processLeaderboardQueue();
+  });
+}
+
+async function processLeaderboardQueue() {
+  if (isProcessingLeaderboardQueue || leaderboardQueue.length === 0) return;
+  isProcessingLeaderboardQueue = true;
+
+  while (leaderboardQueue.length > 0) {
+    const now = Date.now();
+    const elapsed = now - lastLeaderboardTime;
+    if (elapsed < LEADERBOARD_DELAY_MS && lastLeaderboardTime > 0) {
+      const waitMs = LEADERBOARD_DELAY_MS - elapsed;
+      console.log(`[LEADERBOARD] Throttling leaderboard request (${LEADERBOARD_RPM} req/min). Waiting ${waitMs}ms...`);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+    lastLeaderboardTime = Date.now();
+
+    const { fn, resolve, reject } = leaderboardQueue.shift();
+    try {
+      const result = await fn();
+      resolve(result);
+    } catch (err) {
+      reject(err);
+    }
+  }
+
+  isProcessingLeaderboardQueue = false;
+}
+
 /**
  * Fetches one page of contest ranking from LeetCode
  * @param {string} contestSlug - LeetCode contest slug
  * @param {number} page - Page number to fetch
+ * @param {object} [options={}] - Additional options for network request
  * @returns {Promise<object>} - Page ranking data
  */
-function getContestRankingPage(contestSlug, page = 1) {
-  const url = `https://leetcode.com/contest/api/ranking/${contestSlug}/?pagination=${page}`;
-  return NetworkService.request(url, {
-    useCurlTransport: true,
-    timeout: 15000
+function getContestRankingPage(contestSlug, page = 1, options = {}) {
+  return throttleLeaderboardRequest(() => {
+    const url = `https://leetcode.com/contest/api/ranking/${contestSlug}/?pagination=${page}`;
+    const customHeaders = {
+      'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      'Accept': 'application/json, text/plain, */*',
+      'Referer': `https://leetcode.com/contest/${contestSlug}/ranking/`
+    };
+    return NetworkService.request(url, {
+      useCurlTransport: true,
+      timeout: 15000,
+      ...options,
+      headers: {
+        ...customHeaders,
+        ...(options.headers || {})
+      }
+    });
   });
 }
 
@@ -622,7 +718,108 @@ async function getUserContestRankingAndHistory(username) {
   }
 }
 
+/**
+ * Constructs a GraphQL batch query string for multiple usernames using field aliases.
+ * @param {Array<string>} usernames 
+ * @returns {string} GraphQL query string
+ */
+function buildBatchContestRankingQuery(usernames = []) {
+  const cleanUsernames = Array.from(new Set(usernames.map(u => (u || '').trim()).filter(Boolean)));
+  if (cleanUsernames.length === 0) return '';
+
+  const queryFields = cleanUsernames.map((username, idx) => `
+    user_${idx}: userContestRankingHistory(username: "${username.replace(/"/g, '\\"')}") {
+      attended
+      ranking
+      score
+      problemsSolved
+      totalProblems
+      finishTimeInSeconds
+      contest {
+        title
+        titleSlug
+        startTime
+      }
+    }
+  `).join('\n');
+
+  return `
+    query getBatchUserContestRankingHistory {
+      ${queryFields}
+    }
+  `;
+}
+
+/**
+ * Fetches userContestRankingHistory for a batch of student usernames (up to 25-50 per call) in a single GraphQL query using aliases.
+ * @param {Array<string>} usernames - List of LeetCode usernames
+ * @returns {Promise<Object<string, Array>>} Map of username -> userContestRankingHistory array
+ */
+async function getBatchUserContestRankingHistory(usernames = []) {
+  if (!usernames || usernames.length === 0) return {};
+
+  const cleanUsernames = Array.from(new Set(usernames.map(u => (u || '').trim()).filter(Boolean)));
+  if (cleanUsernames.length === 0) return {};
+
+  const batchQuery = buildBatchContestRankingQuery(cleanUsernames);
+  if (!batchQuery) return {};
+
+  try {
+    const json = await queryLeetCode(batchQuery);
+    const resultMap = {};
+    if (json && json.data) {
+      cleanUsernames.forEach((username, idx) => {
+        resultMap[username] = json.data[`user_${idx}`] || [];
+      });
+    }
+    return resultMap;
+  } catch (err) {
+    console.error(`[LeetCode API] Error in getBatchUserContestRankingHistory for batch of ${cleanUsernames.length} users:`, err.message);
+    throw err;
+  }
+}
+
+/**
+ * Fetches contest history for a single user from alfa-leetcode-api endpoint.
+ * Serves as secondary fallback after batched GraphQL query.
+ * @param {string} username - LeetCode username
+ * @returns {Promise<Array<{attended: boolean, ranking: number, score: number, problemsSolved: number, finishTimeInSeconds: number, contest: {title: string, titleSlug: string}}>>}
+ */
+async function fetchContestHistoryFromAlfaApi(username) {
+  if (!username) return [];
+  const baseUrl = process.env.ALFA_LEETCODE_API_URL || 'https://alfa-leetcode-api.onrender.com';
+  const url = `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(username)}/contest/history`;
+
+  try {
+    const data = await NetworkService.request(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Accept': 'application/json'
+      }
+    });
+
+    const rawList = (data && Array.isArray(data.contestHistory)) ? data.contestHistory : (Array.isArray(data) ? data : []);
+    return rawList.map(h => ({
+      attended: Boolean(h.attended),
+      ranking: h.ranking || h.rank || null,
+      problemsSolved: h.problemsSolved || h.solved || 0,
+      finishTimeInSeconds: h.finishTimeInSeconds || h.finishTime || 0,
+      score: h.score || 0,
+      contest: {
+        title: h.contest?.title || h.title || '',
+        titleSlug: h.contest?.titleSlug || h.titleSlug || ''
+      }
+    }));
+  } catch (err) {
+    console.warn(`[ALFA_API_FALLBACK] Failed to fetch contest history for ${username} from alfa-leetcode-api:`, err.message);
+    return [];
+  }
+}
+
 module.exports = {
+  refreshLeetCodeAuthToken,
+  buildBatchContestRankingQuery,
   verifyLeetCodeUsername,
   getRecentContests,
   getUserContestHistory,
@@ -631,6 +828,8 @@ module.exports = {
   getUserLeetCodeStats,
   getUserSubmissions,
   getUserContestRanking,
-  getUserContestRankingAndHistory
+  getUserContestRankingAndHistory,
+  getBatchUserContestRankingHistory,
+  fetchContestHistoryFromAlfaApi
 };
 

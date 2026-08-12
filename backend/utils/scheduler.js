@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const db = require('../config/db');
 const leetcode = require('./leetcode');
 const standingsProvider = require('./standingsProvider');
+const { getAdapter } = require('../services/adapters/AdapterFactory');
 const { normalizeUsername } = require('../utils/usernameNormalizer');
 const LeetCodeConnector = require('../services/connectors/LeetCodeConnector');
 const CodeChefConnector = require('../services/connectors/CodeChefConnector');
@@ -160,18 +161,54 @@ async function syncAllData() {
         return contestStartTime >= start && contestStartTime <= end;
       });
 
-      // Fetch official participants from standingsProvider
+      // Fetch official participants using resilient platform adapter for LeetCode
+      const platformKey = contest.platform ? contest.platform.toLowerCase() : 'leetcode';
       let providerParticipants = [];
-      try {
-        providerParticipants = await standingsProvider.fetchStandings(contest.platform || 'LeetCode', contest.slug);
-        console.log(`[Sync] Fetched ${providerParticipants.length} official participants from standingsProvider for ${contest.slug}`);
-      } catch (err) {
-        console.warn(`[Sync] Failed to fetch participants for ${contest.slug}:`, err.message);
+      let syncStatus = 'SUCCESS';
+
+      if (platformKey === 'leetcode') {
+        console.log(`[LeetCodeSync] Using resilient LeetCodeAdapter for "${contest.slug}"...`);
+        try {
+          const adapter = getAdapter('leetcode');
+          const result = await adapter.getContestParticipants(contest.slug, {
+            bypassCache: true,
+            students: eligibleUsers
+          });
+
+          syncStatus = result.syncStatus || (Array.isArray(result) && result.length > 0 ? 'SUCCESS' : 'SYNC_FAILED');
+          console.log(`[LeetCodeSync] Participant sync status: ${syncStatus}`);
+
+          if (syncStatus === 'SYNC_FAILED') {
+            console.error(`[SYNC_FAILED] contest="${contest.slug}" reason="Upstream participant data unavailable"`);
+            console.warn(`[Sync] [WARNING] LeetCode sync status SYNC_FAILED for contest "${contest.slug}". Skipping attendance finalization to prevent false zero / absent downgrades.`);
+            continue;
+          }
+
+          if (syncStatus === 'PARTIAL') {
+            const resCount = result.resolvedCount !== undefined ? result.resolvedCount : (result.length || 0);
+            const unresCount = result.unresolvedCount !== undefined ? result.unresolvedCount : 0;
+            console.log(`[SYNC_PARTIAL] contest="${contest.slug}" resolved=${resCount} unresolved=${unresCount}`);
+          }
+
+          providerParticipants = Array.isArray(result) ? result : (result.participants || []);
+        } catch (err) {
+          console.error(`[SYNC_FAILED] contest="${contest.slug}" reason="${err.message}"`);
+          console.warn(`[Sync] [WARNING] LeetCode sync failed for contest "${contest.slug}". Skipping attendance finalization to prevent false zero / absent downgrades.`);
+          continue;
+        }
+      } else {
+        // Non-LeetCode platforms continue using standingsProvider
+        try {
+          providerParticipants = await standingsProvider.fetchStandings(contest.platform, contest.slug);
+          console.log(`[Sync] Fetched ${providerParticipants.length} official participants from standingsProvider for ${contest.slug}`);
+        } catch (err) {
+          console.warn(`[Sync] Failed to fetch participants for ${contest.slug}:`, err.message);
+        }
       }
 
-      // Zero Participant Protection
+      // Zero Participant Protection (applies to all platforms)
       if (providerParticipants.length === 0) {
-        console.warn(`[Sync] [WARNING] standingsProvider returned 0 participants for contest "${contest.slug}". Skipping attendance finalization to prevent downgrades.`);
+        console.warn(`[Sync] [WARNING] 0 participants returned for contest "${contest.slug}". Skipping attendance finalization to prevent downgrades.`);
         continue;
       }
 

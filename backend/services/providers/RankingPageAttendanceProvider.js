@@ -19,13 +19,18 @@ class RankingPageAttendanceProvider extends AttendanceProvider {
     const adapter = new LeetCodeAdapter();
     let participants;
     try {
-      participants = await adapter.getContestParticipants(contestSlug, { bypassCache });
+      participants = await adapter.getContestParticipants(contestSlug, { bypassCache, students });
     } catch (err) {
+      console.error(`[RankingPageAttendanceProvider] [SYNC_FAILED] Upstream sync failed for "${contestSlug}": ${err.message}. Refusing to mark students absent.`);
       throw err;
     }
 
-    if (!participants || participants.length === 0) {
-      throw new Error(`Contest '${contestSlug}' leaderboard is empty or has 0 participants. Verify contest has started and finished.`);
+    if (!participants || participants.length === 0 || participants.syncStatus === 'SYNC_FAILED') {
+      const syncErr = new Error(`Contest '${contestSlug}' sync failed — participant data unavailable.`);
+      syncErr.syncStatus = 'SYNC_FAILED';
+      syncErr.code = 'SYNC_FAILED';
+      console.error(`[RankingPageAttendanceProvider] [SYNC_FAILED] ${syncErr.message}`);
+      throw syncErr;
     }
 
     // Build participant lookup map with explicit normalization on scraped usernames

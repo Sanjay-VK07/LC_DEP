@@ -27,6 +27,7 @@ class CloudflareBlockedError extends Error {
     this.isCloudflare = true;
     this.code = 'CLOUDFLARE_BLOCK';
     this.status = details.status || 403;
+    this.retryable = false;
     this.statusText = details.statusText || (this.status === 403 ? 'Forbidden' : 'Cloudflare Block');
     this.url = details.url || null;
     this.contestSlug = details.contestSlug || 'N/A';

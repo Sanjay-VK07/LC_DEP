@@ -98,13 +98,16 @@ function enqueue(type, payload, handler) {
         attempt++;
         job.retryCount = attempt;
 
-        if (attempt > maxRetries) {
+        const isNonRetryable = err.retryable === false || err.code === 'CLOUDFLARE_BLOCK' || err.syncStatus === 'SYNC_FAILED';
+
+        if (attempt > maxRetries || isNonRetryable) {
           job.status = JOB_STATUS.FAILED;
           job.completedAt = new Date().toISOString();
           job.error = err.message || String(err);
-          job.message = `Failed after ${maxRetries} retries: ${job.error}`;
+          job.message = `Failed${isNonRetryable ? ' (non-retryable error)' : ` after ${maxRetries} retries`}: ${job.error}`;
           emitter.emit('job:failed', job);
-          console.error(`[JobQueue] Job ${jobId} (${type}) failed permanently: ${err.message}`);
+          console.error(`[JobQueue] Job ${jobId} (${type}) failed permanently${isNonRetryable ? ' (non-retryable error)' : ''}: ${err.message}`);
+          break; // Stop retrying non-retryable errors
         } else {
           // Linear backoff delay
           await new Promise(r => setTimeout(r, 2000 * attempt));

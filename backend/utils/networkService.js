@@ -281,6 +281,19 @@ class NetworkService {
       responseType: 'text' // Raw text first for safe inspection
     };
 
+    const proxyUrl = process.env.LEETCODE_PROXY_URL || process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+    if (proxyUrl) {
+      try {
+        const parsedProxy = new URL(proxyUrl);
+        config.proxy = {
+          protocol: parsedProxy.protocol.replace(':', ''),
+          host: parsedProxy.hostname,
+          port: parseInt(parsedProxy.port, 10) || (parsedProxy.protocol === 'https:' ? 443 : 80),
+          ...(parsedProxy.username ? { auth: { username: parsedProxy.username, password: parsedProxy.password } } : {})
+        };
+      } catch (_) {}
+    }
+
     const response = await persistentAxios(config);
     const body = response.data;
     const statusCode = response.status;
@@ -350,9 +363,16 @@ class NetworkService {
           headerFlags += ` -H "${key}: ${escapedValue}"`;
         }
       }
+
+      let proxyFlag = '';
+      const proxyUrl = process.env.LEETCODE_PROXY_URL || process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+      if (proxyUrl) {
+        const escapedProxy = String(proxyUrl).replace(/"/g, '\\"');
+        proxyFlag = ` -x "${escapedProxy}"`;
+      }
       
       const maxTimeSec = Math.ceil(timeout / 1000);
-      const cmd = `curl -i -L -s --compressed --max-time ${maxTimeSec}${headerFlags} "${url}"`;
+      const cmd = `curl -i -L -s --compressed --max-time ${maxTimeSec}${proxyFlag}${headerFlags} "${url}"`;
 
       exec(cmd, { maxBuffer: 30 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
         if (err) {
