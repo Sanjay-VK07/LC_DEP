@@ -86,34 +86,136 @@ class StudentContestSyncService {
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contests.contest_id: ${realContestId}`);
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] LiveContests.id: ${liveContestId}`);
 
-    // 3. Obtain provider instance & resolve attendance records
-    const provider = AttendanceProviderFactory.getProvider(providerType, { csvRecords });
-    let resolvedItems;
+    // 3. Obtain provider instance & resolve attendance records with automatic CLIST fallback
+    let provider = AttendanceProviderFactory.getProvider(providerType, { csvRecords });
+    let resolvedItems = null;
+    let providerFailed = false;
+
+    // Collect registered student handles for early-exit optimization in CLIST fallback
+    const registeredUsernames = students
+      .map(s => normalizeUsername(s.leetcode_username))
+      .filter(Boolean);
+
     try {
       resolvedItems = await provider.resolveAttendance({
         contestSlug,
         students,
         onProgress: typeof onProgress === 'function'
           ? (completed, total) => {
-              // Map per-student scan progress into the 15-90% band, leaving room for setup/finalization.
               const pct = total > 0 ? 15 + Math.round((completed / total) * 75) : 15;
               onProgress(pct, `Scanned ${completed}/${total} students...`);
             }
           : null
       });
-    } catch (providerErr) {
+
+      const scrapedCount = resolvedItems ? resolvedItems.scrapedParticipantCount : undefined;
+      if (scrapedCount !== undefined && scrapedCount <= 0) {
+        console.warn(`[StudentContestSyncService] Primary provider "${provider.providerName || providerType}" returned 0 participants. Triggering CLIST fallback...`);
+        providerFailed = true;
+      }
+    } catch (primaryErr) {
+      console.warn(`[StudentContestSyncService] Primary provider "${provider.providerName || providerType}" failed (${primaryErr.message}). Triggering CLIST fallback...`);
+      providerFailed = true;
+    }
+
+    // Automated CLIST Fallback Orchestration
+    let isClistFallback = false;
+    if (providerFailed && providerType !== 'CLIST') {
+      const ClistAdapterClass = require('./clist/ClistAdapter');
+      const clistAdapter = new ClistAdapterClass();
+
+      if (clistAdapter.isAvailable()) {
+        console.log(`[StudentContestSyncService] Executing CLIST fallback for contest "${contestSlug}"...`);
+        try {
+          // Discover contest or search by event name / slug
+          const ClistClient = require('./clist/ClistClient');
+          const contestSearchRes = await ClistClient.getContests({
+            resource: 'leetcode.com',
+            search: contestSlug.replace(/-/g, ' ')
+          }).catch(() => null);
+
+          let clistContestId = contestSlug;
+          if (contestSearchRes && contestSearchRes.objects && contestSearchRes.objects.length > 0) {
+            const matchedContest = contestSearchRes.objects.find(c =>
+              (c.key || '').toLowerCase() === contestSlug.toLowerCase() ||
+              (c.event || '').toLowerCase() === contestSlug.replace(/-/g, ' ').toLowerCase()
+            ) || contestSearchRes.objects[0];
+            clistContestId = matchedContest.id;
+          }
+
+          const clistParticipants = await clistAdapter.getContestParticipants(clistContestId, {
+            resource: 'leetcode.com',
+            registeredUsernames
+          });
+
+          // Match CLIST participants against registered student roster
+          const clistParticipantMap = new Map();
+          for (const p of clistParticipants) {
+            if (p.username) clistParticipantMap.set(p.username, p);
+          }
+
+          const isLeaderboardComplete = clistParticipants.leaderboardComplete === true;
+          const isAttendanceVerified = clistParticipants.attendanceVerified === true;
+
+          resolvedItems = students.map(student => {
+            const normUser = normalizeUsername(student.leetcode_username);
+            const participantData = normUser ? clistParticipantMap.get(normUser) : null;
+
+            if (participantData && participantData.rank > 0) {
+              return {
+                studentId: student.id,
+                username: student.leetcode_username,
+                attended: true,
+                status: 'PRESENT',
+                rank: participantData.rank,
+                score: participantData.score,
+                problemsSolved: participantData.score > 0 ? Math.min(4, Math.floor(participantData.score / 3)) : 0,
+                rating: null,
+                source: 'CLIST',
+                provider: 'CLIST',
+                error: null
+              };
+            }
+
+            // NEGATIVE EVIDENCE SAFETY RULE: Mark ABSENT ONLY if leaderboard is 100% complete
+            const finalStatus = isLeaderboardComplete ? 'ABSENT' : 'UNKNOWN';
+            return {
+              studentId: student.id,
+              username: student.leetcode_username,
+              attended: false,
+              status: finalStatus,
+              rank: null,
+              score: 0.00,
+              problemsSolved: 0,
+              rating: null,
+              source: 'CLIST',
+              provider: 'CLIST',
+              error: isAttendanceVerified ? null : `CLIST data syncState=${clistParticipants.syncState}`
+            };
+          });
+
+          resolvedItems.scrapedParticipantCount = clistParticipants.totalCount || clistParticipants.length;
+          resolvedItems.leaderboardComplete = isLeaderboardComplete;
+          resolvedItems.syncState = clistParticipants.syncState;
+          provider = clistAdapter;
+          isClistFallback = true;
+          console.log(`[StudentContestSyncService] CLIST fallback succeeded. syncState="${clistParticipants.syncState}", leaderboardComplete=${isLeaderboardComplete}`);
+        } catch (clistErr) {
+          console.error(`[StudentContestSyncService] CLIST fallback failed: ${clistErr.message}`);
+        }
+      }
+    }
+
+    if (!resolvedItems) {
       await db.query(
         "UPDATE LiveContests SET status = 'Failed', lastSyncAt = NOW() WHERE id = ?",
         [liveContestId]
       ).catch(() => {});
-      throw providerErr;
+      throw new Error(`Failed to resolve attendance for contest '${contestSlug}' across all providers (including CLIST fallback).`);
     }
 
-    // Only providers that actually scrape a leaderboard (e.g. RankingPageAttendanceProvider)
-    // report scrapedParticipantCount. CSV/Legacy/GraphQL providers don't populate it, and
-    // treating that as 0 would wrongly fail every sync using those providers.
     const scrapedCount = resolvedItems.scrapedParticipantCount;
-    if (scrapedCount !== undefined && scrapedCount <= 0) {
+    if (scrapedCount !== undefined && scrapedCount <= 0 && !isClistFallback) {
       await db.query(
         "UPDATE LiveContests SET status = 'Failed', totalParticipants = 0, lastSyncAt = NOW() WHERE id = ?",
         [liveContestId]

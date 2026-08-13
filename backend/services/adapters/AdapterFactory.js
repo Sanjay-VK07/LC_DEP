@@ -2,12 +2,14 @@ const LeetCodeAdapter = require('./LeetCodeAdapter');
 const CodeforcesAdapter = require('./CodeforcesAdapter');
 const CodeChefAdapter = require('./CodeChefAdapter');
 const HackerRankAdapter = require('./HackerRankAdapter');
+const ClistAdapter = require('../clist/ClistAdapter');
 
 const adapters = {
   leetcode: new LeetCodeAdapter(),
   codeforces: new CodeforcesAdapter(),
   codechef: new CodeChefAdapter(),
-  hackerrank: new HackerRankAdapter()
+  hackerrank: new HackerRankAdapter(),
+  clist: new ClistAdapter()
 };
 
 function getAdapter(platform) {
@@ -33,6 +35,7 @@ function resetAdapters() {
   adapters.codeforces = new CodeforcesAdapter();
   adapters.codechef = new CodeChefAdapter();
   adapters.hackerrank = new HackerRankAdapter();
+  adapters.clist = new ClistAdapter();
 }
 
 module.exports = {

@@ -55,8 +55,8 @@ class GraphQLAttendanceProvider extends AttendanceProvider {
     const failedUsernames = [];
     const timeoutUsernames = [];
 
-    const CONCURRENCY = parseInt(process.env.LEETCODE_GRAPHQL_CONCURRENCY, 10) || 5;
-    const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 50;
+    const CONCURRENCY = parseInt(process.env.LEETCODE_GRAPHQL_CONCURRENCY, 10) || 10;
+    const DELAY_MS = parseInt(process.env.LEETCODE_GRAPHQL_DELAY_MS, 10) || 10;
 
     let index = 0;
     let completed = 0;

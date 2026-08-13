@@ -118,7 +118,28 @@ async function verifyContestExistsOnLeetCode(slug) {
   const isMock = slug.startsWith('test-') || slug.startsWith('mock-') || slug.startsWith('dummy-') || slug.startsWith('upcoming-live-');
   if (isMock) return true;
 
-  // 1. GraphQL list check
+  // 1. GraphQL contestDetail direct query (Primary Source of Truth)
+  try {
+    const leetcodeUtils = require('./leetcode');
+    const contestDetailQuery = `
+      query getContestDetail($contestSlug: String!) {
+        contestDetail(contestSlug: $contestSlug) {
+          titleSlug
+          startTime
+          duration
+        }
+      }
+    `;
+    const response = await leetcodeUtils.queryLeetCode(contestDetailQuery, { contestSlug: slug });
+    if (response && response.data && response.data.contestDetail && response.data.contestDetail.titleSlug === slug) {
+      console.log(`[ContestValidator] Verified existence of "${slug}" via GraphQL contestDetail query.`);
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[ContestValidator] GraphQL contestDetail verification failed for "${slug}":`, err.message);
+  }
+
+  // 2. GraphQL allContests list check
   try {
     const contestsQuery = `
       query {
@@ -143,38 +164,40 @@ async function verifyContestExistsOnLeetCode(slug) {
     if (response && response.data && response.data.allContests) {
       const exists = response.data.allContests.some(c => c.titleSlug === slug);
       if (exists) {
-        console.log(`[ContestValidator] Verified existance of "${slug}" via GraphQL.`);
+        console.log(`[ContestValidator] Verified existence of "${slug}" via GraphQL allContests list.`);
         return true;
       }
     }
   } catch (err) {
-    console.warn(`[ContestValidator] GraphQL verification failed for "${slug}":`, err.message);
+    console.warn(`[ContestValidator] GraphQL allContests verification failed for "${slug}":`, err.message);
   }
 
-  // 2. Contest info API check
+  // 3. Contest info API check
   try {
     const infoUrl = `https://leetcode.com/contest/api/info/${slug}/`;
     const response = await NetworkService.request(infoUrl, {
       method: 'GET',
+      useCurlTransport: true,
       timeout: 10000
     });
     if (response && response.contest) {
-      console.log(`[ContestValidator] Verified existance of "${slug}" via Contest Info API.`);
+      console.log(`[ContestValidator] Verified existence of "${slug}" via Contest Info API.`);
       return true;
     }
   } catch (err) {
     console.warn(`[ContestValidator] Contest Info API verification failed for "${slug}":`, err.message);
   }
 
-  // 3. Ranking API page 1 check
+  // 4. Ranking API page 1 check
   try {
     const rankingUrl = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=1`;
     const response = await NetworkService.request(rankingUrl, {
       method: 'GET',
+      useCurlTransport: true,
       timeout: 10000
     });
     if (response && (response.total_rank || response.rank_rows)) {
-      console.log(`[ContestValidator] Verified existance of "${slug}" via Ranking API.`);
+      console.log(`[ContestValidator] Verified existence of "${slug}" via Ranking API.`);
       return true;
     }
   } catch (err) {

@@ -120,8 +120,18 @@ async function getMigrationHealth(req, res) {
   }
 }
 
+/**
+ * Get CLIST provider health status.
+ */
+function getClistHealth(req, res) {
+  const ClistClient = require('../services/clist/ClistClient');
+  const health = ClistClient.getHealth();
+  return res.json(health);
+}
+
 module.exports = {
   getSystemHealth,
   getPlatformHealth,
-  getMigrationHealth
+  getMigrationHealth,
+  getClistHealth
 };

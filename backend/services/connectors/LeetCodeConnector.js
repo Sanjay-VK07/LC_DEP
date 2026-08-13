@@ -41,6 +41,44 @@ const LeetCodeConnector = {
       } catch (e) {}
     }
 
+    // Attempt Leet.ai API first if configured
+    const leetAiClient = require('../../utils/leetAiClient');
+    if (leetAiClient.isConfigured()) {
+      try {
+        console.log(`[LeetCodeConnector] [LEETAI_API] Fetching profile stats for ${username}...`);
+        const aiProfile = await leetAiClient.getUserProfile(username);
+        if (aiProfile && aiProfile.success) {
+          const ratings = (aiProfile.contestHistory || [])
+            .map(h => h.rating || h.contestRating)
+            .filter(r => r !== null && r !== undefined && Number.isFinite(Number(r)));
+          const maxRating = ratings.length > 0 ? Math.max(...ratings) : (aiProfile.contestRating || 1500);
+
+          const stats = {
+            success: true,
+            username,
+            totalSolved: aiProfile.totalSolved || 0,
+            easySolved: aiProfile.easySolved || 0,
+            mediumSolved: aiProfile.mediumSolved || 0,
+            hardSolved: aiProfile.hardSolved || 0,
+            contestRating: aiProfile.contestRating || 1500,
+            globalRanking: aiProfile.globalRanking || null,
+            maxRating: maxRating,
+            contestHistory: aiProfile.contestHistory || [],
+            source: 'LEETAI_API'
+          };
+
+          fs.writeFileSync(cacheFile, JSON.stringify(stats, null, 2));
+          console.log(`[LeetCodeConnector] [LEETAI_API] Fetched and cached profile for ${username}.`);
+          return stats;
+        }
+      } catch (aiErr) {
+        console.warn(`[LeetCodeConnector] Leet.ai API profile fetch failed for ${username}: ${aiErr.message}. Falling back to GraphQL...`);
+        if (aiErr.nonRetryable || aiErr.statusCode === 401 || aiErr.statusCode === 403) {
+          console.error(`[LeetCodeConnector] Authentication failed (HTTP ${aiErr.statusCode}). Check LEETAI_API_KEY.`);
+        }
+      }
+    }
+
     try {
       const stats = await getUserLeetCodeStats(username);
       if (!stats || !stats.success) {

@@ -34,90 +34,163 @@ const LeetCodeRankingSearchService = {
     try {
       console.log(`[Ranking Search] Starting sync for contest: ${slug}`);
 
-      console.log("Calling LeetCode API...");
-      // 1. Fetch Page 1 to verify contest and get total count
-      const page1Url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=1`;
-      let page1Data;
-      try {
-        page1Data = await NetworkService.request(page1Url, {
-          method: 'GET',
-          useCurlTransport: true,
-          retries: 3,
-          backoffFactor: 1500
-        });
-      } catch (err) {
-        console.error(`[Ranking Search] Failed to fetch page 1 for ${slug}:`, err.message);
-        throw err;
-      }
-
-      console.log("Received response");
-      if (!page1Data || page1Data.user_num === undefined) {
-        throw new Error(`Invalid response schema for contest '${slug}'`);
-      }
-
-      totalParticipants = page1Data.user_num;
-      // Task 5: Derive page size from actual response instead of magic number
-      const pageSize = (page1Data.total_rank && page1Data.total_rank.length) || DEFAULT_PAGE_SIZE;
-      const totalPages = Math.ceil(totalParticipants / pageSize);
-      console.log(`[Ranking Search] Contest: ${slug} | Participants: ${totalParticipants} | PageSize: ${pageSize} | Total Pages: ${totalPages}`);
-
-      // 2. Fetch all pages concurrently in rate-limited batches
       const participantMap = new Map(); // username (lower) -> ranking_details
-      const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
-      const concurrencyLimit = Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2;
-      const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 500;
+      let failedPages = 0;
+      let usedLeetAi = false;
 
-      // Add page 1 data immediately
-      if (page1Data.total_rank) {
-        page1Data.total_rank.forEach((item, index) => {
-          const usernameKey = normalizeUsername(item.user_slug || item.username);
-          if (usernameKey) {
-            let solved = 0;
-            if (item.submissions) {
-              solved = Object.keys(item.submissions).length;
-            } else {
-              const userSubmissions = page1Data.submissions?.[index] || {};
-              solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
-            }
-            
-            participantMap.set(usernameKey, {
-              rank: item.rank,
-              score: item.score,
-              finish_time: item.finish_time,
-              solved
+      // 0. Preferred Data Source: Leet.ai API (if configured)
+      const leetAiClient = require('../utils/leetAiClient');
+      if (leetAiClient.isConfigured()) {
+        try {
+          console.log(`[Ranking Search] [LEETAI_API] Attempting Leet.ai API for contest "${slug}"...`);
+          const aiParticipants = await leetAiClient.getContestRanking(slug);
+          if (aiParticipants && aiParticipants.length > 0) {
+            aiParticipants.forEach(item => {
+              const usernameKey = normalizeUsername(item.username);
+              if (usernameKey && !participantMap.has(usernameKey)) {
+                participantMap.set(usernameKey, {
+                  rank: item.rank,
+                  score: item.score,
+                  finish_time: item.finishTime,
+                  solved: item.problemsSolved
+                });
+              }
             });
+            totalParticipants = participantMap.size;
+            usedLeetAi = true;
+            console.log(`[Ranking Search] [LEETAI_API] Fetched ${participantMap.size} participants via Leet.ai API for contest "${slug}".`);
           }
-        });
+        } catch (aiErr) {
+          console.warn(`[Ranking Search] [LEETAI_API] Leet.ai API call failed for contest "${slug}": ${aiErr.message}. Falling back to direct ranking scrape...`);
+          if (aiErr.nonRetryable || aiErr.statusCode === 401 || aiErr.statusCode === 403) {
+            console.error(`[Ranking Search] Authentication failed (HTTP ${aiErr.statusCode}). Check LEETAI_API_KEY.`);
+          }
+        }
       }
 
-      // Fetch remaining pages using atomic work queue & explicit Set tracking
-      const fetchedPages = new Set([1]);
-      const inFlightPages = new Set();
-      const pageQueue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
-      const fetchedPagesData = new Map();
-      fetchedPagesData.set(1, page1Data);
-      const pageErrors = new Map();
+      if (!usedLeetAi) {
+        console.log("Calling LeetCode API...");
+        // 1. Fetch Page 1 to verify contest and get total count
+        const page1Url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=1`;
+        let page1Data;
+        try {
+          page1Data = await NetworkService.request(page1Url, {
+            method: 'GET',
+            useCurlTransport: true,
+            retries: 3,
+            backoffFactor: 1500
+          });
+        } catch (err) {
+          console.error(`[Ranking Search] Failed to fetch page 1 for ${slug}:`, err.message);
+          throw err;
+        }
 
-      const runWorker = async () => {
-        while (true) {
-          let currentPage;
-          if (pageQueue.length > 0) {
-            currentPage = pageQueue.shift();
-            inFlightPages.add(currentPage);
-          } else {
-            break;
+        console.log("Received response");
+        if (!page1Data || page1Data.user_num === undefined) {
+          throw new Error(`Invalid response schema for contest '${slug}'`);
+        }
+
+        totalParticipants = page1Data.user_num;
+        const pageSize = (page1Data.total_rank && page1Data.total_rank.length) || DEFAULT_PAGE_SIZE;
+        const totalPages = Math.ceil(totalParticipants / pageSize);
+        console.log(`[Ranking Search] Contest: ${slug} | Participants: ${totalParticipants} | PageSize: ${pageSize} | Total Pages: ${totalPages}`);
+
+        const envConcurrency = parseInt(process.env.LEETCODE_PAGE_CONCURRENCY, 10);
+        const concurrencyLimit = Number.isInteger(envConcurrency) && envConcurrency > 0 ? envConcurrency : 2;
+        const pageDelayMs = parseInt(process.env.LEETCODE_PAGE_DELAY_MS, 10) || 500;
+
+        // Add page 1 data immediately
+        if (page1Data.total_rank) {
+          page1Data.total_rank.forEach((item, index) => {
+            const usernameKey = normalizeUsername(item.user_slug || item.username);
+            if (usernameKey) {
+              let solved = 0;
+              if (item.submissions) {
+                solved = Object.keys(item.submissions).length;
+              } else {
+                const userSubmissions = page1Data.submissions?.[index] || {};
+                solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+              }
+              
+              participantMap.set(usernameKey, {
+                rank: item.rank,
+                score: item.score,
+                finish_time: item.finish_time,
+                solved
+              });
+            }
+          });
+        }
+
+        // Fetch remaining pages using atomic work queue & explicit Set tracking
+        const fetchedPages = new Set([1]);
+        const inFlightPages = new Set();
+        const pageQueue = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+        const fetchedPagesData = new Map();
+        fetchedPagesData.set(1, page1Data);
+        const pageErrors = new Map();
+
+        const runWorker = async () => {
+          while (true) {
+            let currentPage;
+            if (pageQueue.length > 0) {
+              currentPage = pageQueue.shift();
+              inFlightPages.add(currentPage);
+            } else {
+              break;
+            }
+
+            if (pageDelayMs > 0) {
+              await new Promise(resolve => setTimeout(resolve, pageDelayMs));
+            }
+
+            let success = false;
+            let attempts = 0;
+            const maxAttempts = 3;
+
+            while (attempts < maxAttempts && !success) {
+              attempts++;
+              try {
+                const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
+                const pageData = await NetworkService.request(url, {
+                  method: 'GET',
+                  useCurlTransport: true
+                });
+                if (pageData && pageData.total_rank) {
+                  fetchedPagesData.set(currentPage, pageData);
+                  success = true;
+                  inFlightPages.delete(currentPage);
+                  fetchedPages.add(currentPage);
+                } else {
+                  throw new Error(`Empty ranking data returned for page ${currentPage}`);
+                }
+              } catch (err) {
+                if (attempts < maxAttempts) {
+                  await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+                } else {
+                  pageErrors.set(currentPage, err);
+                  inFlightPages.delete(currentPage);
+                  console.error(`[ERROR] Page ${currentPage} failed after ${maxAttempts} attempts: ${err.message}`);
+                }
+              }
+            }
           }
+        };
 
-          if (pageDelayMs > 0) {
-            await new Promise(resolve => setTimeout(resolve, pageDelayMs));
-          }
+        const workers = [];
+        const workerCount = Math.min(concurrencyLimit, pageQueue.length || 1);
+        for (let i = 0; i < workerCount; i++) {
+          workers.push(runWorker());
+        }
+        await Promise.all(workers);
 
-          let success = false;
-          let attempts = 0;
-          const maxAttempts = 3;
+        // Retry Failed Transient Pages
+        let failedPagesList = Array.from(pageErrors.keys());
+        if (failedPagesList.length > 0) {
+          console.warn(`[WARN] Starting retry pass for ${failedPagesList.length} failed transient pages...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
 
-          while (attempts < maxAttempts && !success) {
-            attempts++;
+          for (const currentPage of failedPagesList) {
             try {
               const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
               const pageData = await NetworkService.request(url, {
@@ -126,85 +199,45 @@ const LeetCodeRankingSearchService = {
               });
               if (pageData && pageData.total_rank) {
                 fetchedPagesData.set(currentPage, pageData);
-                success = true;
-                inFlightPages.delete(currentPage);
+                pageErrors.delete(currentPage);
                 fetchedPages.add(currentPage);
-              } else {
-                throw new Error(`Empty ranking data returned for page ${currentPage}`);
               }
             } catch (err) {
-              if (attempts < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
-              } else {
-                pageErrors.set(currentPage, err);
-                inFlightPages.delete(currentPage);
-                console.error(`[ERROR] Page ${currentPage} failed after ${maxAttempts} attempts: ${err.message}`);
-              }
+              console.error(`[ERROR] Page ${currentPage} retry failed: ${err.message}`);
             }
           }
         }
-      };
 
-      const workers = [];
-      const workerCount = Math.min(concurrencyLimit, pageQueue.length || 1);
-      for (let i = 0; i < workerCount; i++) {
-        workers.push(runWorker());
-      }
-      await Promise.all(workers);
-
-      // Retry Failed Transient Pages
-      let failedPagesList = Array.from(pageErrors.keys());
-      if (failedPagesList.length > 0) {
-        console.warn(`[WARN] Starting retry pass for ${failedPagesList.length} failed transient pages...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        for (const currentPage of failedPagesList) {
-          try {
-            const url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=${currentPage}`;
-            const pageData = await NetworkService.request(url, {
-              method: 'GET',
-              useCurlTransport: true
-            });
+        // Merge all successfully fetched pages
+        for (let p = 2; p <= totalPages; p++) {
+          if (fetchedPagesData.has(p)) {
+            const pageData = fetchedPagesData.get(p);
             if (pageData && pageData.total_rank) {
-              fetchedPagesData.set(currentPage, pageData);
-              pageErrors.delete(currentPage);
-              fetchedPages.add(currentPage);
-            }
-          } catch (err) {
-            console.error(`[ERROR] Page ${currentPage} retry failed: ${err.message}`);
-          }
-        }
-      }
-
-      // Merge all successfully fetched pages
-      for (let p = 2; p <= totalPages; p++) {
-        if (fetchedPagesData.has(p)) {
-          const pageData = fetchedPagesData.get(p);
-          if (pageData && pageData.total_rank) {
-            pageData.total_rank.forEach((item, index) => {
-              const usernameKey = normalizeUsername(item.user_slug || item.username);
-              if (usernameKey) {
-                let solved = 0;
-                if (item.submissions) {
-                  solved = Object.keys(item.submissions).length;
-                } else {
-                  const userSubmissions = pageData.submissions?.[index] || {};
-                  solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+              pageData.total_rank.forEach((item, index) => {
+                const usernameKey = normalizeUsername(item.user_slug || item.username);
+                if (usernameKey) {
+                  let solved = 0;
+                  if (item.submissions) {
+                    solved = Object.keys(item.submissions).length;
+                  } else {
+                    const userSubmissions = pageData.submissions?.[index] || {};
+                    solved = Object.values(userSubmissions).filter(s => s && (s.status === 10 || s.status === '10')).length;
+                  }
+                  
+                  participantMap.set(usernameKey, {
+                    rank: item.rank,
+                    score: item.score,
+                    finish_time: item.finish_time,
+                    solved
+                  });
                 }
-                
-                participantMap.set(usernameKey, {
-                  rank: item.rank,
-                  score: item.score,
-                  finish_time: item.finish_time,
-                  solved
-                });
-              }
-            });
+              });
+            }
           }
         }
-      }
 
-      const failedPages = pageErrors.size;
+        failedPages = pageErrors.size;
+      }
 
       // Task 2: Compute completeness ratio
       const completeness = totalParticipants > 0 ? participantMap.size / totalParticipants : 1;

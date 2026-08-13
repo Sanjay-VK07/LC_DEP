@@ -31,32 +31,21 @@ async function fetchStandings(platform, contestSlug) {
 
   console.log(`[Standings Provider] Cache miss for ${platform} contest: "${contestSlug}". Fetching...`);
 
-  const clistUser = process.env.CLIST_USERNAME;
-  const clistKey = process.env.CLIST_API_KEY;
-  let standings = null;
-
   // 2. Try CLIST API
-  if (clistUser && clistKey) {
+  const ClistClient = require('../services/clist/ClistClient');
+  if (ClistClient.isConfigured()) {
     try {
-      // Map platform to CLIST resource hostname
       let resource = '';
       if (plat === 'leetcode') resource = 'leetcode.com';
       else if (plat === 'codechef') resource = 'codechef.com';
       else if (plat === 'codeforces') resource = 'codeforces.com';
       else if (plat === 'hackerrank') resource = 'hackerrank.com';
 
-      const url = `https://clist.by/api/v4/statistics/?contest__key=${contestSlug}&limit=1000`;
-      console.log(`[Standings Provider] [CLIST] Fetching: ${url}`);
+      console.log(`[Standings Provider] [CLIST] Fetching standings for contest "${contestSlug}" (Resource: ${resource || 'all'})...`);
+      const response = await ClistClient.getContestParticipants(contestSlug, { resource, limit: 1000 });
 
-      const response = await axios.get(url, {
-        headers: {
-          'Authorization': `Apikey ${clistUser}:${clistKey}`
-        },
-        timeout: 8000
-      });
-
-      if (response.data && response.data.objects && response.data.objects.length > 0) {
-        standings = response.data.objects.map(obj => {
+      if (response && response.objects && response.objects.length > 0) {
+        standings = response.objects.map(obj => {
           const score = obj.solving !== undefined ? parseFloat(obj.solving) : null;
           const penalty = obj.penalty !== undefined ? parseInt(obj.penalty, 10) : null;
           const ratingChange = obj.rating_change !== undefined ? parseInt(obj.rating_change, 10) : null;
@@ -67,7 +56,9 @@ async function fetchStandings(platform, contestSlug) {
             score: score,
             penalty: penalty,
             finishTime: penalty,
-            ratingChange: ratingChange
+            ratingChange: ratingChange,
+            platform: 'clist',
+            provider: 'clist'
           };
         });
         console.log(`[Standings Provider] [CLIST] Successfully fetched ${standings.length} participants for "${contestSlug}".`);

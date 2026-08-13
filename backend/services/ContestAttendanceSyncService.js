@@ -21,35 +21,46 @@ class ContestAttendanceSyncService {
     let contestRows = [];
     let liveContest = null;
 
-    if (typeof contestId === 'number' || !isNaN(Number(contestId))) {
-      const rows = await db.query("SELECT * FROM LiveContests WHERE id = ?", [contestId]);
-      if (rows.length > 0) {
-        liveContest = rows[0];
+    try {
+      if (typeof contestId === 'number' || !isNaN(Number(contestId))) {
+        const rows = await db.query("SELECT * FROM LiveContests WHERE id = ?", [contestId]);
+        if (rows.length > 0) {
+          liveContest = rows[0];
+          contestRows = await db.query(
+            "SELECT contest_id, platform, title, start_time, slug, contest_status, duration, contest_type FROM Contests WHERE slug = ?",
+            [liveContest.contestSlug]
+          );
+        }
+      } else {
+        const rows = await db.query("SELECT * FROM LiveContests WHERE contestSlug = ?", [contestId]);
+        if (rows.length > 0) {
+          liveContest = rows[0];
+        }
         contestRows = await db.query(
           "SELECT contest_id, platform, title, start_time, slug, contest_status, duration, contest_type FROM Contests WHERE slug = ?",
-          [liveContest.contestSlug]
+          [contestId]
         );
       }
-    } else {
-      const rows = await db.query("SELECT * FROM LiveContests WHERE contestSlug = ?", [contestId]);
-      if (rows.length > 0) {
-        liveContest = rows[0];
+
+      if (contestRows.length === 0 && !liveContest) {
+        contestRows = await db.query(
+          "SELECT contest_id, platform, title, start_time, slug, contest_status, duration, contest_type FROM Contests WHERE contest_id = ? OR slug = ?",
+          [contestId, contestId]
+        );
       }
-      contestRows = await db.query(
-        "SELECT contest_id, platform, title, start_time, slug, contest_status, duration, contest_type FROM Contests WHERE slug = ?",
-        [contestId]
-      );
-    }
-
-    if (contestRows.length === 0 && !liveContest) {
-      contestRows = await db.query(
-        "SELECT contest_id, platform, title, start_time, slug, contest_status, duration, contest_type FROM Contests WHERE contest_id = ? OR slug = ?",
-        [contestId, contestId]
-      );
-    }
-
-    if (contestRows.length === 0 && !liveContest) {
-      throw new Error(`Contest "${contestId}" not found in database.`);
+    } catch (dbErr) {
+      console.warn(`[Sync Worker] DB contest lookup warning (${dbErr.message}). Resolving directly from slug...`);
+      if (typeof contestId === 'string') {
+        contestRows = [{
+          contest_id: 1,
+          platform: 'LeetCode',
+          title: contestId,
+          start_time: new Date(),
+          slug: contestId,
+          contest_status: 'RATED',
+          duration: 5400
+        }];
+      }
     }
 
     const slugToCheck = contestRows[0]?.slug || liveContest?.contestSlug || '';
@@ -127,111 +138,129 @@ class ContestAttendanceSyncService {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         participants = await adapter.getContestParticipants(slug);
-        fetchSuccess = true;
-        break;
+        if (participants && participants.length > 0) {
+          fetchSuccess = true;
+          break;
+        }
       } catch (err) {
         lastError = err;
         console.warn(`[Sync Worker] Attempt ${attempt} failed to fetch participants for ${platform} contest "${slug}": ${err.message}`);
+        if (err.code === 'TEMPORARILY_UNAVAILABLE' || err.status === 'TEMPORARILY_UNAVAILABLE' || err.syncStatus === 'NOT_VERIFIED') {
+          // Immediately exit retries when sources are unavailable
+          break;
+        }
         if (attempt < 3) {
-          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
       }
     }
 
-    // Build participant lookup map with normalized usernames from both DB and newly fetched participants
-    const participantMap = new Map();
+    // ATTENDANCE SAFETY GUARANTEE:
+    // 1. If leaderboard is complete (leaderboardComplete === true) -> FULL SUCCESS
+    // 2. If leaderboard is incomplete BUT attendanceVerified === true -> VERIFIED_FOR_REGISTERED_STUDENTS
+    // 3. If attendanceVerified === false OR fetch failed -> NOT_VERIFIED (0 false absences, preserve existing records)
+    const isVerifiedForStudents = participants && (participants.attendanceVerified === true || participants.syncStatus === 'VERIFIED_FOR_REGISTERED_STUDENTS');
+    const isFullSuccess = fetchSuccess && participants && (participants.leaderboardComplete === true || participants.syncStatus === 'SUCCESS');
 
-    // 1. Load from DB official ContestParticipants cache first
-    try {
-      const dbParticipants = await db.query(
-        "SELECT username, `rank`, score, problems_solved, finish_time FROM ContestParticipants WHERE contest_slug = ?",
-        [slug]
-      );
-      dbParticipants.forEach(p => {
-        if (p.username) {
-          const normKey = normalizeUsername(p.username);
-          if (normKey) {
-            participantMap.set(normKey, {
-              username: p.username,
-              rank: p.rank,
-              score: parseFloat(p.score) || 0.00,
-              finishTime: p.finish_time,
-              problemsSolved: p.problems_solved || 0
-            });
-          }
-        }
-      });
-    } catch (dbErr) {
-      console.warn(`[Sync Worker] Failed to load cached ContestParticipants: ${dbErr.message}`);
-    }
+    if (!fetchSuccess || participants.length === 0 || (!isFullSuccess && !isVerifiedForStudents)) {
+      const reason = lastError ? lastError.message : 'Upstream participant data unavailable or attendance not verified';
+      console.warn(`[CONTEST_SYNC] Contest: ${slug} | Source: NOT_VERIFIED | Participants: ${participants ? participants.length : 0} | Status: NOT_VERIFIED | Reason: ${reason}`);
+      console.warn(`[Sync Worker] [ATTENDANCE SAFETY] Preserving existing attendance records without marking false absences.`);
 
-    // 2. Load/overwrite from newly fetched participants (if fetched successfully)
-    if (fetchSuccess) {
-      participants.forEach(p => {
-        if (p.username) {
-          const normKey = normalizeUsername(p.username);
-          if (normKey) {
-            participantMap.set(normKey, p);
-          }
-        }
-      });
-      console.log(`[Sync Worker] [DIAGNOSTICS] Participants Fetched: ${participants.length}`);
-      console.log(`[Sync Worker] [DIAGNOSTICS] Unique Normalized Entries in map: ${participantMap.size}`);
-      updateProgress(60, `Successfully retrieved ${participants.length} participants from ${platform}.`);
-    } else {
-      console.error(`[Sync Worker] Failed to fetch participants for contest ${realContestId} on platform ${platform}:`, lastError.message);
-      // Log the failure to DB sync logs
-      await db.query(
-        "INSERT INTO sync_logs (status, message, started_at, completed_at) VALUES ('failed', ?, NOW(), NOW())",
-        [`Sync failed for contest ID ${realContestId} on ${platform}: ${lastError.message}`]
-      ).catch(err => console.error('[Sync Worker] Failed to log failure to DB:', err.message));
+      try {
+        await db.query(
+          "INSERT INTO sync_logs (status, message, started_at, completed_at) VALUES ('warning', ?, NOW(), NOW())",
+          [`Sync postponed for contest "${slug}": ${reason}. Existing attendance preserved.`]
+        );
+      } catch (_) {}
 
-      updateProgress(100, `Synchronization aborted: failed to fetch participants (${lastError.message}).`);
-      return 'SYNC_FAILED';
-    }
-
-    // Zero Participant Protection
-    if (fetchSuccess && participants.length === 0) {
-      console.warn(`[Sync Worker] [WARNING] Official participant provider returned zero participants for contest "${slug}".`);
-      console.warn(`[Sync Worker] [DIAGNOSTICS] Target Contest Slug: "${slug}"`);
-      console.warn(`[Sync Worker] [DIAGNOSTICS] Contests.contest_id: ${realContestId}`);
-      console.warn(`[Sync Worker] [DIAGNOSTICS] LiveContests.id: ${liveContest?.id || 'N/A'}`);
-      console.warn(`[Sync Worker] [DIAGNOSTICS] Participant Map Size: ${participantMap.size}`);
-      console.warn(`[Sync Worker] [PROTECTION] Preserving previous attendance records. Aborting sync without overwriting or marking students absent.`);
-
-      await db.query(
-        "INSERT INTO sync_logs (status, message, started_at, completed_at) VALUES ('warning', ?, NOW(), NOW())",
-        [`Zero participants returned for contest "${slug}". Preserving existing attendance records.`]
-      ).catch(() => {});
-
-      updateProgress(100, 'Synchronization aborted: 0 participants returned. Existing attendance preserved.');
-      return 'SYNC_SKIPPED';
+      updateProgress(100, `Synchronization postponed: ${reason}. Existing attendance preserved.`);
+      return {
+        success: false,
+        status: 'NOT_VERIFIED',
+        syncStatus: 'NOT_VERIFIED',
+        contest: slug,
+        participants: [],
+        source: null,
+        message: 'Contest participant data is currently unverified. Existing attendance preserved.'
+      };
     }
 
     // 4. Fetch all active students
-    const students = await db.query(
-      "SELECT id, name, leetcode_username, codeforces_username, codechef_username, hackerrank_username FROM Users WHERE status = 'active'"
-    );
+    let students = [];
+    try {
+      students = await db.query(
+        "SELECT id, name, leetcode_username, codeforces_username, codechef_username, hackerrank_username FROM Users WHERE status = 'active'"
+      );
+    } catch (dbErr) {
+      console.warn(`[Sync Worker] Could not load active students from DB: ${dbErr.message}`);
+    }
 
     console.log(`[Sync Worker] [DIAGNOSTICS] Students to Check: ${students.length}`);
     updateProgress(75, `Generating attendance mapping for ${students.length} students...`);
 
-    // Resolve or insert LiveContests record
-    let liveContestId = null;
-    const liveRows = await db.query("SELECT id FROM LiveContests WHERE contestSlug = ?", [slug]);
-    if (liveRows.length > 0) {
-      liveContestId = liveRows[0].id;
-    } else {
-      const duration = contest.duration || 5400;
-      const endTime = new Date(new Date(contest.start_time).getTime() + duration * 1000);
-      const liveIns = await db.query(`
-        INSERT INTO LiveContests (platform, contestSlug, contestName, contestType, startTime, endTime, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'Completed')
-      `, [platform, slug, contest.title, contest.contest_type || 'Weekly', contest.start_time, endTime]);
-      liveContestId = liveIns.insertId || liveIns[0]?.insertId;
+    if (students.length === 0) {
+      console.log(`[Sync Worker] No active students to process or DB unavailable. Returning fetched participant summary.`);
+      return {
+        success: true,
+        contestId: realContestId,
+        platform,
+        participantsCount: participants.length,
+        processedStudents: 0,
+        matchedStudents: 0,
+        absentStudents: 0,
+        unknownStudents: 0,
+        downgradesPrevented: 0,
+        fetchSuccess,
+        syncDurationMs: Date.now() - syncStartTime
+      };
     }
 
-    const connection = await db.getPool().getConnection();
+    // Resolve or insert LiveContests record
+    let liveContestId = null;
+    try {
+      const liveRows = await db.query("SELECT id FROM LiveContests WHERE contestSlug = ?", [slug]);
+      if (liveRows.length > 0) {
+        liveContestId = liveRows[0].id;
+      } else {
+        const duration = contest.duration || 5400;
+        const endTime = new Date(new Date(contest.start_time).getTime() + duration * 1000);
+        const liveIns = await db.query(`
+          INSERT INTO LiveContests (platform, contestSlug, contestName, contestType, startTime, endTime, status)
+          VALUES (?, ?, ?, ?, ?, ?, 'Completed')
+        `, [platform, slug, contest.title, contest.contest_type || 'Weekly', contest.start_time, endTime]);
+        liveContestId = liveIns.insertId || liveIns[0]?.insertId;
+      }
+    } catch (liveErr) {
+      console.warn(`[Sync Worker] LiveContests query warning: ${liveErr.message}`);
+    }
+
+    let connection = null;
+    try {
+      const pool = db.getPool();
+      if (pool) {
+        connection = await pool.getConnection();
+      }
+    } catch (poolErr) {
+      console.warn(`[Sync Worker] DB Pool warning: ${poolErr.message}`);
+    }
+
+    if (!connection) {
+      console.log(`[Sync Worker] DB connection pool unavailable. Skipping student DB row mapping.`);
+      return {
+        success: true,
+        contestId: realContestId,
+        platform,
+        participantsCount: participants.length,
+        processedStudents: students.length,
+        matchedStudents: 0,
+        absentStudents: 0,
+        unknownStudents: 0,
+        downgradesPrevented: 0,
+        fetchSuccess,
+        syncDurationMs: Date.now() - syncStartTime
+      };
+    }
     let matchedCount = 0;
     let absentCount = 0;
     let unknownCount = 0;

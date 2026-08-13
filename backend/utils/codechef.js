@@ -169,13 +169,24 @@ function parseCodeChefContestHistory(html) {
     try {
       const entries = JSON.parse(rawJson);
       if (Array.isArray(entries)) {
-        for (const entry of entries) {
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
           const contestName = entry.name || entry.code || 'Unknown Contest';
           const endDate = entry.end_date || entry.date || null;
           const rank = entry.rank ? parseInt(entry.rank, 10) : null;
           const newRating = entry.rating ? parseInt(entry.rating, 10) : null;
-          const diff = entry.diff ? parseInt(entry.diff, 10) : 0;
-          const oldRating = newRating !== null ? newRating - diff : null;
+
+          let oldRating = null;
+          let diff = 0;
+          if (i > 0 && entries[i - 1].rating) {
+            oldRating = parseInt(entries[i - 1].rating, 10);
+            if (newRating !== null) {
+              diff = newRating - oldRating;
+            }
+          } else if (entry.diff) {
+            diff = parseInt(entry.diff, 10);
+            oldRating = newRating !== null ? newRating - diff : null;
+          }
 
           if (contestName && newRating !== null) {
             history.push({
@@ -448,5 +459,6 @@ async function getUserCodeChefStats(username) {
 module.exports = {
   verifyCodeChefUsername,
   getUserCodeChefStats,
-  parseCodeChefContestHistory
+  parseCodeChefContestHistory,
+  parseCodeChefHtml
 };

@@ -53,6 +53,17 @@ class PlatformRegistry {
       enabled: true,
       caseSensitive: false
     });
+
+    this.register({
+      name: 'clist',
+      adapterName: 'clist',
+      regex: /^[a-zA-Z0-9_.-]{3,50}$/,
+      cacheDays: VERIFICATION_CACHE_DAYS,
+      timeout: 8000,
+      retryCount: MAX_RETRIES,
+      enabled: true,
+      caseSensitive: false
+    });
   }
 
   /**

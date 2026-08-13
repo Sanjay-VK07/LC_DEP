@@ -342,7 +342,7 @@ async function getUserContestHistory(username) {
   }
 }
 
-const LEADERBOARD_RPM = parseInt(process.env.LEETCODE_LEADERBOARD_REQUESTS_PER_MINUTE, 10) || 2;
+const LEADERBOARD_RPM = parseInt(process.env.LEETCODE_LEADERBOARD_REQUESTS_PER_MINUTE, 10) || 6000;
 const LEADERBOARD_DELAY_MS = Math.ceil(60000 / LEADERBOARD_RPM);
 
 let lastLeaderboardTime = 0;
@@ -390,22 +390,20 @@ async function processLeaderboardQueue() {
  * @returns {Promise<object>} - Page ranking data
  */
 function getContestRankingPage(contestSlug, page = 1, options = {}) {
-  return throttleLeaderboardRequest(() => {
-    const url = `https://leetcode.com/contest/api/ranking/${contestSlug}/?pagination=${page}`;
-    const customHeaders = {
-      'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      'Accept': 'application/json, text/plain, */*',
-      'Referer': `https://leetcode.com/contest/${contestSlug}/ranking/`
-    };
-    return NetworkService.request(url, {
-      useCurlTransport: true,
-      timeout: 15000,
-      ...options,
-      headers: {
-        ...customHeaders,
-        ...(options.headers || {})
-      }
-    });
+  const url = `https://leetcode.com/contest/api/ranking/${contestSlug}/?pagination=${page}`;
+  const customHeaders = {
+    'User-Agent': process.env.LEETCODE_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Referer': `https://leetcode.com/contest/${contestSlug}/ranking/`
+  };
+  return NetworkService.request(url, {
+    useCurlTransport: true,
+    timeout: 15000,
+    ...options,
+    headers: {
+      ...customHeaders,
+      ...(options.headers || {})
+    }
   });
 }
 
@@ -779,45 +777,8 @@ async function getBatchUserContestRankingHistory(usernames = []) {
   }
 }
 
-/**
- * Fetches contest history for a single user from alfa-leetcode-api endpoint.
- * Serves as secondary fallback after batched GraphQL query.
- * @param {string} username - LeetCode username
- * @returns {Promise<Array<{attended: boolean, ranking: number, score: number, problemsSolved: number, finishTimeInSeconds: number, contest: {title: string, titleSlug: string}}>>}
- */
-async function fetchContestHistoryFromAlfaApi(username) {
-  if (!username) return [];
-  const baseUrl = process.env.ALFA_LEETCODE_API_URL || 'https://alfa-leetcode-api.onrender.com';
-  const url = `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(username)}/contest/history`;
-
-  try {
-    const data = await NetworkService.request(url, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Accept': 'application/json'
-      }
-    });
-
-    const rawList = (data && Array.isArray(data.contestHistory)) ? data.contestHistory : (Array.isArray(data) ? data : []);
-    return rawList.map(h => ({
-      attended: Boolean(h.attended),
-      ranking: h.ranking || h.rank || null,
-      problemsSolved: h.problemsSolved || h.solved || 0,
-      finishTimeInSeconds: h.finishTimeInSeconds || h.finishTime || 0,
-      score: h.score || 0,
-      contest: {
-        title: h.contest?.title || h.title || '',
-        titleSlug: h.contest?.titleSlug || h.titleSlug || ''
-      }
-    }));
-  } catch (err) {
-    console.warn(`[ALFA_API_FALLBACK] Failed to fetch contest history for ${username} from alfa-leetcode-api:`, err.message);
-    return [];
-  }
-}
-
 module.exports = {
+  queryLeetCode,
   refreshLeetCodeAuthToken,
   buildBatchContestRankingQuery,
   verifyLeetCodeUsername,
@@ -829,7 +790,8 @@ module.exports = {
   getUserSubmissions,
   getUserContestRanking,
   getUserContestRankingAndHistory,
-  getBatchUserContestRankingHistory,
-  fetchContestHistoryFromAlfaApi
+  getBatchUserContestRankingHistory
 };
+
+
 

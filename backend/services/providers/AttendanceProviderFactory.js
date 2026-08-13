@@ -3,11 +3,12 @@ const CsvAttendanceProvider = require('./CsvAttendanceProvider');
 const LegacyAttendanceProvider = require('./LegacyAttendanceProvider');
 const RankingPageAttendanceProvider = require('./RankingPageAttendanceProvider');
 const HybridAttendanceProvider = require('./HybridAttendanceProvider');
+const ClistAdapter = require('../clist/ClistAdapter');
 
 class AttendanceProviderFactory {
   /**
    * Get an AttendanceProvider instance based on requested type or environment variable.
-   * @param {string} [overrideType] - Optional provider type override ('GRAPHQL', 'CSV', 'LEGACY', 'HYBRID')
+   * @param {string} [overrideType] - Optional provider type override ('GRAPHQL', 'CSV', 'LEGACY', 'HYBRID', 'CLIST')
    * @param {object} [options] - Additional provider options (e.g. parsed CSV records)
    * @returns {AttendanceProvider}
    */
@@ -16,6 +17,8 @@ class AttendanceProviderFactory {
     const type = rawType.toUpperCase().trim();
 
     switch (type) {
+      case 'CLIST':
+        return new ClistAdapter();
       case 'GRAPHQL':
         return new GraphQLAttendanceProvider();
       case 'CSV':
@@ -36,3 +39,4 @@ class AttendanceProviderFactory {
 }
 
 module.exports = AttendanceProviderFactory;
+
