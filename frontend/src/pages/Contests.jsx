@@ -468,30 +468,40 @@ function Contests() {
   }, [students, selectedBatch]);
 
   const batchDates = useMemo(() => {
-    if (!selectedBatch) return null;
-    const bs = students.filter(s => s.academic_batch === selectedBatch);
-    if (!bs.length) return null;
-    const starts = bs.map(s => new Date(s.academic_start_date).getTime()).filter(t => !isNaN(t));
-    const ends = bs.map(s => new Date(s.academic_end_date).getTime()).filter(t => !isNaN(t));
+    if (!selectedBatch || !students.length) return null;
+    const batchStudents = students.filter(s => s.academic_batch === selectedBatch);
+    if (!batchStudents.length) return null;
+    const starts = batchStudents.map(s => s.academic_start_date).filter(Boolean);
+    const ends = batchStudents.map(s => s.academic_end_date).filter(Boolean);
     return {
       start: starts.length ? new Date(Math.min(...starts)) : null,
       end: ends.length ? new Date(Math.max(...ends)) : null,
     };
   }, [selectedBatch, students]);
 
+  // HARDCORE FRONTEND SAFETY GATE: Exclude unstarted/future contests from all Contest Master views
+  const startedContests = useMemo(() => {
+    const now = Date.now();
+    return (contests || []).filter(c => {
+      const rawDate = c.start_time || c.date || c.startTime;
+      const t = new Date(rawDate).getTime();
+      return Number.isFinite(t) && t <= now;
+    });
+  }, [contests]);
+
   // Apply batch date boundaries on the frontend contests list
   const filteredContestsByBatch = useMemo(() => {
-    let list = contests;
+    let list = startedContests;
     if (selectedBatch && batchDates) {
       list = list.filter(c => {
-        const t = new Date(c.date).getTime();
+        const t = new Date(c.date || c.start_time || c.startTime).getTime();
         const ok1 = batchDates.start ? t >= batchDates.start.getTime() : true;
         const ok2 = batchDates.end ? t <= batchDates.end.getTime() : true;
         return ok1 && ok2;
       });
     }
     return list;
-  }, [contests, selectedBatch, batchDates]);
+  }, [startedContests, selectedBatch, batchDates]);
 
   // Filter students dropdown list based on search and batch
   const filteredStudents = useMemo(() =>
@@ -502,7 +512,7 @@ function Contests() {
     }), [students, studentSearch, selectedBatch]);
 
   const recentActivity = useMemo(() =>
-    filteredContestsByBatch.filter(c => getContestTiming(c.date, c.duration || 5400) === 'past').slice(0, 5),
+    filteredContestsByBatch.filter(c => getContestTiming(c.date || c.start_time || c.startTime, c.duration || 5400) === 'past').slice(0, 5),
     [filteredContestsByBatch]);
 
   // Paginate list
@@ -515,7 +525,7 @@ function Contests() {
   /* ── platform category breakdowns (Right Sidebar) ── */
   const platformBreakdowns = useMemo(() => {
     const computeBreakdown = (filterFn, label) => {
-      const allMatching = contests.filter(c => filterFn({ ...c, type: (c.type || '').toLowerCase() }));
+      const allMatching = startedContests.filter(c => filterFn({ ...c, type: (c.type || '').toLowerCase() }));
       // Only average over contests that have actually been synced for attendance -
       // otherwise hundreds of never-synced historical contests (attendance_count: 0)
       // drag the average down to a meaningless number.

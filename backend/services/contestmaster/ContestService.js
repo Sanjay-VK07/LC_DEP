@@ -24,7 +24,7 @@ class ContestService {
   /**
    * Fetches paginated contest list with server-side filters.
    */
-  async getContests(platform, { type, status, page = 1, limit = 10, search = '' } = {}) {
+  async getContests(platform, { type, status, page = 1, limit = 10, search = '', includeFuture = false } = {}) {
     const dbPlatformMap = {
       leetcode: 'LeetCode',
       codechef: 'CodeChef',
@@ -61,6 +61,10 @@ class ContestService {
         AND c.slug NOT LIKE 'placeholder-%'
     `;
     const params = [dbPlatform];
+
+    if (!includeFuture) {
+      query += ` AND c.start_time <= NOW()`;
+    }
 
     if (type) {
       query += ` AND LOWER(c.contest_type) = LOWER(?)`;

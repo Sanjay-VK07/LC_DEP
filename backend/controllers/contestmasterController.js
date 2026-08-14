@@ -12,7 +12,7 @@ const syncService = require('../services/contestmaster/SyncService');
 
 async function getPlatformAnalytics(req, res) {
   const { platform } = req.params;
-  const { studentId = 'all', batch, type, status, startDate, endDate, page, limit, search } = req.query;
+  const { studentId = 'all', batch, type, status, startDate, endDate, page, limit, search, includeFuture } = req.query;
 
   const validPlatforms = ['leetcode', 'codechef', 'codeforces'];
   if (!validPlatforms.includes(platform.toLowerCase())) {
@@ -32,7 +32,7 @@ async function getPlatformAnalytics(req, res) {
       contests = analyticsData.contests;
       pagination = { total: contests.length, page: 1, limit: contests.length, totalPages: 1 };
     } else {
-      const contestListData = await contestService.getContests(platform, { type, status, page, limit, search });
+      const contestListData = await contestService.getContests(platform, { type, status, page, limit, search, includeFuture: includeFuture === 'true' });
       contests = contestListData.contests;
       pagination = contestListData.pagination;
     }

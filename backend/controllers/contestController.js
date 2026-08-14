@@ -68,6 +68,10 @@ async function getContests(req, res) {
       `c.slug NOT LIKE 'placeholder-%'`
     ];
 
+    if (!req.query.includeFuture) {
+      conditions.push(`c.start_time <= NOW()`);
+    }
+
     if (type) {
       conditions.push(`c.contest_type = ?`);
       params.push(type.toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly');
