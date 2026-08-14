@@ -1,43 +1,37 @@
 const AttendanceProvider = require('./AttendanceProvider');
-const GraphQLAttendanceProvider = require('./GraphQLAttendanceProvider');
-const RankingPageAttendanceProvider = require('./RankingPageAttendanceProvider');
 const ClistAdapter = require('../clist/ClistAdapter');
-const leetAiClient = require('../../utils/leetAiClient');
+const ClistClient = require('../clist/ClistClient');
 const { normalizeUsername } = require('../../utils/usernameNormalizer');
 
-const LARGE_SYNC_THRESHOLD = 50;
-
 /**
- * Optimized HYBRID Attendance Provider:
- * For large student syncs (>= 50 students), prioritizes contest-level participant
- * retrieval (LeetCode Native Leaderboard -> Leet.ai -> CLIST Statistics), followed
- * by local in-memory username matching and strict attendance safety evaluation.
- * For small/targeted syncs (< 50 students), delegates to single-student GraphQL verification.
+ * CLIST-Driven HYBRID Attendance Provider:
+ * Uses CLIST API v4 directly as the primary external provider for LeetCode (and CodeChef)
+ * contest attendance. Eliminates N+1 single-student GraphQL queries and unreliable scrapers.
+ * Performs contest-level participant fetching, DB caching, $O(1)$ local in-memory username matching,
+ * and strict Attendance Safety evaluation.
  */
 class HybridAttendanceProvider extends AttendanceProvider {
   constructor() {
-    super('HYBRID');
-    this.providerName = 'HYBRID';
+    super('CLIST');
+    this.providerName = 'CLIST';
   }
 
   async resolveAttendance({ contestSlug, students = [], onProgress = null, bypassCache = false }) {
     const startTime = Date.now();
     console.log(`[HybridAttendanceProvider] Resolving attendance for "${contestSlug}" (${students.length} students, bypassCache: ${bypassCache})...`);
 
-    // 1. Small targeted syncs (< 50 students): Delegate to single-student GraphQL provider
-    if (students.length < LARGE_SYNC_THRESHOLD) {
-      console.log(`[HybridAttendanceProvider] Small student count (${students.length} < ${LARGE_SYNC_THRESHOLD}). Using targeted single-student GraphQL provider...`);
-      const gqlProvider = new GraphQLAttendanceProvider();
-      return await gqlProvider.resolveAttendance({ contestSlug, students, onProgress });
+    if (!students || students.length === 0) {
+      const emptyArr = [];
+      emptyArr.scrapedParticipantCount = 0;
+      emptyArr.leaderboardComplete = true;
+      emptyArr.syncState = 'EMPTY';
+      return emptyArr;
     }
-
-    // 2. Large syncs (>= 50 students): Executing Contest-Level Sync Strategy
-    console.log(`[HybridAttendanceProvider] Large student sync (${students.length} students >= ${LARGE_SYNC_THRESHOLD}). Executing Contest-Level Sync Strategy...`);
 
     let participants = null;
     let selectedProviderName = 'NONE';
 
-    // Stage A: Check ContestParticipants Cache in DB first (unless bypassCache is true)
+    // Stage 1: Check ContestParticipants Cache in DB first (unless bypassCache is true)
     if (!bypassCache) {
       try {
         console.log(`[HybridAttendanceProvider] Stage 1: Checking ContestParticipants cache in DB for "${contestSlug}"...`);
@@ -65,42 +59,23 @@ class HybridAttendanceProvider extends AttendanceProvider {
           selectedProviderName = 'CACHE';
         }
       } catch (cacheErr) {
-        console.warn(`[HybridAttendanceProvider] Stage 1 Cache query failed: ${cacheErr.message}. Proceeding to live providers...`);
+        console.warn(`[HybridAttendanceProvider] Stage 1 Cache query failed: ${cacheErr.message}. Proceeding to live CLIST fetch...`);
       }
     }
 
-    // Stage B: Try Leet.ai Contest-Level Ranking (if configured)
-    if (leetAiClient.isConfigured() && leetAiClient.hasContestParticipantEndpoint(contestSlug)) {
-      try {
-        console.log(`[HybridAttendanceProvider] Stage 2: Attempting Leet.ai Contest Ranking for "${contestSlug}"...`);
-        const aiParticipants = await leetAiClient.getContestRanking(contestSlug);
-        if (aiParticipants && aiParticipants.length > 0) {
-          console.log(`[HybridAttendanceProvider] Stage 2 Succeeded: Leet.ai returned ${aiParticipants.length} participants.`);
-          participants = aiParticipants;
-          participants.provider = 'LEETAI';
-          participants.source = 'LEETAI_API';
-          participants.leaderboardComplete = true;
-          participants.syncState = 'COMPLETE';
-          selectedProviderName = 'LEETAI';
-        }
-      } catch (aiErr) {
-        console.warn(`[HybridAttendanceProvider] Stage 2 Failed (Leet.ai): ${aiErr.message}. Trying CLIST fallback...`);
-      }
-    }
-
-    // Stage C: Try CLIST Contest-Level Statistics (Common Fallback for LeetCode & CodeChef)
+    // Stage 2: CLIST API v4 Contest-Level Statistics (Primary Provider for LeetCode & CodeChef)
     if (!participants || participants.length === 0) {
       const clistAdapter = new ClistAdapter();
       if (clistAdapter.isAvailable()) {
-        console.log(`[HybridAttendanceProvider] Stage 3: Attempting CLIST Contest-Level Statistics for "${contestSlug}"...`);
+        console.log(`[HybridAttendanceProvider] Stage 2: Fetching CLIST Contest-Level Statistics for "${contestSlug}"...`);
         try {
           const registeredUsernames = students
             .map(s => normalizeUsername(s.leetcode_username || s.codeforces_username || s.codechef_username || s.username))
             .filter(Boolean);
 
-          const ClistClient = require('../clist/ClistClient');
-          
-          const isCodeChef = contestSlug.toLowerCase().includes('starters') || contestSlug.toLowerCase().includes('cookoff') || contestSlug.toLowerCase().includes('lunchtime');
+          const isCodeChef = contestSlug.toLowerCase().includes('starters') ||
+                             contestSlug.toLowerCase().includes('cookoff') ||
+                             contestSlug.toLowerCase().includes('lunchtime');
           const resourceHost = isCodeChef ? 'codechef.com' : 'leetcode.com';
 
           const contestSearchRes = await ClistClient.getContests({
@@ -112,7 +87,8 @@ class HybridAttendanceProvider extends AttendanceProvider {
           if (contestSearchRes && contestSearchRes.objects && contestSearchRes.objects.length > 0) {
             const matchedContest = contestSearchRes.objects.find(c =>
               (c.key || '').toLowerCase() === contestSlug.toLowerCase() ||
-              (c.event || '').toLowerCase() === contestSlug.replace(/-/g, ' ').toLowerCase()
+              (c.event || '').toLowerCase() === contestSlug.replace(/-/g, ' ').toLowerCase() ||
+              (c.href || '').toLowerCase().includes(contestSlug.toLowerCase())
             ) || contestSearchRes.objects[0];
             clistContestId = matchedContest.id;
           }
@@ -124,17 +100,19 @@ class HybridAttendanceProvider extends AttendanceProvider {
           });
 
           if (clistParticipants && clistParticipants.length > 0) {
-            console.log(`[HybridAttendanceProvider] Stage 3 Succeeded: CLIST returned ${clistParticipants.length} participants (syncState="${clistParticipants.syncState}", complete=${clistParticipants.leaderboardComplete}).`);
+            console.log(`[HybridAttendanceProvider] Stage 2 Succeeded: CLIST returned ${clistParticipants.length} participants (syncState="${clistParticipants.syncState}", complete=${clistParticipants.leaderboardComplete}).`);
             participants = clistParticipants;
             selectedProviderName = 'CLIST';
           }
         } catch (clistErr) {
-          console.warn(`[HybridAttendanceProvider] Stage 3 Failed (CLIST): ${clistErr.message}.`);
+          console.warn(`[HybridAttendanceProvider] Stage 2 Failed (CLIST): ${clistErr.message}.`);
         }
+      } else {
+        console.warn(`[HybridAttendanceProvider] CLIST provider is not configured or unavailable.`);
       }
     }
 
-    // Stage D: Process Contest-Level Participant Data with Local Matching & Attendance Safety
+    // Stage 3: Process Contest-Level Participant Data with Local Matching & Attendance Safety
     if (participants && participants.length > 0) {
       const participantMap = new Map();
       for (const p of participants) {
@@ -204,7 +182,6 @@ class HybridAttendanceProvider extends AttendanceProvider {
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Contest: ${contestSlug}`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Registered Students: ${students.length}`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Provider Selected: ${selectedProviderName}`);
-      console.log(`[HybridAttendanceProvider] [TELEMETRY] External Requests: 1-2 paginated calls`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Scraped Participants: ${participants.length}`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Local Matches: ${matchedCount}`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Total Duration: ${totalDuration} ms`);
@@ -216,13 +193,34 @@ class HybridAttendanceProvider extends AttendanceProvider {
       return results;
     }
 
-    // Stage E: Last Resort - Single-Student GraphQL Provider if all contest-level providers failed
-    console.warn(`[HybridAttendanceProvider] All contest-level providers failed for "${contestSlug}". Falling back to targeted single-student GraphQL provider...`);
-    const gqlProvider = new GraphQLAttendanceProvider();
-    return await gqlProvider.resolveAttendance({ contestSlug, students, onProgress });
+    // Fallback: If no participant data could be retrieved from CLIST or Cache
+    console.warn(`[HybridAttendanceProvider] No participant data available for "${contestSlug}". Returning NOT_VERIFIED status.`);
+    const fallbackResults = students.map(student => {
+      const rawHandle = student.leetcode_username || student.codeforces_username || student.codechef_username || student.username || '';
+      return {
+        studentId: student.id,
+        username: normalizeUsername(rawHandle) || rawHandle,
+        contestSlug,
+        attended: false,
+        status: 'UNKNOWN',
+        rank: null,
+        score: 0.00,
+        problemsSolved: 0,
+        totalProblems: 4,
+        finishTime: 0,
+        rating: null,
+        ratingChange: 0,
+        source: 'CLIST',
+        provider: 'CLIST',
+        error: 'Participant data unavailable from CLIST'
+      };
+    });
+
+    fallbackResults.scrapedParticipantCount = 0;
+    fallbackResults.leaderboardComplete = false;
+    fallbackResults.syncState = 'UNAVAILABLE';
+    return fallbackResults;
   }
 }
 
 module.exports = HybridAttendanceProvider;
-
-

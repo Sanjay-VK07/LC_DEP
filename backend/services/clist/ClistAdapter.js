@@ -13,6 +13,175 @@ class ClistAdapter extends BaseAdapter {
   }
 
   /**
+   * Primary entry point for contest attendance resolution via CLIST.
+   * Performs DB caching lookup, live CLIST statistics retrieval, $O(1)$ in-memory handle matching,
+   * and strict Attendance Safety evaluation.
+   */
+  async resolveAttendance({ contestSlug, students = [], onProgress = null, bypassCache = false }) {
+    const startTime = Date.now();
+    console.log(`[CLIST] Resolving attendance for "${contestSlug}" (${students.length} students, bypassCache: ${bypassCache})...`);
+
+    if (!students || students.length === 0) {
+      const emptyArr = [];
+      emptyArr.scrapedParticipantCount = 0;
+      emptyArr.leaderboardComplete = false;
+      emptyArr.syncState = 'EMPTY';
+      return emptyArr;
+    }
+
+    let participants = null;
+    let selectedProviderName = 'CLIST';
+
+    // 1. Stage 1: Check ContestParticipants Cache in DB first (unless bypassCache is true)
+    if (!bypassCache) {
+      try {
+        console.log(`[CLIST] Stage 1: Checking ContestParticipants cache in DB for "${contestSlug}"...`);
+        const db = require('../../config/db');
+        const cachedRows = await db.query(
+          "SELECT username, `rank`, score, problems_solved as problemsSolved, finish_time as finishTime FROM ContestParticipants WHERE contest_slug = ? ORDER BY `rank` ASC",
+          [contestSlug]
+        );
+
+        if (cachedRows && cachedRows.length > 0) {
+          console.log(`[CLIST] Stage 1 Succeeded: DB Cache hit! Found ${cachedRows.length} cached participants for "${contestSlug}".`);
+          participants = cachedRows.map(r => ({
+            username: r.username,
+            rank: r.rank,
+            score: Number.parseFloat(r.score) || 0,
+            problemsSolved: r.problemsSolved || 0,
+            finishTime: r.finishTime || 0,
+            provider: 'CACHE',
+            source: 'CACHE'
+          }));
+          participants.leaderboardComplete = true;
+          participants.syncState = 'COMPLETE';
+          participants.source = 'CACHE';
+          participants.provider = 'CACHE';
+          selectedProviderName = 'CACHE';
+        }
+      } catch (cacheErr) {
+        console.warn(`[CLIST] Stage 1 Cache query failed: ${cacheErr.message}. Proceeding to live CLIST fetch...`);
+      }
+    }
+
+    // 2. Stage 2: Fetch CLIST statistics if cache miss or bypassCache
+    if (!participants || participants.length === 0) {
+      const isCodeChef = contestSlug.toLowerCase().includes('starters') ||
+                         contestSlug.toLowerCase().includes('cookoff') ||
+                         contestSlug.toLowerCase().includes('lunchtime');
+      const resourceHost = isCodeChef ? 'codechef.com' : 'leetcode.com';
+
+      console.log(`[CLIST] Stage 2: Fetching CLIST Contest-Level Statistics for "${contestSlug}" (${resourceHost})...`);
+      
+      const registeredUsernames = students
+        .map(s => normalizeUsername(s.leetcode_username || s.codeforces_username || s.codechef_username || s.username))
+        .filter(Boolean);
+
+      const contestSearchRes = await ClistClient.getContests({
+        resource: resourceHost,
+        search: contestSlug.replace(/-/g, ' ')
+      }).catch(() => null);
+
+      let clistContestId = contestSlug;
+      if (contestSearchRes && contestSearchRes.objects && contestSearchRes.objects.length > 0) {
+        const matchedContest = contestSearchRes.objects.find(c =>
+          (c.key || '').toLowerCase() === contestSlug.toLowerCase() ||
+          (c.event || '').toLowerCase() === contestSlug.replace(/-/g, ' ').toLowerCase() ||
+          (c.href || '').toLowerCase().includes(contestSlug.toLowerCase())
+        ) || contestSearchRes.objects[0];
+        clistContestId = matchedContest.id;
+      }
+
+      participants = await this.getContestParticipants(clistContestId, {
+        resource: resourceHost,
+        registeredUsernames,
+        bypassCache
+      });
+    }
+
+    // 3. Stage 3: In-Memory Map Matching & Attendance Safety
+    const participantMap = new Map();
+    if (participants && participants.length > 0) {
+      for (const p of participants) {
+        const norm = normalizeUsername(p.username);
+        if (norm) participantMap.set(norm, p);
+      }
+    }
+
+    const isLeaderboardComplete = participants ? participants.leaderboardComplete === true : false;
+    let matchedCount = 0;
+    let completedCount = 0;
+
+    const results = students.map(student => {
+      const rawHandle = student.leetcode_username || student.codeforces_username || student.codechef_username || student.username || '';
+      const normHandle = normalizeUsername(rawHandle);
+      const match = normHandle ? participantMap.get(normHandle) : null;
+
+      completedCount++;
+      if (typeof onProgress === 'function') {
+        onProgress(completedCount, students.length);
+      }
+
+      if (match && (match.rank > 0 || match.score > 0 || match.problemsSolved > 0)) {
+        matchedCount++;
+        return {
+          studentId: student.id,
+          username: normHandle || rawHandle,
+          contestSlug,
+          attended: true,
+          status: 'PRESENT',
+          rank: match.rank || null,
+          score: Number.isFinite(match.score) ? match.score : 0,
+          problemsSolved: match.problemsSolved || (match.score > 0 ? Math.min(4, Math.floor(match.score / 3)) : 0),
+          totalProblems: 4,
+          finishTime: match.finishTime || 0,
+          rating: match.rating || null,
+          ratingChange: match.ratingChange || 0,
+          source: selectedProviderName,
+          provider: selectedProviderName,
+          error: null
+        };
+      }
+
+      // ATTENDANCE SAFETY RULE: Mark ABSENT ONLY if leaderboard is 100% complete
+      const finalStatus = isLeaderboardComplete ? 'ABSENT' : 'UNKNOWN';
+
+      return {
+        studentId: student.id,
+        username: normHandle || rawHandle,
+        contestSlug,
+        attended: false,
+        status: finalStatus,
+        rank: null,
+        score: 0.00,
+        problemsSolved: 0,
+        totalProblems: 4,
+        finishTime: 0,
+        rating: null,
+        ratingChange: 0,
+        source: selectedProviderName,
+        provider: selectedProviderName,
+        error: isLeaderboardComplete ? null : `Incomplete leaderboard (syncState=${participants ? participants.syncState : 'UNAVAILABLE'})`
+      };
+    });
+
+    const totalDuration = Date.now() - startTime;
+    console.log(`[CLIST] [TELEMETRY] =================================================`);
+    console.log(`[CLIST] [TELEMETRY] Contest: ${contestSlug}`);
+    console.log(`[CLIST] [TELEMETRY] Registered Students: ${students.length}`);
+    console.log(`[CLIST] [TELEMETRY] Provider Selected: ${selectedProviderName}`);
+    console.log(`[CLIST] [TELEMETRY] Scraped Participants: ${participants ? participants.length : 0}`);
+    console.log(`[CLIST] [TELEMETRY] Local Matches: ${matchedCount}`);
+    console.log(`[CLIST] [TELEMETRY] Total Duration: ${totalDuration} ms`);
+    console.log(`[CLIST] [TELEMETRY] =================================================`);
+
+    results.scrapedParticipantCount = participants ? participants.length : 0;
+    results.leaderboardComplete = isLeaderboardComplete;
+    results.syncState = participants ? participants.syncState : 'UNAVAILABLE';
+    return results;
+  }
+
+  /**
    * Fetch and return normalized list of upcoming or recent contests from CLIST.
    */
   async getUpcomingContests(options = {}) {
@@ -37,10 +206,6 @@ class ClistAdapter extends BaseAdapter {
 
   /**
    * Fetch contest participants/standings for a contest key, ID, or slug from CLIST.
-   * Options:
-   *  - registeredUsernames: Set or Array of normalized handles to match for early exit optimization.
-   *  - resource: Platform resource (e.g. leetcode.com)
-   *  - maxPages: Ceiling on max pages to fetch (default: unlimited up to completion)
    */
   async getContestParticipants(contestKey, options = {}) {
     if (!this.isAvailable()) {
@@ -58,6 +223,7 @@ class ClistAdapter extends BaseAdapter {
       ? new Set(Array.from(options.registeredUsernames).map(u => normalizeUsername(u)))
       : null;
     const remainingToMatch = registeredSet ? new Set(registeredSet) : null;
+    const resourceHost = options.resource || 'leetcode.com';
 
     let allObjects = [];
     let page = 0;
@@ -120,19 +286,24 @@ class ClistAdapter extends BaseAdapter {
       participants.source = 'CLIST';
       participants.totalCount = totalCount;
 
+      const isLeetCode = resourceHost === 'leetcode.com';
+
       if (allObjects.length === 0) {
         participants.syncState = 'EMPTY';
-        participants.leaderboardComplete = true;
-        participants.attendanceVerified = true;
+        participants.leaderboardComplete = false;
+        participants.attendanceVerified = false;
       } else if (isEarlyExit) {
         participants.syncState = 'VERIFIED_FOR_REGISTERED_STUDENTS';
         participants.leaderboardComplete = false; // NEVER treat as LEADERBOARD_COMPLETE
         participants.attendanceVerified = true;
-      } else if (!hasMore && (!remainingToMatch || remainingToMatch.size === 0)) {
+      } else if (!hasMore && (!remainingToMatch || remainingToMatch.size === 0) && !isLeetCode) {
+        // Only non-LeetCode providers with proven 100% complete coverage can be marked COMPLETE
         participants.syncState = 'COMPLETE';
         participants.leaderboardComplete = true;
         participants.attendanceVerified = true;
       } else {
+        // LeetCode CLIST statistics dataset indexes active participants (~14.5k) and omits 0-point registrants.
+        // Therefore, it must ALWAYS be treated as PARTIAL for negative evidence evaluation to prevent false absences.
         participants.syncState = 'PARTIAL';
         participants.leaderboardComplete = false;
         participants.attendanceVerified = false;

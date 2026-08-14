@@ -154,48 +154,51 @@ class LeetCodeAdapter extends BaseAdapter {
     console.log(`[CACHE] [CACHE MISS] Cache Key: "${cacheKey}" | Reason: ${bypassCache ? 'bypassCache flag set' : cacheResult.reason}`);
 
     // ------------------------------------------------------------------
-    // 1.5 Preferred Data Source: Leet.ai API (if supported)
-    // ------------------------------------------------------------------
-    const leetAiClient = require('../../utils/leetAiClient');
-    if (leetAiClient.isConfigured() && leetAiClient.hasContestParticipantEndpoint(slug)) {
-      try {
-        console.log(`[LEETAI_API] Fetching contest ranking via Leet.ai API for contest "${slug}"...`);
-        const aiParticipants = await leetAiClient.getContestRanking(slug);
-        if (aiParticipants && aiParticipants.length > 0) {
-          await this._updateCache(slug, aiParticipants, true);
-          const elapsed = Date.now() - startTime;
-          console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: LEETAI_API | Participants: ${aiParticipants.length} | Duration: ${elapsed}ms`);
-          aiParticipants.pagesFetched = 1;
-          aiParticipants.totalExpected = aiParticipants.length;
-          aiParticipants.fromCache = false;
-          aiParticipants.syncStatus = 'SUCCESS';
-          aiParticipants.source = 'LEETAI_API';
-          return aiParticipants;
-        }
-      } catch (aiErr) {
-        console.warn(`[LEETAI_API] Leet.ai API fetch failed for contest "${slug}": ${aiErr.message}. Falling back to GraphQL...`);
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // 2. Primary: Single-Student GraphQL User Contest History
+    // 2. Primary Provider: CLIST API v4 Contest-Level Fetch
     // ------------------------------------------------------------------
     try {
-      console.log(`[GRAPHQL_SINGLE] Fetching userContestRankingHistory per student for contest "${slug}"...`);
-      const GraphQLAttendanceProvider = require('../providers/GraphQLAttendanceProvider');
-      const provider = new GraphQLAttendanceProvider();
-      const students = options.students || [];
-      const items = await provider.resolveAttendance({ contestSlug: slug, students, onProgress: options.onProgress });
-      
+      console.log(`[CLIST_ATTENDANCE] Fetching contest-level statistics via CLIST for contest "${slug}"...`);
+      const ClistAdapter = require('../clist/ClistAdapter');
+      const clistAdapter = new ClistAdapter();
+
+      if (!clistAdapter.isAvailable()) {
+        throw new Error('CLIST API provider is not configured or unavailable');
+      }
+
+      const ClistClient = require('../clist/ClistClient');
+      const contestSearchRes = await ClistClient.getContests({
+        resource: 'leetcode.com',
+        search: slug.replace(/-/g, ' ')
+      }).catch(() => null);
+
+      let clistContestId = slug;
+      if (contestSearchRes && contestSearchRes.objects && contestSearchRes.objects.length > 0) {
+        const matchedContest = contestSearchRes.objects.find(c =>
+          (c.key || '').toLowerCase() === slug.toLowerCase() ||
+          (c.event || '').toLowerCase() === slug.replace(/-/g, ' ').toLowerCase() ||
+          (c.href || '').toLowerCase().includes(slug.toLowerCase())
+        ) || contestSearchRes.objects[0];
+        clistContestId = matchedContest.id;
+      }
+
+      const items = await clistAdapter.getContestParticipants(clistContestId, {
+        resource: 'leetcode.com',
+        bypassCache
+      });
+
+      if (items && items.length > 0) {
+        await this._updateCache(slug, items, items.leaderboardComplete);
+      }
+
       const elapsed = Date.now() - startTime;
-      console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: GRAPHQL_SINGLE | Resolved: ${items.length} | Duration: ${elapsed}ms`);
+      console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: CLIST | Participants: ${items.length} | Duration: ${elapsed}ms`);
       items.pagesFetched = 1;
       items.fromCache = false;
       items.syncStatus = 'SUCCESS';
-      items.source = 'GRAPHQL_SINGLE';
+      items.source = 'CLIST';
       return items;
     } catch (err) {
-      console.error(`[SYNC_FAILED] Single-student GraphQL sync failed for contest "${slug}": ${err.message}`);
+      console.error(`[SYNC_FAILED] CLIST contest sync failed for contest "${slug}": ${err.message}`);
       const syncError = new Error(`Contest sync failed for '${slug}': ${err.message}`);
       syncError.code = 'SYNC_FAILED';
       syncError.syncStatus = 'SYNC_FAILED';

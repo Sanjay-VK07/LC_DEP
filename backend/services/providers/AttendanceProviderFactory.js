@@ -1,42 +1,34 @@
-const GraphQLAttendanceProvider = require('./GraphQLAttendanceProvider');
 const CsvAttendanceProvider = require('./CsvAttendanceProvider');
-const LegacyAttendanceProvider = require('./LegacyAttendanceProvider');
-const RankingPageAttendanceProvider = require('./RankingPageAttendanceProvider');
-const HybridAttendanceProvider = require('./HybridAttendanceProvider');
 const ClistAdapter = require('../clist/ClistAdapter');
 
 class AttendanceProviderFactory {
   /**
    * Get an AttendanceProvider instance based on requested type or environment variable.
-   * @param {string} [overrideType] - Optional provider type override ('GRAPHQL', 'CSV', 'LEGACY', 'HYBRID', 'CLIST')
+   * All LeetCode/CodeChef contest attendance routes directly to ClistAdapter.
+   * Single-student GraphQL, LeetCode Native scrapers, and Hybrid wrapper fallbacks
+   * are completely removed from the attendance runtime selection path.
+   * @param {string} [overrideType] - Optional provider type override ('CLIST', 'HYBRID', 'CSV')
    * @param {object} [options] - Additional provider options (e.g. parsed CSV records)
    * @returns {AttendanceProvider}
    */
   static getProvider(overrideType, options = {}) {
-    const rawType = overrideType || process.env.SYNC_PROVIDER || 'HYBRID';
+    const rawType = overrideType || process.env.SYNC_PROVIDER || 'CLIST';
     const type = rawType.toUpperCase().trim();
 
     switch (type) {
-      case 'CLIST':
-        return new ClistAdapter();
-      case 'GRAPHQL':
-        return new GraphQLAttendanceProvider();
       case 'CSV':
         return new CsvAttendanceProvider(options.csvRecords || []);
-      case 'LEGACY':
-        return new LegacyAttendanceProvider();
-      case 'RANKING_PAGE':
-        return new RankingPageAttendanceProvider();
+      case 'CLIST':
       case 'HYBRID':
+      case 'GRAPHQL':
+      case 'RANKING_PAGE':
+      case 'LEGACY':
       default:
-        // HYBRID defaults to the live ranking-page leaderboard, since it reflects
-        // real contest results immediately. GraphQL's userContestRankingHistory
-        // field can lag a day or more behind, so it's used only as a fallback
-        // (see HybridAttendanceProvider).
-        return new HybridAttendanceProvider();
+        // Returns ClistAdapter directly for all attendance syncs.
+        // Guarantees zero fallback to RankingPageAttendanceProvider or GraphQL loop.
+        return new ClistAdapter();
     }
   }
 }
 
 module.exports = AttendanceProviderFactory;
-
