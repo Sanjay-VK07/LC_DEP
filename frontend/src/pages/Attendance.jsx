@@ -444,6 +444,39 @@ function Attendance() {
     }
   }, [lcContestSlug, lcDeptFilter, lcBatchFilter, lcSectionFilter]);
 
+  function formatClistErrorMessage(rawErr) {
+    if (!rawErr) return 'Unable to fetch LeetCode contest attendance data from CLIST. Please try again later.';
+    const err = String(rawErr);
+    
+    if (
+      err.includes('Could not fetch contest rankings') ||
+      err.includes('0 participants') ||
+      err.includes('zero statistics') ||
+      err.includes('across all providers') ||
+      err.includes('not found')
+    ) {
+      return 'CLIST does not have participant statistics available for this contest. Try a recent contest or verify that the contest is available on CLIST.';
+    }
+    if (
+      err.includes('API key') ||
+      err.includes('authentication') ||
+      err.includes('credentials') ||
+      err.includes('401') ||
+      err.includes('403') ||
+      err.includes('disabled')
+    ) {
+      return 'CLIST configuration is unavailable. Please check the CLIST API configuration.';
+    }
+    if (err.includes('rate limit') || err.includes('429')) {
+      return 'CLIST rate limit reached. Please try again later.';
+    }
+    if (err.includes('Network Error') || err.includes('ECONNREFUSED') || err.includes('ETIMEDOUT') || err.includes('timeout')) {
+      return 'Unable to reach CLIST. Please try again later.';
+    }
+    
+    return err;
+  }
+
   const handleSyncLcContest = async () => {
     if (!lcContestSlug.trim()) return;
     setSyncingLcContest(true);
@@ -459,7 +492,7 @@ function Attendance() {
         const jobId = res.data.jobId;
         setLcSyncJobId(jobId);
         setLcSyncProgress(10);
-        setLcSyncMessage('Sync job started — scraping LeetCode rankings...');
+        setLcSyncMessage('Sync job started — fetching LeetCode attendance data via CLIST...');
         setSuccess(`Attendance sync running in background${jobId ? ` (Job ${jobId})` : ''}. Polling for completion...`);
 
         // Poll GET /api/jobs/:id every 3 seconds until COMPLETED or FAILED
@@ -486,7 +519,9 @@ function Attendance() {
                 setLcSyncJobId(null);
                 setLcSyncProgress(0);
                 setLcSyncMessage('');
-                setError(`Sync failed: ${job.error || 'Unknown error — check backend logs.'}`);
+                setSuccess('');
+                const clistErr = formatClistErrorMessage(job.error);
+                setError(`Sync failed: ${clistErr}`);
               }
             }
           } catch (pollErr) {
@@ -496,6 +531,7 @@ function Attendance() {
               setLcSyncJobId(null);
               setLcSyncProgress(0);
               setLcSyncMessage('');
+              setSuccess('');
               setError('Job status expired or backend service restarted. Please check database stats.');
             } else {
               console.warn('[LC Sync Poll] Transient error:', pollErr.message);
@@ -506,17 +542,19 @@ function Attendance() {
         setSyncingLcContest(false);
         setLcSyncProgress(0);
         setLcSyncMessage('');
-        setError(res.data.message || res.data.error || 'Sync failed — check backend logs.');
+        setSuccess('');
+        setError(formatClistErrorMessage(res.data.message || res.data.error));
       }
     } catch (err) {
       setSyncingLcContest(false);
       setLcSyncProgress(0);
       setLcSyncMessage('');
+      setSuccess('');
       const data = err.response?.data;
       if (data && data.stage && data.error) {
-        setError(`[${data.stage} Error] ${data.error}`);
+        setError(`[${data.stage} Error] ${formatClistErrorMessage(data.error)}`);
       } else {
-        setError(data?.message || 'Failed to sync LeetCode contest rankings.');
+        setError(formatClistErrorMessage(data?.message || 'Failed to sync LeetCode contest attendance.'));
       }
     }
   };
@@ -641,7 +679,7 @@ function Attendance() {
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
-          LeetCode Rankings Scraper
+          LeetCode Attendance Sync
         </button>
       </div>
 
@@ -927,16 +965,16 @@ function Attendance() {
                                       In Progress
                                     </span>
                                   );
-                                } else if (normStatus === 'WAITING FOR RANKINGS') {
+                                } else if (normStatus === 'WAITING FOR RANKINGS' || normStatus === 'NOT_VERIFIED' || normStatus === 'UNKNOWN' || normStatus === 'PENDING') {
                                   return (
-                                    <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-amber-100 text-amber-805 dark:bg-amber-950/30 dark:text-amber-450 border border-amber-200/50 dark:border-amber-900/30">
-                                      Waiting for Rankings
+                                    <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                      Not Verified
                                     </span>
                                   );
                                 } else {
                                   return (
                                     <span className="inline-flex items-center rounded-md px-2.5 py-0.5 font-bold uppercase bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                                      {s.status || 'ABSENT'}
+                                      {s.status || 'NOT VERIFIED'}
                                     </span>
                                   );
                                 }
@@ -1400,10 +1438,10 @@ function Attendance() {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-5 rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
             <div className="space-y-1">
               <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                <Trophy className="h-6 w-6 text-primary-500" /> LeetCode Rankings Scraper
+                <Trophy className="h-6 w-6 text-primary-500" /> LeetCode Attendance Sync
               </h2>
               <p className="text-xs text-slate-400">
-                Mark student contest attendance dynamically by scanning LeetCode ranking pages.
+                Mark student contest attendance dynamically via CLIST API v4 data integration.
               </p>
             </div>
             
@@ -1480,19 +1518,21 @@ function Attendance() {
               <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
                 <span className="text-[10px] uppercase font-bold text-rose-500 tracking-wider">Absent Students</span>
                 <h3 className="text-3xl font-black text-rose-500 mt-1">
-                  {lcStats.absent}
+                  {lcStats.attendanceFinalized ? lcStats.absent : (lcStats.absent > 0 ? lcStats.absent : '—')}
                 </h3>
               </div>
               <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
-                <span className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">Pending Students</span>
+                <span className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">
+                  {lcStats.attendanceFinalized ? 'Pending Students' : 'Not Verified'}
+                </span>
                 <h3 className="text-3xl font-black text-amber-500 mt-1">
-                  {lcStats.pending}
+                  {lcStats.attendanceFinalized ? lcStats.pending : (lcStats.totalRegistered - lcStats.present)}
                 </h3>
               </div>
               <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
                 <span className="text-[10px] uppercase font-bold text-indigo-500 tracking-wider">Attendance Rate</span>
                 <h3 className="text-3xl font-black text-indigo-500 mt-1">
-                  {lcStats.attendancePercentage}%
+                  {lcStats.attendanceFinalized ? `${lcStats.attendancePercentage}%` : '—'}
                 </h3>
               </div>
               <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
@@ -1509,8 +1549,11 @@ function Attendance() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-5 rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm text-xs">
               <div className="md:col-span-4 border-b border-slate-100 dark:border-slate-850 pb-2 mb-1 flex items-center justify-between">
                 <h4 className="text-xs font-bold text-slate-850 dark:text-slate-200 uppercase tracking-wider">Sync Engine Telemetry</h4>
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold ${lcStats.attendanceFinalized ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
-                  {lcStats.attendanceFinalized ? 'Finalized & Locked' : 'Synchronization Active'}
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                  lcStats.attendanceFinalized ? 'bg-emerald-500/10 text-emerald-500' : 
+                  (syncingLcContest ? 'bg-amber-500/10 text-amber-500 animate-pulse' : 'bg-slate-500/10 text-slate-500')
+                }`}>
+                  {lcStats.attendanceFinalized ? 'Finalized & Locked' : (syncingLcContest ? 'Synchronization Active' : 'Not Verified')}
                 </span>
               </div>
               <div className="space-y-0.5">
@@ -1546,7 +1589,9 @@ function Attendance() {
               </div>
               <div className="space-y-0.5">
                 <span className="text-[9px] text-slate-400 font-bold block uppercase">Attendance Status</span>
-                <span className="font-semibold text-slate-750 dark:text-slate-250">{lcStats.attendanceFinalized ? 'Verified & Finalized' : 'Pending Verification'}</span>
+                <span className="font-semibold text-slate-750 dark:text-slate-250">
+                  {lcStats.attendanceFinalized ? 'Verified & Finalized' : (syncingLcContest ? 'Pending Verification' : 'Not Verified')}
+                </span>
               </div>
             </div>
           )}
