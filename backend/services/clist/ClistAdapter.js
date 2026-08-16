@@ -175,7 +175,7 @@ class ClistAdapter extends BaseAdapter {
     console.log(`[CLIST] [TELEMETRY] Total Duration: ${totalDuration} ms`);
     console.log(`[CLIST] [TELEMETRY] =================================================`);
 
-    results.scrapedParticipantCount = participants ? participants.length : 0;
+    results.scrapedParticipantCount = participants ? (participants.totalCount || participants.length) : 0;
     results.leaderboardComplete = isLeaderboardComplete;
     results.syncState = participants ? participants.syncState : 'UNAVAILABLE';
     return results;

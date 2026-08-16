@@ -187,7 +187,7 @@ class HybridAttendanceProvider extends AttendanceProvider {
       console.log(`[HybridAttendanceProvider] [TELEMETRY] Total Duration: ${totalDuration} ms`);
       console.log(`[HybridAttendanceProvider] [TELEMETRY] =================================================`);
 
-      results.scrapedParticipantCount = participants.length;
+      results.scrapedParticipantCount = participants ? (participants.totalCount || participants.length) : 0;
       results.leaderboardComplete = isLeaderboardComplete;
       results.syncState = participants.syncState;
       return results;

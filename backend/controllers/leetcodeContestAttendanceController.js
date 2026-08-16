@@ -236,11 +236,61 @@ const LeetCodeContestAttendanceController = {
       let syncLog = null;
       if (contest) {
         const logRows = await db.query(
-          "SELECT started_at, completed_at, total_requests, failed_requests, retry_count FROM ContestSyncLog WHERE contestId = ? ORDER BY started_at DESC LIMIT 1",
+          "SELECT started_at, completed_at, total_requests, failed_requests, retry_count, participantsFetched FROM ContestSyncLog WHERE contestId = ? ORDER BY started_at DESC LIMIT 1",
           [contest.id]
         );
         if (logRows.length > 0) {
           syncLog = logRows[0];
+        }
+      }
+
+      // Check ContestParticipants count in DB as telemetry fallback
+      let cpCount = 0;
+      try {
+        const cpRows = await db.query("SELECT COUNT(*) as count FROM ContestParticipants WHERE contest_slug = ?", [slug]);
+        cpCount = cpRows[0]?.count || 0;
+      } catch (e) {}
+
+      let effectiveDownloaded = (contest && contest.totalParticipants > 0)
+        ? contest.totalParticipants
+        : ((syncLog && syncLog.participantsFetched > 0)
+          ? syncLog.participantsFetched
+          : cpCount);
+
+      // If effectiveDownloaded is 0 and CLIST provider is configured, retrieve live CLIST contest participant count
+      if (effectiveDownloaded === 0) {
+        try {
+          const ClistAdapterClass = require('../services/clist/ClistAdapter');
+          const clistAdapter = new ClistAdapterClass();
+          if (clistAdapter.isAvailable()) {
+            const ClistClient = require('../services/clist/ClistClient');
+            const searchString = slug.replace(/-/g, ' ');
+            const searchRes = await ClistClient.getContests({
+              resource: 'leetcode.com',
+              search: searchString
+            }).catch(() => null);
+
+            if (searchRes && searchRes.objects && searchRes.objects.length > 0) {
+              const matched = searchRes.objects.find(c =>
+                (c.key || '').toLowerCase() === slug.toLowerCase() ||
+                (c.event || '').toLowerCase() === searchString.toLowerCase() ||
+                (c.href || '').toLowerCase().includes(slug.toLowerCase())
+              ) || searchRes.objects[0];
+
+              if (matched && matched.id) {
+                const sampleStats = await ClistClient.getContestParticipants(matched.id, {
+                  resource: 'leetcode.com',
+                  limit: 1
+                }).catch(() => null);
+
+                if (sampleStats && sampleStats.meta) {
+                  effectiveDownloaded = sampleStats.meta.estimated_count || sampleStats.meta.total_count || (sampleStats.objects ? sampleStats.objects.length : 0);
+                }
+              }
+            }
+          }
+        } catch (clistErr) {
+          console.warn('[leetcodeContestAttendanceController] CLIST fallback telemetry check skipped:', clistErr.message);
         }
       }
 
@@ -263,7 +313,7 @@ const LeetCodeContestAttendanceController = {
       const provider = new LeetCodeProviderClass();
       const inMemoryIndex = provider.leaderboardIndices[slug];
       const cacheStatus = inMemoryIndex ? 'Cached (In Memory & Disk)' : (contest ? 'Disk Cached' : 'No Cache');
-      const cacheSize = inMemoryIndex ? Object.keys(inMemoryIndex).length : (contest ? contest.totalParticipants : 0);
+      const cacheSize = inMemoryIndex ? Object.keys(inMemoryIndex).length : effectiveDownloaded;
 
       // Unmatched students report
       const unmatchedStudents = records.filter(r => r.attendance === 'Pending' || r.attendance === 'Absent' || r.attendance === 'Unknown');
@@ -277,7 +327,7 @@ const LeetCodeContestAttendanceController = {
           present: presentCount,
           absent: absentCount,
           pending: pendingCount,
-          downloadedParticipants: contest ? contest.totalParticipants : 0,
+          downloadedParticipants: effectiveDownloaded,
           lastSyncTime: contest ? contest.lastSyncAt : null,
           nextScheduledSync: nextSyncTime,
           syncDurationMs: syncLog && syncLog.completed_at && syncLog.started_at ? (new Date(syncLog.completed_at) - new Date(syncLog.started_at)) : 0,
