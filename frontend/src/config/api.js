@@ -26,13 +26,15 @@ function getNormalizedApiUrl() {
 
 export const API_URL = getNormalizedApiUrl();
 
-// Configure Axios default baseURL
-axios.defaults.baseURL = API_URL;
-axios.defaults.timeout = 90000; // 30 second timeout for cold starts
+// Configure Axios defaults (only set baseURL if API_URL is an absolute URL to avoid double prefixing like /api/api/...)
+if (API_URL.startsWith('http')) {
+  axios.defaults.baseURL = API_URL;
+}
+axios.defaults.timeout = 90000; // 90 second timeout for cold starts
 
 // Centralized Axios instance
 export const apiClient = axios.create({
-  baseURL: API_URL,
+  baseURL: API_URL.startsWith('http') ? API_URL : '',
   timeout: 90000,
 });
 

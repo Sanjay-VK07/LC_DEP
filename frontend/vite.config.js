@@ -4,9 +4,17 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const backendTarget = env.VITE_API_URL 
-    ? env.VITE_API_URL.replace(/\/api\/?$/, '')
-    : 'https://college-slov.onrender.com';
+  // Determine proxy target: if VITE_API_URL is an absolute URL, strip trailing /api;
+  // otherwise default to local backend at http://localhost:3001
+  let backendTarget = 'http://localhost:3001';
+  if (env.VITE_API_URL && env.VITE_API_URL.startsWith('http')) {
+    const cleaned = env.VITE_API_URL.replace(/\/api\/?$/, '');
+    if (cleaned) {
+      backendTarget = cleaned;
+    }
+  } else if (env.VITE_BACKEND_URL && env.VITE_BACKEND_URL.startsWith('http')) {
+    backendTarget = env.VITE_BACKEND_URL;
+  }
 
   return {
     plugins: [react()],
