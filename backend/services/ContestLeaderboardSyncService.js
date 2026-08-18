@@ -483,7 +483,7 @@ class ContestLeaderboardSyncService {
 
         // Mark sync log as completed. Include error summary in the ContestSyncLog error field if some pages failed.
         const summaryErrorStr = failedPagesCount > 0
-          ? `Incomplete sync. Succeeded: ${successPagesCount}, Failed: ${failedPagesCount} (Cloudflare Blocks: ${cfBlocks}, Network Errors: ${netErrors}).`
+          ? `Incomplete sync. Succeeded: ${successfulPagesCount}, Failed: ${failedPagesCount} (Cloudflare Blocks: ${blockedPagesCount}).`
           : null;
 
         await connection.query(`

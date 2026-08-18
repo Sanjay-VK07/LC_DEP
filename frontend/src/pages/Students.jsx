@@ -1402,7 +1402,7 @@ function Students() {
                       onClick={() => downloadFullReport(importResults.details)}
                       className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold shadow-sm transition-all"
                     >
-                      <Download className="h-4 w-4" /> Download Full Report (3 Sheets)
+                      <Download className="h-4 w-4" /> Download Full Report (2 Sheets)
                     </button>
                     <button
                       type="button"

@@ -154,7 +154,43 @@ class LeetCodeAdapter extends BaseAdapter {
     console.log(`[CACHE] [CACHE MISS] Cache Key: "${cacheKey}" | Reason: ${bypassCache ? 'bypassCache flag set' : cacheResult.reason}`);
 
     // ------------------------------------------------------------------
-    // 2. Primary Provider: CLIST API v4 Contest-Level Fetch
+    // 2. Primary Provider: Native LeetCode ranking-page scrape.
+    // Unlike CLIST's dataset (which only ever indexes a partial subset of
+    // participants for LeetCode), a full page-by-page scrape of LeetCode's
+    // own contest ranking API can reach genuine 100% completeness, or a
+    // real early-exit verification against the registered roster. CLIST is
+    // used only as a fallback when LeetCode blocks the scrape (Cloudflare).
+    // ------------------------------------------------------------------
+    try {
+      const mode = (options.registeredUsernames && options.registeredUsernames.length > 0)
+        ? 'ATTENDANCE_ONLY'
+        : 'FULL_LEADERBOARD';
+      console.log(`[LEETCODE_NATIVE] Fetching full leaderboard via native scrape for contest "${slug}" (mode: ${mode})...`);
+      const nativeResult = await this._fetchFullLeaderboard(slug, { mode });
+
+      const items = nativeResult.participants;
+      items.pagesFetched = nativeResult.pagesFetched;
+      items.leaderboardComplete = nativeResult.leaderboardComplete;
+      items.attendanceVerified = nativeResult.attendanceVerified;
+      items.syncStatus = nativeResult.syncStatus;
+      items.totalCount = nativeResult.totalExpected;
+      items.fromCache = false;
+      items.source = 'LEETCODE_NATIVE';
+
+      if (items.length > 0) {
+        await this._updateCache(slug, items, items.leaderboardComplete);
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: LEETCODE_NATIVE | Participants: ${items.length} | Duration: ${elapsed}ms | syncStatus: ${items.syncStatus} | leaderboardComplete: ${items.leaderboardComplete}`);
+      return items;
+    } catch (nativeErr) {
+      const isCloudflare = nativeErr.code === 'CLOUDFLARE_BLOCK' || nativeErr.name === 'CloudflareBlockedError';
+      console.warn(`[LEETCODE_NATIVE] Native scrape failed for "${slug}" (${nativeErr.message}). Falling back to CLIST${isCloudflare ? ' (Cloudflare block)' : ''}...`);
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Fallback Provider: CLIST API v4 Contest-Level Fetch
     // ------------------------------------------------------------------
     try {
       console.log(`[CLIST_ATTENDANCE] Fetching contest-level statistics via CLIST for contest "${slug}"...`);
@@ -183,7 +219,8 @@ class LeetCodeAdapter extends BaseAdapter {
 
       const items = await clistAdapter.getContestParticipants(clistContestId, {
         resource: 'leetcode.com',
-        bypassCache
+        bypassCache,
+        registeredUsernames: options.registeredUsernames
       });
 
       if (items && items.length > 0) {
@@ -191,10 +228,13 @@ class LeetCodeAdapter extends BaseAdapter {
       }
 
       const elapsed = Date.now() - startTime;
-      console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: CLIST | Participants: ${items.length} | Duration: ${elapsed}ms`);
+      console.log(`[CONTEST_SYNC] Contest: ${slug} | Source: CLIST | Participants: ${items.length} | Duration: ${elapsed}ms | syncStatus: ${items.syncStatus} | leaderboardComplete: ${items.leaderboardComplete}`);
       items.pagesFetched = 1;
       items.fromCache = false;
-      items.syncStatus = 'SUCCESS';
+      // Preserve the real syncStatus/leaderboardComplete/attendanceVerified flags
+      // set by ClistAdapter — do NOT force 'SUCCESS' here, since LeetCode's CLIST
+      // dataset is only ever PARTIAL unless verified against the registered roster.
+      items.syncStatus = items.syncStatus || 'PARTIAL';
       items.source = 'CLIST';
       return items;
     } catch (err) {
@@ -344,8 +384,11 @@ class LeetCodeAdapter extends BaseAdapter {
       };
     }
 
-    // Set page ceiling to cover full contest unless LEETCODE_MAX_PAGES_LIMIT is explicitly defined
-    const maxPagesCeiling = parseInt(process.env.LEETCODE_MAX_PAGES_LIMIT, 10) || 1500;
+    // Set page ceiling to cover full contest unless LEETCODE_MAX_PAGES_LIMIT is explicitly defined.
+    // Must be high enough to reach true completeness for large contests (LeetCode weekly
+    // contests can exceed 45k participants / ~1800 pages) — a cap that's hit before the
+    // last page means leaderboardComplete can never become true, so absences never resolve.
+    const maxPagesCeiling = parseInt(process.env.LEETCODE_MAX_PAGES_LIMIT, 10) || 5000;
     const pagesToFetchLimit = Math.min(totalPages, maxPagesCeiling);
 
     console.log(`[LeetCodeAdapter] Contest "${slug}": ${totalUsers} participants across ${totalPages} pages. Mode: ${mode}. Fetching up to ${pagesToFetchLimit} pages (Ceiling: ${maxPagesCeiling})...`);

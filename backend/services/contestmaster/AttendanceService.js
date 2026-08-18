@@ -33,10 +33,11 @@ class AttendanceService {
    */
   async recordOverride(studentId, contestId, status, remarks = '') {
     const query = `
-      INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, remarks, override_by, override_at)
-      VALUES (?, ?, ?, ?, 'admin', NOW())
-      ON DUPLICATE KEY UPDATE 
+      INSERT INTO AttendanceRecords (user_id, contest_id, attendance_status, attendance_source, remarks, override_by, override_at)
+      VALUES (?, ?, ?, 'MANUAL', ?, 'admin', NOW())
+      ON DUPLICATE KEY UPDATE
         attendance_status = VALUES(attendance_status),
+        attendance_source = 'MANUAL',
         remarks = VALUES(remarks),
         override_by = VALUES(override_by),
         override_at = VALUES(override_at)

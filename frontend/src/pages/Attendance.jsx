@@ -38,6 +38,8 @@ function Attendance() {
 
   // LeetCode Contest Ranking Search States
   const [lcContestSlug, setLcContestSlug] = useState('weekly-contest-390');
+  const [debouncedLcContestSlug, setDebouncedLcContestSlug] = useState('weekly-contest-390');
+  const lcStatsAbortControllerRef = useRef(null);
   const [lcStats, setLcStats] = useState(null);
   const [lcRecords, setLcRecords] = useState([]);
   const [loadingLcStats, setLoadingLcStats] = useState(false);
@@ -46,12 +48,16 @@ function Attendance() {
   const [lcSyncProgress, setLcSyncProgress] = useState(0);
   const [lcSyncMessage, setLcSyncMessage] = useState('');
   const syncPollRef = useRef(null);
+  const backfillPollRef = useRef(null);
 
-  // Clean up polling interval on unmount
+  // Clean up polling intervals on unmount
   useEffect(() => {
     return () => {
       if (syncPollRef.current) {
         clearInterval(syncPollRef.current);
+      }
+      if (backfillPollRef.current) {
+        clearInterval(backfillPollRef.current);
       }
     };
   }, []);
@@ -198,7 +204,10 @@ function Attendance() {
       const res = await axios.post(`${API_URL}/jobs/backfill`);
       if (res.data.success) {
         const jobId = res.data.jobId;
-        const poll = setInterval(async () => {
+        if (backfillPollRef.current) {
+          clearInterval(backfillPollRef.current);
+        }
+        backfillPollRef.current = setInterval(async () => {
           try {
             const jobRes = await axios.get(`${API_URL}/jobs/${jobId}`);
             const job = jobRes.data.data;
@@ -206,14 +215,14 @@ function Attendance() {
               setBackfillProgress(job.progress || 5);
               setBackfillMessage(job.message || 'Processing...');
               if (job.status === 'COMPLETED') {
-                clearInterval(poll);
+                clearInterval(backfillPollRef.current);
                 setIsBackfilling(false);
                 setSuccess('Attendance backfilled successfully!');
                 setBackfillProgress(100);
                 setTimeout(() => setBackfillProgress(0), 4000);
                 fetchAttendanceList();
               } else if (job.status === 'FAILED') {
-                clearInterval(poll);
+                clearInterval(backfillPollRef.current);
                 setIsBackfilling(false);
                 setError('Backfill failed: ' + job.error);
                 setBackfillProgress(0);
@@ -419,18 +428,34 @@ function Attendance() {
     }
   };
 
+  // Debounce the contest slug input so we don't fire a request on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedLcContestSlug(lcContestSlug), 500);
+    return () => clearTimeout(t);
+  }, [lcContestSlug]);
+
   // LeetCode Rankings Scraper Handlers & Effects
   const fetchLcContestStats = useCallback(async () => {
-    if (!lcContestSlug.trim()) return;
+    if (!debouncedLcContestSlug.trim()) return;
+
+    // Cancel any still-in-flight request so a slower, stale response
+    // can never overwrite the display after a newer request resolves.
+    if (lcStatsAbortControllerRef.current) {
+      lcStatsAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    lcStatsAbortControllerRef.current = controller;
+
     setLoadingLcStats(true);
     try {
       const res = await axios.get(`${API_URL}/attendance/leetcode-stats`, {
         params: {
-          contestSlug: lcContestSlug,
+          contestSlug: debouncedLcContestSlug,
           department: lcDeptFilter,
           batch: lcBatchFilter,
           section: lcSectionFilter
-        }
+        },
+        signal: controller.signal
       });
       if (res.data.success) {
         logger.debug('Received LeetCode contest records:', res.data.records);
@@ -438,11 +463,17 @@ function Attendance() {
         setLcRecords(res.data.records);
       }
     } catch (err) {
-      console.error(err);
+      if (axios.isCancel(err) || err.code === 'ERR_CANCELED') {
+        // Superseded by a newer request — ignore.
+      } else {
+        console.error(err);
+      }
     } finally {
-      setLoadingLcStats(false);
+      if (lcStatsAbortControllerRef.current === controller) {
+        setLoadingLcStats(false);
+      }
     }
-  }, [lcContestSlug, lcDeptFilter, lcBatchFilter, lcSectionFilter]);
+  }, [debouncedLcContestSlug, lcDeptFilter, lcBatchFilter, lcSectionFilter]);
 
   function formatClistErrorMessage(rawErr) {
     if (!rawErr) return 'Unable to fetch LeetCode contest attendance data from CLIST. Please try again later.';
@@ -1596,20 +1627,23 @@ function Attendance() {
             </div>
           )}
 
-          {/* Unmatched / Pending Username Report */}
-          {lcRecords && lcRecords.filter(r => r.attendance === 'Pending' || r.attendance === 'Absent' || r.attendance === 'Unknown').length > 0 && (
+          {/* Unregistered Username Report — only students with NO LeetCode handle on file.
+              Pending/Unknown students who DO have a registered handle are not a "problem" to
+              surface here; they're just unverified because the leaderboard fetch is incomplete,
+              which is a data-completeness issue, not a username-registration issue. */}
+          {lcRecords && lcRecords.filter(r => !r.leetcode_username || !r.leetcode_username.trim()).length > 0 && (
             <div className="p-5 rounded-3xl border border-rose-500/10 bg-rose-500/5 text-xs text-rose-600 dark:text-rose-450 space-y-2">
               <div className="flex items-center gap-2 font-bold">
                 <AlertTriangle className="h-4.5 w-4.5" />
-                <span>Unmatched Students Report ({lcRecords.filter(r => r.attendance === 'Pending' || r.attendance === 'Absent' || r.attendance === 'Unknown').length} students)</span>
+                <span>Unregistered Username Report ({lcRecords.filter(r => !r.leetcode_username || !r.leetcode_username.trim()).length} students)</span>
               </div>
               <p className="text-[10px] text-slate-400">
-                These students did not match the contest rankings. Please verify if their LeetCode usernames are correctly registered.
+                These students have no LeetCode username on file, so their attendance can never be verified automatically. Please register their handles.
               </p>
               <div className="flex flex-wrap gap-2 pt-2">
-                {lcRecords.filter(r => r.attendance === 'Pending' || r.attendance === 'Absent' || r.attendance === 'Unknown').map(u => (
+                {lcRecords.filter(r => !r.leetcode_username || !r.leetcode_username.trim()).map(u => (
                   <span key={u.id} className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700/80 text-slate-700 dark:text-slate-350 font-semibold">
-                    {u.student_name} ({u.leetcode_username || 'No Username'}) - <span className="uppercase text-[9px] text-rose-500">{u.attendance}</span>
+                    {u.student_name} (No Username)
                   </span>
                 ))}
               </div>
@@ -1729,8 +1763,10 @@ function Attendance() {
                           <td className="py-3.5 px-4 text-center">
                             {normalizeAttendanceStatus(record.attendance) === 'PRESENT' ? (
                               <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">PRESENT</span>
-                            ) : (
+                            ) : normalizeAttendanceStatus(record.attendance) === 'ABSENT' ? (
                               <span className="px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-[10px]">ABSENT</span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 font-bold text-[10px]">PENDING</span>
                             )}
                           </td>
                           <td className="py-3.5 px-4 text-center font-bold text-slate-800 dark:text-slate-200">

@@ -238,7 +238,11 @@ async function processContestUpload(req, res) {
 
     // Log unmatched handles for manual review
     const unmatchedHandles = [];
-    const databaseUsernames = new Set(eligibleStudents.map(s => s.leetcode_username.trim().toLowerCase()));
+    const databaseUsernames = new Set(
+      eligibleStudents
+        .filter(s => s.leetcode_username)
+        .map(s => s.leetcode_username.trim().toLowerCase())
+    );
     
     fileUsernames.forEach(fileUser => {
       if (!databaseUsernames.has(fileUser)) {

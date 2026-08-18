@@ -176,7 +176,7 @@ async function addContest(req, res) {
 
   try {
     const slug = contestId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const contestType = type.toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';
+    const contestType = (type || '').toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';
     
     // Parse contest number from slug
     const match = slug.match(/contest-(\d+)/);
@@ -239,7 +239,7 @@ async function editContest(req, res) {
 
   try {
     const slug = contestId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const contestType = type.toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';
+    const contestType = (type || '').toLowerCase() === 'biweekly' ? 'Biweekly' : 'Weekly';
     
     const match = slug.match(/contest-(\d+)/);
     const contestNumber = match ? parseInt(match[1], 10) : 0;

@@ -8,6 +8,18 @@ class ClistAdapter extends BaseAdapter {
     this.providerName = 'CLIST';
   }
 
+  /**
+   * CLIST stores LeetCode account handles with a synthetic "@.com"/"@.cn"/etc
+   * suffix appended (confirmed on both /statistics/ and /account/ endpoints —
+   * this is CLIST's canonical handle format, not a per-request artifact).
+   * The real LeetCode username is everything before the "@".
+   */
+  static stripHandleSuffix(handle) {
+    if (!handle || typeof handle !== 'string') return handle;
+    const atIndex = handle.indexOf('@');
+    return atIndex > 0 ? handle.slice(0, atIndex) : handle;
+  }
+
   isAvailable() {
     return ClistClient.isConfigured();
   }
@@ -53,8 +65,29 @@ class ClistAdapter extends BaseAdapter {
             provider: 'CACHE',
             source: 'CACHE'
           }));
-          participants.leaderboardComplete = true;
-          participants.syncState = 'COMPLETE';
+
+          // A non-empty cache is NOT necessarily the complete leaderboard — it may be
+          // a partial scrape (page-cap hit, interrupted run, etc). Verify against the
+          // true registrant count before claiming COMPLETE; otherwise unmatched
+          // students downstream get falsely marked Absent instead of Pending.
+          let isActuallyComplete = false;
+          const isCodeChefCache = contestSlug.toLowerCase().includes('starters') ||
+                                  contestSlug.toLowerCase().includes('cookoff') ||
+                                  contestSlug.toLowerCase().includes('lunchtime');
+          if (!isCodeChefCache) {
+            try {
+              const leetcodeUtils = require('../../utils/leetcode');
+              const page1 = await leetcodeUtils.getContestRankingPage(contestSlug, 1);
+              const trueTotal = page1?.user_num || 0;
+              isActuallyComplete = trueTotal > 0 && cachedRows.length >= trueTotal * 0.995;
+              console.log(`[CLIST] Stage 1 completeness check: cached=${cachedRows.length}, trueTotal=${trueTotal}, complete=${isActuallyComplete}`);
+            } catch (verifyErr) {
+              console.warn(`[CLIST] Stage 1 completeness verification failed: ${verifyErr.message}. Treating cache as PARTIAL.`);
+            }
+          }
+
+          participants.leaderboardComplete = isActuallyComplete;
+          participants.syncState = isActuallyComplete ? 'COMPLETE' : 'PARTIAL';
           participants.source = 'CACHE';
           participants.provider = 'CACHE';
           selectedProviderName = 'CACHE';
@@ -340,7 +373,7 @@ class ClistAdapter extends BaseAdapter {
         const account = objects[0];
         return {
           verified: true,
-          username: normalizeUsername(account.handle || username),
+          username: normalizeUsername(ClistAdapter.stripHandleSuffix(account.handle) || username),
           rating: account.rating ? parseInt(account.rating, 10) : null,
           highestRating: account.max_rating ? parseInt(account.max_rating, 10) : null,
           globalRanking: account.global_rank ? parseInt(account.global_rank, 10) : null,
@@ -405,7 +438,7 @@ class ClistAdapter extends BaseAdapter {
    * Normalize CLIST raw statistics/participant object to CodeTrack internal format.
    */
   normalizeParticipant(rawStat, contestId) {
-    const handle = rawStat.handle || rawStat.account || rawStat.username || '';
+    const handle = ClistAdapter.stripHandleSuffix(rawStat.handle || rawStat.account || rawStat.username || '');
     const place = rawStat.place ? parseInt(rawStat.place, 10) : null;
     const score = rawStat.score !== undefined ? parseFloat(rawStat.score) : (rawStat.solving !== undefined ? parseFloat(rawStat.solving) : 0);
     const penalty = rawStat.penalty !== undefined ? parseInt(rawStat.penalty, 10) : 0;

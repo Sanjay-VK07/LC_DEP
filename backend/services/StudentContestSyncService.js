@@ -12,7 +12,7 @@ class StudentContestSyncService {
    * @param {string} [options.actor] - Initiator of the sync job (default 'SYSTEM')
    * @returns {Promise<object>} - Telemetry & sync summary report
    */
-  static async syncContestAttendance({ contestSlug, providerType, csvRecords = [], actor = 'SYSTEM', onProgress = null }) {
+  static async syncContestAttendance({ contestSlug, providerType, csvRecords = [], actor = 'SYSTEM', onProgress = null, bypassCache = false }) {
     const startTime = Date.now();
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] ========== Student Contest Sync Start ==========`);
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contest Slug Received: "${contestSlug}"`);
@@ -100,6 +100,7 @@ class StudentContestSyncService {
       resolvedItems = await provider.resolveAttendance({
         contestSlug,
         students,
+        bypassCache,
         onProgress: typeof onProgress === 'function'
           ? (completed, total) => {
               const pct = total > 0 ? 15 + Math.round((completed / total) * 75) : 15;
@@ -145,7 +146,8 @@ class StudentContestSyncService {
 
           const clistParticipants = await clistAdapter.getContestParticipants(clistContestId, {
             resource: 'leetcode.com',
-            registeredUsernames
+            registeredUsernames,
+            bypassCache
           });
 
           // Match CLIST participants against registered student roster
@@ -389,7 +391,11 @@ class StudentContestSyncService {
           await conn.commit();
           batchSuccess = true;
         } catch (err) {
-          await conn.rollback();
+          try {
+            await conn.rollback();
+          } catch (rollbackErr) {
+            console.error(`[StudentContestSyncService] Rollback failed for batch ${i}-${i + BATCH_SIZE}: ${rollbackErr.message} (original error: ${err.message})`);
+          }
           const isDeadlock = err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213 || err.code === 'ER_LOCK_WAIT_TIMEOUT';
           
           if (isDeadlock && attempt < MAX_DEADLOCK_RETRIES) {

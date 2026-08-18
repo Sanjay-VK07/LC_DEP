@@ -129,6 +129,22 @@ class ContestAttendanceSyncService {
     // 2. Select Platform Adapter
     const adapter = getAdapter(platform);
 
+    // 2b. Fetch active students up front so we can pass their handles to the
+    // adapter for registered-roster verification (enables an honest
+    // VERIFIED_FOR_REGISTERED_STUDENTS result instead of blind full-leaderboard fetches).
+    let students = [];
+    try {
+      students = await db.query(
+        "SELECT id, name, leetcode_username, codeforces_username, codechef_username, hackerrank_username FROM Users WHERE status = 'active'"
+      );
+    } catch (dbErr) {
+      console.warn(`[Sync Worker] Could not load active students from DB: ${dbErr.message}`);
+    }
+    const platLowerForRoster = platform.toLowerCase();
+    const registeredUsernames = students
+      .map(s => normalizeUsername(s[`${platLowerForRoster}_username`]))
+      .filter(Boolean);
+
     // 3. Fetch Contest Participants (with up to 3 retries)
     updateProgress(30, 'Retrieving participants from platform adapter...');
     let participants = [];
@@ -137,7 +153,7 @@ class ContestAttendanceSyncService {
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        participants = await adapter.getContestParticipants(slug);
+        participants = await adapter.getContestParticipants(slug, { registeredUsernames });
         if (participants && participants.length > 0) {
           fetchSuccess = true;
           break;
@@ -153,6 +169,20 @@ class ContestAttendanceSyncService {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
       }
+    }
+
+    // Build participant lookup map with normalized usernames from fetched participants
+    const participantMap = new Map();
+    if (fetchSuccess) {
+      participants.forEach(p => {
+        if (p.username) {
+          const normKey = normalizeUsername(p.username);
+          if (normKey) {
+            participantMap.set(normKey, p);
+          }
+        }
+      });
+      console.log(`[Sync Worker] [DIAGNOSTICS] Unique Normalized Entries in map: ${participantMap.size}`);
     }
 
     // ATTENDANCE SAFETY GUARANTEE:
@@ -184,16 +214,6 @@ class ContestAttendanceSyncService {
         source: null,
         message: 'Contest participant data is currently unverified. Existing attendance preserved.'
       };
-    }
-
-    // 4. Fetch all active students
-    let students = [];
-    try {
-      students = await db.query(
-        "SELECT id, name, leetcode_username, codeforces_username, codechef_username, hackerrank_username FROM Users WHERE status = 'active'"
-      );
-    } catch (dbErr) {
-      console.warn(`[Sync Worker] Could not load active students from DB: ${dbErr.message}`);
     }
 
     console.log(`[Sync Worker] [DIAGNOSTICS] Students to Check: ${students.length}`);

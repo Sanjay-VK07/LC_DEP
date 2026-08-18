@@ -51,9 +51,13 @@ function parseDateOnly(dateInput) {
  * @param {object} student - { academic_start_date, academic_end_date }
  * @param {object} contest - { start_time, duration, contest_status }
  * @param {object} record - { attendance_source, attendance_status, contest_rank, sync_status, registration_time, join_time }
+ * @param {boolean} [leaderboardComplete=true] - Whether the ContestParticipants data backing this
+ *   resolution is known to cover the entire contest leaderboard. When false, a student with no
+ *   positive evidence is reported UNKNOWN (not yet verified) rather than ABSENT, since they may
+ *   simply fall outside the portion of the leaderboard that's been fetched so far.
  * @returns {object} - { status: 'PRESENT'|'ABSENT'|'UNKNOWN'|'ONGOING'|'UNRATED'|'NOT_APPLICABLE', reason: string }
  */
-function resolveCanonicalStatus(student, contest, record = {}) {
+function resolveCanonicalStatus(student, contest, record = {}, leaderboardComplete = true) {
   if (record.attendance_source === 'MANUAL' && record.attendance_status) {
     const hasAttended = record.attendance_status === 'PRESENT';
     return {
@@ -85,6 +89,13 @@ function resolveCanonicalStatus(student, contest, record = {}) {
   // Priority 5: Stale/Derived status checks
   if (record.attendance_status === 'PRESENT' || record.sync_status === 'Present' || record.sync_status === 'Participating') {
     return { status: 'PRESENT', reason: 'Attended' };
+  }
+
+  // No positive evidence found. Only report ABSENT if the leaderboard data we
+  // checked against is known to be complete — otherwise this student may simply
+  // fall outside the fetched range and reporting ABSENT would be a false negative.
+  if (!leaderboardComplete) {
+    return { status: 'UNKNOWN', reason: 'Leaderboard data incomplete — attendance not yet verified' };
   }
 
   return { status: 'ABSENT', reason: 'Absent' };
@@ -1010,6 +1021,23 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
     const partMap = new Map(participationLogs.map(p => [p.user_id, p.join_time]));
     const mappingMap = new Map(attendanceMappings.map(m => [m.studentId, m]));
 
+    // Verify the cached ContestParticipants leaderboard actually covers the whole
+    // contest before trusting "not found" as evidence of absence — a partial scrape
+    // (page-cap, interrupted run) must not cause real participants outside the
+    // fetched range to be falsely marked ABSENT.
+    let leaderboardComplete = true;
+    if (platform === 'leetcode' && standings.length > 0) {
+      try {
+        const leetcodeUtils = require('../utils/leetcode');
+        const page1 = await leetcodeUtils.getContestRankingPage(contestSlug, 1);
+        const trueTotal = page1?.user_num || 0;
+        leaderboardComplete = trueTotal > 0 && standings.length >= trueTotal * 0.995;
+      } catch (verifyErr) {
+        console.warn(`[AttendanceService] Leaderboard completeness check failed for "${contestSlug}": ${verifyErr.message}. Treating as incomplete.`);
+        leaderboardComplete = false;
+      }
+    }
+
     // Pre-calculate duplicate usernames for conflict logic
     const usernameCounts = new Map();
     for (const student of students) {
@@ -1068,8 +1096,11 @@ async function resolveCanonicalContestParticipants(contestId, filters = {}) {
           exists_in_contest_participants: participantExists
         };
 
-        const resolved = resolveCanonicalStatus(student, contest, recordObj);
-        status = normalizeAttendanceStatus(resolved.status);
+        const resolved = resolveCanonicalStatus(student, contest, recordObj, leaderboardComplete);
+        // NOTE: intentionally NOT collapsing through normalizeAttendanceStatus() —
+        // that would flatten a genuine 'UNKNOWN' (unverified) result into 'ABSENT',
+        // which is exactly the false-negative this completeness check exists to prevent.
+        status = resolved.status;
         attendanceStatus = status;
         reason = resolved.reason;
       }

@@ -724,7 +724,7 @@ async function editStudent(req, res) {
 // 4. Delete student
 async function deleteStudent(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   const { id } = req.params;
@@ -752,7 +752,7 @@ async function bulkImportStudents(req, res) {
   const startTime = Date.now();
 
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
 
@@ -1379,7 +1379,7 @@ async function getImportHistory(req, res) {
 // 5b. Bulk permanent delete — by explicit student IDs or by department/batch(/section) filter
 async function bulkDeleteStudents(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
 
@@ -1434,7 +1434,7 @@ async function bulkDeleteStudents(req, res) {
 // 6. Batch Graduated Archive Students
 async function archiveStudents(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   const { department, academicBatch, academicYear, section } = req.body;
@@ -1480,7 +1480,7 @@ async function archiveStudents(req, res) {
 // 7. Restore Graduated Student Records to Active (Supports Batch or Individual)
 async function restoreStudents(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   const { studentId, department, academicBatch, academicYear, section } = req.body;
@@ -2001,7 +2001,7 @@ async function getStudentsDataHealth(req, res) {
 
 async function syncStudentPlatformManual(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   const { id, platform } = req.params;
@@ -2021,7 +2021,7 @@ async function syncStudentPlatformManual(req, res) {
 
 async function forceFullSync(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   try {
@@ -2035,7 +2035,7 @@ async function forceFullSync(req, res) {
 
 async function clearCacheManual(req, res) {
   // Defensive RBAC Check
-  if (req.user && !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
+  if (!req.user || !['Super Admin', 'Faculty', 'HOD'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions.' });
   }
   try {

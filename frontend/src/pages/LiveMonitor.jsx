@@ -42,7 +42,7 @@ function LiveMonitor() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const currentRes = await axios.get('/api/contestmaster/live/current');
+      const currentRes = await axios.get(`${API_URL}/contestmaster/live/current`);
       const activeContest = currentRes.data.contest;
       const liveFlag = currentRes.data.hasLiveContest;
       setContest(activeContest);
@@ -50,17 +50,17 @@ function LiveMonitor() {
 
       if (activeContest && liveFlag) {
         // Fetch students and analytics
-        const studentsRes = await axios.get(`/api/contestmaster/live/students?contestId=${activeContest.id}`);
+        const studentsRes = await axios.get(`${API_URL}/contestmaster/live/students?contestId=${activeContest.id}`);
         setStudents(studentsRes.data.students);
 
-        const analyticsRes = await axios.get(`/api/contestmaster/live/analytics?contestId=${activeContest.id}`);
+        const analyticsRes = await axios.get(`${API_URL}/contestmaster/live/analytics?contestId=${activeContest.id}`);
         setAnalytics(analyticsRes.data);
       }
 
-      const healthRes = await axios.get('/api/contestmaster/live/health');
+      const healthRes = await axios.get(`${API_URL}/contestmaster/live/health`);
       setHealth(healthRes.data.health);
 
-      const batchesRes = await axios.get('/api/contestmaster/batches');
+      const batchesRes = await axios.get(`${API_URL}/contestmaster/batches`);
       setBatches(batchesRes.data);
 
     } catch (err) {
@@ -172,7 +172,7 @@ function LiveMonitor() {
         });
 
         // Trigger an async analytics and health refresh
-        axios.get(`/api/contestmaster/live/analytics?contestId=${contest.id}`)
+        axios.get(`${API_URL}/contestmaster/live/analytics?contestId=${contest.id}`)
           .then(res => setAnalytics(res.data))
           .catch(() => {});
       });
@@ -182,7 +182,7 @@ function LiveMonitor() {
       });
 
       source.addEventListener('SnapshotCreated', () => {
-        axios.get(`/api/contestmaster/live/analytics?contestId=${contest.id}`)
+        axios.get(`${API_URL}/contestmaster/live/analytics?contestId=${contest.id}`)
           .then(res => setAnalytics(res.data))
           .catch(() => {});
       });
@@ -211,7 +211,7 @@ function LiveMonitor() {
     if (!contest) return;
     try {
       setActionLoading(true);
-      const res = await axios.post('/api/contestmaster/live/control', {
+      const res = await axios.post(`${API_URL}/contestmaster/live/control`, {
         action,
         contestId: contest.id
       });

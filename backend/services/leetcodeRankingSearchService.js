@@ -37,6 +37,7 @@ const LeetCodeRankingSearchService = {
       const participantMap = new Map(); // username (lower) -> ranking_details
       let failedPages = 0;
       let usedLeetAi = false;
+      let page1Data;
 
       // 0. Preferred Data Source: Leet.ai API (if configured)
       const leetAiClient = require('../utils/leetAiClient');
@@ -72,7 +73,6 @@ const LeetCodeRankingSearchService = {
         console.log("Calling LeetCode API...");
         // 1. Fetch Page 1 to verify contest and get total count
         const page1Url = `https://leetcode.com/contest/api/ranking/${slug}/?pagination=1`;
-        let page1Data;
         try {
           page1Data = await NetworkService.request(page1Url, {
             method: 'GET',

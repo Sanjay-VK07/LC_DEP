@@ -1,6 +1,5 @@
 const db = require('../config/db');
 const LeetCodeRankingSearchService = require('../services/leetcodeRankingSearchService');
-const { normalizeAttendanceStatus } = require('../utils/attendanceNormalizer');
 const CloudflareBlockedError = require('../utils/CloudflareBlockedError');
 
 /**
@@ -102,7 +101,7 @@ const LeetCodeContestAttendanceController = {
         success: false,
         stage: stage,
         error: errorMsg,
-        stack: error.stack,
+        ...(process.env.NODE_ENV !== 'production' ? { stack: error.stack } : {}),
         contestSlug: slug,
         message: `[${stage} Error] ${errorMsg}`
       });
@@ -226,10 +225,10 @@ const LeetCodeContestAttendanceController = {
         }
         recordsQuery += " ORDER BY ca.attendanceStatus DESC, ca.rank ASC, u.name ASC";
         records = await db.query(recordsQuery, recordsParams);
-        records = records.map(r => ({
-          ...r,
-          attendance: normalizeAttendanceStatus(r.attendance)
-        }));
+        // NOTE: intentionally NOT running attendance through normalizeAttendanceStatus()
+        // here — that helper collapses 'Unknown'/'Pending' into 'ABSENT', which would
+        // silently misrepresent registered-but-unverified students as confirmed absent.
+        // The frontend's own normalizer correctly distinguishes PENDING from ABSENT.
       }
 
       // 5. Query persistent sync logs from ContestSyncLog

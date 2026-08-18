@@ -70,9 +70,10 @@ async function fetchReportData(reportType, filters) {
     // Enrich with platform profile ratings
     const studentIds = data.map(s => s.id);
     if (studentIds.length > 0) {
-      const lcProfiles = await db.query(`SELECT user_id, current_rating, highest_rating, global_ranking, problems_solved FROM LeetCodeProfiles WHERE user_id IN (${studentIds.join(',')})`);
-      const ccProfiles = await db.query(`SELECT user_id, current_rating, highest_rating FROM CodeChefProfiles WHERE user_id IN (${studentIds.join(',')})`);
-      const cfProfiles = await db.query(`SELECT user_id, current_rating, highest_rating FROM CodeforcesProfiles WHERE user_id IN (${studentIds.join(',')})`);
+      const idPlaceholders = studentIds.map(() => '?').join(',');
+      const lcProfiles = await db.query(`SELECT user_id, current_rating, highest_rating, global_ranking, problems_solved FROM LeetCodeProfiles WHERE user_id IN (${idPlaceholders})`, studentIds);
+      const ccProfiles = await db.query(`SELECT user_id, current_rating, highest_rating FROM CodeChefProfiles WHERE user_id IN (${idPlaceholders})`, studentIds);
+      const cfProfiles = await db.query(`SELECT user_id, current_rating, highest_rating FROM CodeforcesProfiles WHERE user_id IN (${idPlaceholders})`, studentIds);
       
       const lcMap = new Map(lcProfiles.map(p => [p.user_id, p]));
       const ccMap = new Map(ccProfiles.map(p => [p.user_id, p]));

@@ -733,8 +733,8 @@ async function getAttendanceHeatmap(req, res) {
     });
 
     const studentsData = Array.from(studentHeatmapMap.values()).map(student => {
-      const start = parseDateOnly(student.academic_start_date);
-      const end = parseDateOnly(student.academic_end_date);
+      const start = parseDateOnly(student.academic_start_date) || new Date(0);
+      const end = parseDateOnly(student.academic_end_date) || new Date('9999-12-31');
       end.setHours(23, 59, 59, 999);
 
       const timeline = contestIds.map(cid => {
