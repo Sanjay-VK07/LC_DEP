@@ -21,6 +21,7 @@ const contestLeaderboardSyncRoutes = require('./routes/contestLeaderboardSync');
 const placementRoutes = require('./routes/placement');
 const aiRoutes = require('./routes/ai');
 const verificationRoutes = require('./routes/verificationRoutes');
+const adminContestRoutes = require('./routes/adminContest');
 
 const compression = require('compression');
 
@@ -88,6 +89,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/contestmaster', contestmasterRoutes);
 app.use('/api/contest', contestLeaderboardSyncRoutes);
+app.use('/api/admin/contest', adminContestRoutes);
 app.use('/api/placement', placementRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/verification', verificationRoutes);
@@ -105,6 +107,7 @@ app.use('/api/v1/health', healthRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/contestmaster', contestmasterRoutes);
 app.use('/api/v1/contest', contestLeaderboardSyncRoutes);
+app.use('/api/v1/admin/contest', adminContestRoutes);
 app.use('/api/v1/placement', placementRoutes);
 app.use('/api/v1/ai', aiRoutes);
 

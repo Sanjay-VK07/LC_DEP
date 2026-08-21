@@ -144,8 +144,12 @@ async function initializeDatabase() {
     console.log('[DB] Successfully connected to MySQL Server.');
     
     const dbName = process.env.DB_NAME || 'leetcode_attendance';
-    await tempConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-    console.log(`[DB] Database '${dbName}' ensured.`);
+    try {
+      await tempConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+      console.log(`[DB] Database '${dbName}' ensured.`);
+    } catch (createDbErr) {
+      console.warn(`[DB] Note on CREATE DATABASE '${dbName}': ${createDbErr.message}`);
+    }
     await tempConnection.end();
 
     pool = mysql.createPool({
@@ -246,42 +250,46 @@ async function initializeDatabase() {
     }
 
     if (usersTableExists) {
-      // Ensure StudentPlatformSync table exists
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS StudentPlatformSync (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          user_id INT NOT NULL,
-          platform VARCHAR(50) NOT NULL,
-          username VARCHAR(255) DEFAULT NULL,
-          sync_status VARCHAR(20) DEFAULT 'Never Synced',
-          last_successful_sync TIMESTAMP NULL DEFAULT NULL,
-          last_attempt TIMESTAMP NULL DEFAULT NULL,
-          retry_count INT DEFAULT 0,
-          failure_reason TEXT DEFAULT NULL,
-          failure_category VARCHAR(100) DEFAULT NULL,
-          data_completeness INT DEFAULT 0,
-          next_retry TIMESTAMP NULL DEFAULT NULL,
-          UNIQUE KEY idx_user_platform (user_id, platform),
-          FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB
-      `);
+      try {
+        // Ensure StudentPlatformSync table exists
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS StudentPlatformSync (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            platform VARCHAR(50) NOT NULL,
+            username VARCHAR(255) DEFAULT NULL,
+            sync_status VARCHAR(20) DEFAULT 'Never Synced',
+            last_successful_sync TIMESTAMP NULL DEFAULT NULL,
+            last_attempt TIMESTAMP NULL DEFAULT NULL,
+            retry_count INT DEFAULT 0,
+            failure_reason TEXT DEFAULT NULL,
+            failure_category VARCHAR(100) DEFAULT NULL,
+            data_completeness INT DEFAULT 0,
+            next_retry TIMESTAMP NULL DEFAULT NULL,
+            UNIQUE KEY idx_user_platform (user_id, platform),
+            FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB
+        `);
 
-      // Ensure contest_attendance table exists
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS contest_attendance (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          contest_slug VARCHAR(255) NOT NULL,
-          student_id INT NOT NULL,
-          leetcode_username VARCHAR(255) NOT NULL,
-          attendance ENUM('PRESENT', 'ABSENT') NOT NULL,
-          \`rank\` INT DEFAULT NULL,
-          score DECIMAL(10,2) DEFAULT NULL,
-          finish_time INT DEFAULT NULL,
-          synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          UNIQUE KEY unique_student_contest_slug_idx (student_id, contest_slug),
-          FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB
-      `);
+        // Ensure contest_attendance table exists
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contest_attendance (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            contest_slug VARCHAR(255) NOT NULL,
+            student_id INT NOT NULL,
+            leetcode_username VARCHAR(255) NOT NULL,
+            attendance ENUM('PRESENT', 'ABSENT') NOT NULL,
+            \`rank\` INT DEFAULT NULL,
+            score DECIMAL(10,2) DEFAULT NULL,
+            finish_time INT DEFAULT NULL,
+            synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_student_contest_slug_idx (student_id, contest_slug),
+            FOREIGN KEY (student_id) REFERENCES Users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB
+        `);
+      } catch (err) {
+        console.warn("[DB] Note on table creation check:", err.message);
+      }
       // Add problems_solved column to ContestParticipants if missing
       try {
         await pool.query("ALTER TABLE ContestParticipants ADD COLUMN problems_solved INT DEFAULT 0 AFTER score");

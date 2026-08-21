@@ -90,6 +90,43 @@ function invalidateAll() {
 }
 
 /**
+ * Invalidate cache entries relevant to a specific contest without flushing unrelated cache entries.
+ * @param {string|number} contestId
+ * @param {string} contestSlug
+ */
+function invalidateContest(contestId, contestSlug) {
+  let count = 0;
+  const idStr = String(contestId);
+  const slugStr = String(contestSlug || '').toLowerCase();
+
+  for (const key of cache.keys()) {
+    const kLower = key.toLowerCase();
+    if (
+      (idStr && kLower.includes(idStr)) ||
+      (slugStr && kLower.includes(slugStr)) ||
+      kLower.startsWith('contests:') ||
+      kLower.startsWith('analytics:') ||
+      kLower.startsWith('dashboard:')
+    ) {
+      cache.delete(key);
+      count++;
+    }
+  }
+
+  // Also clear CLIST in-memory cache if active
+  try {
+    const ClistClient = require('./clist/ClistClient');
+    if (ClistClient && ClistClient.cache && typeof ClistClient.cache.clear === 'function') {
+      ClistClient.cache.clear();
+    }
+  } catch (err) {
+    // Ignore if module not loaded
+  }
+
+  console.log(`[CacheService] Invalidated ${count} cache entries for contest ${contestId} (${contestSlug}).`);
+}
+
+/**
  * Get cache metadata (for monitoring).
  */
 function getStats() {
@@ -158,6 +195,7 @@ module.exports = {
   invalidate,
   invalidatePrefix,
   invalidateAll,
+  invalidateContest,
   getStats,
   getOrCompute,
   KEYS

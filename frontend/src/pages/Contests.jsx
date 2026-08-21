@@ -32,6 +32,8 @@ import {
   ChevronLeft,
   ChevronRight as ChevronRightIcon,
   RefreshCw,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
@@ -340,6 +342,16 @@ function Contests() {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState('');
 
+  /* ── Reset Contest Data state ── */
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetContest, setResetContest] = useState(null);
+  const [resetPreview, setResetPreview] = useState(null);
+  const [resetLoadingPreview, setResetLoadingPreview] = useState(false);
+  const [resetConfirmSlug, setResetConfirmSlug] = useState('');
+  const [resetIncludeManual, setResetIncludeManual] = useState(false);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetError, setResetError] = useState('');
+
   const selectedStudentInfo = students.find(s => s.id === parseInt(selectedStudentId));
 
   /* ── platform style configurations ── */
@@ -642,6 +654,82 @@ function Contests() {
       }
     } catch {
       setError('Failed to delete contest.');
+    }
+  };
+
+  const fetchResetPreview = async (contestId, includeManual) => {
+    setResetLoadingPreview(true);
+    setResetError('');
+    try {
+      const res = await axios.get(`${API_URL}/admin/contest/${contestId}/reset/preview?includeManualOverrides=${includeManual}`);
+      if (res.data.success) {
+        setResetPreview(res.data);
+      } else {
+        setResetError(res.data.message || 'Failed to fetch reset preview');
+      }
+    } catch (err) {
+      setResetError(err.response?.data?.message || err.message || 'Failed to fetch reset preview');
+    } finally {
+      setResetLoadingPreview(false);
+    }
+  };
+
+  const openResetModal = async (contest) => {
+    setResetContest(contest);
+    setShowResetModal(true);
+    setResetConfirmSlug('');
+    setResetIncludeManual(false);
+    setResetPreview(null);
+    const idParam = contest.id || contest.contest_id || contest.slug;
+    await fetchResetPreview(idParam, false);
+  };
+
+  const handleResetManualToggle = (e) => {
+    const checked = e.target.checked;
+    setResetIncludeManual(checked);
+    if (resetContest) {
+      const idParam = resetContest.id || resetContest.contest_id || resetContest.slug;
+      fetchResetPreview(idParam, checked);
+    }
+  };
+
+  const handleResetSubmit = async (e) => {
+    e.preventDefault();
+    if (!resetContest) return;
+
+    const idParam = resetContest.id || resetContest.contest_id || resetContest.slug;
+    const targetSlug = resetPreview?.contest?.slug || resetContest.slug || resetContest.contest_id;
+
+    if (resetConfirmSlug.trim().toLowerCase() !== String(targetSlug).trim().toLowerCase()) {
+      setResetError(`Confirmation text does not match contest slug: "${targetSlug}"`);
+      return;
+    }
+
+    setResetSubmitting(true);
+    setResetError('');
+
+    try {
+      const res = await axios.post(`${API_URL}/admin/contest/${idParam}/reset`, {
+        confirmSlug: resetConfirmSlug,
+        includeManualOverrides: resetIncludeManual
+      });
+
+      if (res.data.success) {
+        setSuccessMsg(`Contest ${targetSlug} data cleared successfully. Contest is ready for fresh sync.`);
+        setShowResetModal(false);
+        setResetContest(null);
+        fetchPlatformData();
+        if (resetContest.id) {
+          setContestParticipants(prev => ({ ...prev, [resetContest.id]: null }));
+        }
+        setTimeout(() => setSuccessMsg(''), 5000);
+      } else {
+        setResetError(res.data.message || 'Failed to reset contest data');
+      }
+    } catch (err) {
+      setResetError(err.response?.data?.message || err.message || 'Failed to reset contest data');
+    } finally {
+      setResetSubmitting(false);
     }
   };
 
@@ -1575,6 +1663,13 @@ function Contests() {
                             {adminMode && (
                               <div className="flex items-center gap-1">
                                 <button
+                                  onClick={() => openResetModal(c)}
+                                  className="p-1.5 rounded-lg text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/25 transition-all"
+                                  title="Reset / Clear Contest Data"
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5" />
+                                </button>
+                                <button
                                   onClick={() => openEditModal(c)}
                                   className={`p-1.5 rounded-lg text-slate-400 hover:${style.text} hover:${style.bgMuted} transition-all`}
                                   title="Edit Contest"
@@ -1601,9 +1696,20 @@ function Contests() {
                             <div className="animate-fade-in space-y-4">
                               <div className="flex items-center justify-between">
                                 <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest">Contest Summary Details</span>
-                                <span className="text-[10px] text-slate-400 font-mono bg-slate-100 dark:bg-slate-850 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-800">
-                                  Slug: <span className="font-bold text-slate-600 dark:text-slate-300">{c.contest_id}</span>
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  {adminMode && (
+                                    <button
+                                      onClick={() => openResetModal(c)}
+                                      className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/30 px-2.5 py-1 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-all"
+                                      title="Clear stored contest data for fresh sync"
+                                    >
+                                      <RotateCcw className="h-3 w-3" /> Clear & Reset Contest Data
+                                    </button>
+                                  )}
+                                  <span className="text-[10px] text-slate-400 font-mono bg-slate-100 dark:bg-slate-850 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-800">
+                                    Slug: <span className="font-bold text-slate-600 dark:text-slate-300">{c.contest_id}</span>
+                                  </span>
+                                </div>
                               </div>
 
                               {(contestParticipants[c.id]?.validationStatus === 'FAILED' || contestParticipants[c.id]?.validationStatus === 'INVALID_METRICS') && (
@@ -2014,6 +2120,134 @@ function Contests() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ══════════════════════════════════════════════════════
+          SAFE RESET CONTEST DATA MODAL
+      ══════════════════════════════════════════════════════ */}
+      {showResetModal && resetContest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
+          <div className="relative w-full max-w-lg rounded-2xl border border-rose-200 dark:border-rose-900/50 bg-white dark:bg-slate-900 p-6 shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                <RotateCcw className="h-5 w-5" />
+                <h3 className="text-base font-extrabold tracking-tight">Clear & Reset Contest Data</h3>
+              </div>
+              <button onClick={() => setShowResetModal(false)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {resetError && (
+              <div className="flex items-center gap-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 p-3.5 text-xs font-semibold text-rose-700 dark:text-rose-400 mb-4">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 mb-4 space-y-1">
+              <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest block">Selected Contest</span>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{resetContest.name || resetContest.title || resetContest.contest_id}</span>
+                <span className="text-xs font-mono font-extrabold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-900/30">
+                  {resetPreview?.contest?.slug || resetContest.slug || resetContest.contest_id}
+                </span>
+              </div>
+            </div>
+
+            {resetLoadingPreview ? (
+              <div className="py-8 text-center space-y-2">
+                <Loader2 className="h-6 w-6 animate-spin mx-auto text-amber-500" />
+                <p className="text-xs text-slate-400 font-medium">Computing dry-run preview...</p>
+              </div>
+            ) : (
+              <form onSubmit={handleResetSubmit} className="space-y-4">
+                {/* ── Dry-Run Breakdown ── */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3.5 rounded-xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/30 space-y-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-rose-700 dark:text-rose-400 block">⚡ Will Be Removed</span>
+                    <ul className="text-xs text-rose-900 dark:text-rose-200 space-y-1 font-medium">
+                      <li>• Synced Leaderboard: <strong>{resetPreview?.wouldDelete?.contestParticipants ?? 0}</strong> rows</li>
+                      <li>• Attendance Cache: <strong>{resetPreview?.wouldDelete?.contestAttendance ?? 0}</strong> rows</li>
+                      <li>• Auto Attendance: <strong>{resetPreview?.wouldDelete?.autoAttendanceRecords ?? 0}</strong> rows</li>
+                      {resetIncludeManual && (
+                        <li className="text-rose-600 font-bold">• Manual Overrides: <strong>{resetPreview?.wouldDelete?.manualAttendanceRecords ?? 0}</strong> rows</li>
+                      )}
+                    </ul>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/30 space-y-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 block">✓ Will Be Preserved</span>
+                    <ul className="text-xs text-emerald-900 dark:text-emerald-200 space-y-1 font-medium">
+                      <li>• Contest Metadata & Settings</li>
+                      <li>• Students & Platform Usernames</li>
+                      <li>• Registrations: <strong>{resetPreview?.wouldPreserve?.registrations ?? 0}</strong> records</li>
+                      <li>• Join History: <strong>{resetPreview?.wouldPreserve?.participationLogs ?? 0}</strong> records</li>
+                      {!resetIncludeManual && (
+                        <li>• Manual Overrides: <strong>{resetPreview?.wouldPreserve?.manualAttendanceRecords ?? 0}</strong> records</li>
+                      )}
+                    </ul>
+                  </div>
+                </div>
+
+                {/* ── Optional Manual Override Toggle ── */}
+                <div className="p-3 rounded-xl border border-amber-200/80 dark:border-amber-900/40 bg-amber-50/40 dark:bg-amber-950/20">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={resetIncludeManual}
+                      onChange={handleResetManualToggle}
+                      className="mt-0.5 rounded border-amber-300 text-rose-600 focus:ring-rose-500"
+                    />
+                    <div className="text-xs">
+                      <span className="font-bold text-amber-900 dark:text-amber-300 block">Delete manual attendance overrides too</span>
+                      <span className="text-[11px] text-amber-750 dark:text-amber-400 block mt-0.5">
+                        Default behavior preserves manual faculty overrides. Check this only if you explicitly want to erase manual overrides as well.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {/* ── Confirmation Input ── */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-extrabold text-slate-600 dark:text-slate-300 block">
+                    Type <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-rose-600 dark:text-rose-400 font-mono font-bold">
+                      {resetPreview?.contest?.slug || resetContest.slug || resetContest.contest_id}
+                    </code> to confirm:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={resetConfirmSlug}
+                    onChange={(e) => setResetConfirmSlug(e.target.value)}
+                    placeholder={resetPreview?.contest?.slug || resetContest.slug || resetContest.contest_id}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 dark:text-white outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetModal(false)}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={
+                      resetSubmitting ||
+                      resetConfirmSlug.trim().toLowerCase() !== String(resetPreview?.contest?.slug || resetContest.slug || resetContest.contest_id).trim().toLowerCase()
+                    }
+                    className="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white px-5 py-2 text-xs font-extrabold shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    {resetSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                    Confirm & Clear Data
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
