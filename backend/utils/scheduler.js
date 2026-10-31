@@ -407,6 +407,11 @@ function initScheduler() {
       await notificationSvc.generateMissingHandleAlerts();
       await notificationSvc.generateUpcomingContestAlerts();
       await notificationSvc.generateLowAttendanceAlerts(50);
+
+      // Automated data retention cleanup: prune records older than 1 month
+      console.log('[Scheduler] Executing automated 30-day data retention cleanup...');
+      const DataRetentionService = require('../services/dataRetentionService');
+      await DataRetentionService.pruneDataOlderThanOneMonth(30);
     } catch (err) {
       console.error('[Scheduler] Scheduled daily sync failed:', err.message);
     }

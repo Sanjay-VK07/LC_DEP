@@ -13,6 +13,12 @@ dist/
 build/
 frontend/dist/
 
+# Generated Reports
+*.xlsx
+*.csv
+backend/*.xlsx
+backend/*.csv
+
 # Logs
 *.log
 npm-debug.log*

@@ -18,6 +18,14 @@ class StudentContestSyncService {
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Contest Slug Received: "${contestSlug}"`);
     console.log(`[StudentContestSyncService] [DIAGNOSTICS] Provider: "${providerType || process.env.SYNC_PROVIDER || 'HYBRID'}"`);
 
+    // Ensure database storage availability before fetching new contest data
+    try {
+      const DataRetentionService = require('./dataRetentionService');
+      await DataRetentionService.prepareSpaceForFetch();
+    } catch (retentionErr) {
+      console.warn('[StudentContestSyncService] Pre-fetch space preparation notice:', retentionErr.message);
+    }
+
     // 1. Fetch active students from database
     const students = await db.query(
       "SELECT id, name, roll_no, leetcode_username, academic_batch, status FROM Users WHERE status = 'active'"

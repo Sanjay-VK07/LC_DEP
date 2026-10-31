@@ -112,27 +112,37 @@ async function initializeDatabase() {
   isConnecting = true;
   lastError = null;
 
-  if (!sslCA) {
-    const errorMsg = 'Aiven CA certificate not found. Expected location: backend/certs/ca.pem. Download it from the Aiven Console and place it in the certs directory.';
-    console.error(`\n======================================================================\n[ERROR] ${errorMsg}\n======================================================================\n`);
-    const missingCertError = new Error(errorMsg);
-    lastError = missingCertError;
-    isConnecting = false;
-    isConnected = false;
-    pool = null;
-    throw missingCertError;
+  const isLocalHost = ['localhost', '127.0.0.1'].includes(process.env.DB_HOST || 'localhost');
+  let sslConfig = false;
+
+  if (process.env.DB_SSL === 'false') {
+    sslConfig = false;
+  } else if (sslCA) {
+    sslConfig = {
+      ca: sslCA,
+      rejectUnauthorized: false
+    };
+  } else if (process.env.DB_CA_PATH && fs.existsSync(process.env.DB_CA_PATH)) {
+    sslConfig = {
+      ca: fs.readFileSync(process.env.DB_CA_PATH),
+      rejectUnauthorized: true
+    };
+  } else if (!isLocalHost) {
+    const macCert = '/etc/ssl/cert.pem';
+    sslConfig = {
+      minVersion: 'TLSv1.2',
+      ca: fs.existsSync(macCert) ? fs.readFileSync(macCert) : undefined,
+      rejectUnauthorized: false
+    };
   }
 
   const config = {
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '3306'),
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD === 'your_mysql_password_here' ? '' : process.env.DB_PASSWORD,
+    password: process.env.DB_PASSWORD === 'your_mysql_password_here' ? '' : (process.env.DB_PASSWORD || ''),
     multipleStatements: true,
-    ssl: {
-      ca: sslCA,
-      rejectUnauthorized: false
-    }
+    ...(sslConfig ? { ssl: sslConfig } : {})
   };
 
   console.log(`[DB] Attempting database initialization (Attempt #${retryCount + 1})...`);
@@ -188,8 +198,8 @@ async function initializeDatabase() {
 
     testConn.release();
 
-    if (!sslCipher) {
-      throw new Error('SSL is not enabled on the database connection.');
+    if (sslConfig && !sslCipher) {
+      console.warn('[DB] Warning: SSL cipher could not be verified on the session.');
     }
 
     isConnected = true;
@@ -200,7 +210,7 @@ async function initializeDatabase() {
       retryTimer = null;
     }
 
-    console.log('✓ Connected to Aiven MySQL');
+    console.log('✓ Connected to MySQL Database');
     console.log(`Database : ${currentDb}`);
     console.log(`Host     : ${config.host}`);
     console.log(`Version  : MySQL ${mysqlVersion}`);

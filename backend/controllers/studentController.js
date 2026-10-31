@@ -1330,6 +1330,16 @@ async function bulkImportStudents(req, res) {
       } catch (auditErr) {
         console.error('[Bulk Import] Failed to write BulkImportAuditLogs:', auditErr.message);
       }
+
+      // Automatically prune historical data older than 1 month after Excel import
+      try {
+        const DataRetentionService = require('../services/dataRetentionService');
+        DataRetentionService.pruneDataOlderThanOneMonth(30).catch(err => {
+          console.warn('[Bulk Import] Background data retention cleanup warning:', err.message);
+        });
+      } catch (pruneErr) {
+        // Non-blocking
+      }
     }
 
     return res.json({
