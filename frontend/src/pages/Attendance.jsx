@@ -25,6 +25,7 @@ import {
 import { getLeetCodeProfileUrl } from '../utils/platformUrls';
 import { logger } from '../utils/logger';
 import { normalizeAttendanceStatus } from '../utils/attendance';
+import * as XLSX from 'xlsx';
 
 function Attendance() {
   const [activeTab, setActiveTab] = useState('sheet');
@@ -587,6 +588,36 @@ function Attendance() {
       } else {
         setError(formatClistErrorMessage(data?.message || 'Failed to sync LeetCode contest attendance.'));
       }
+    }
+  };
+
+  const handleExportLcContest = () => {
+    if (!lcRecords || lcRecords.length === 0) return;
+    try {
+      const headers = ['Roll Number', 'Student Name', 'Department', 'Section', 'Academic Batch', 'LeetCode Username', 'Attendance Status', 'Rank', 'Score', 'Finish Time', 'Synced At'];
+      const rows = lcRecords.map(r => [
+        r.roll_no || '',
+        r.student_name || '',
+        r.department || '',
+        r.section || '',
+        r.academic_batch || '',
+        r.leetcode_username || '',
+        (r.attendance || 'Absent').toUpperCase(),
+        r.rank !== null && r.rank !== undefined ? r.rank : '-',
+        r.score !== null && r.score !== undefined ? r.score : 0,
+        r.finish_time !== null && r.finish_time !== undefined ? r.finish_time : '-',
+        r.synced_at ? new Date(r.synced_at).toLocaleString() : '-'
+      ]);
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Contest Attendance');
+      const filename = `${lcContestSlug || 'contest'}_attendance_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      setSuccess(`Downloaded ${rows.length} attendance records for ${lcContestSlug}!`);
+      setTimeout(() => setSuccess(''), 4000);
+    } catch (err) {
+      console.error('[Export Error]', err);
+      setError('Failed to export contest attendance: ' + err.message);
     }
   };
 
@@ -1494,6 +1525,15 @@ function Attendance() {
                 <RefreshCw className={`h-4 w-4 ${syncingLcContest ? 'animate-spin' : ''}`} />
                 {syncingLcContest ? 'Scanning...' : 'Sync Attendance'}
               </button>
+              <button
+                disabled={!lcRecords || lcRecords.length === 0}
+                onClick={handleExportLcContest}
+                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-40"
+                title="Download Attendance Spreadsheet"
+              >
+                <Download className="h-4 w-4" />
+                Download Excel
+              </button>
             </div>
           </div>
 
@@ -1701,14 +1741,25 @@ function Attendance() {
           <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
             <div className="p-5 border-b border-slate-100 dark:border-slate-850 flex justify-between items-center">
               <h3 className="font-bold text-slate-800 dark:text-white text-sm uppercase tracking-wider">Contest Attendance Records</h3>
-              <button
-                onClick={fetchLcContestStats}
-                disabled={loadingLcStats}
-                className="text-slate-400 hover:text-slate-650 p-1 rounded transition-all"
-                title="Refresh Table"
-              >
-                <RefreshCw className={`h-4 w-4 ${loadingLcStats ? 'animate-spin' : ''}`} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={!lcRecords || lcRecords.length === 0}
+                  onClick={handleExportLcContest}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all disabled:opacity-40"
+                  title="Download Current Records as Excel"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download Excel
+                </button>
+                <button
+                  onClick={fetchLcContestStats}
+                  disabled={loadingLcStats}
+                  className="text-slate-400 hover:text-slate-650 p-1.5 rounded transition-all"
+                  title="Refresh Table"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loadingLcStats ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">

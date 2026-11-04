@@ -18,6 +18,8 @@ frontend/dist/
 *.csv
 backend/*.xlsx
 backend/*.csv
+!reports/*.xlsx
+!reports/*.csv
 
 # Logs
 *.log
