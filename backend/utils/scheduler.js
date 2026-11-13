@@ -123,19 +123,66 @@ async function syncAllData() {
 
     console.log(`[Sync] Newly Added Contests: ${newlyAdded}, Updated Contests: ${updatedContests}`);
 
-    // 3. Fetch platform profile analytics and update each platform profile table
+    // 3. Fetch platform profile analytics and update each platform profile table concurrently
     let studentsProcessed = 0;
+    const CONCURRENCY = 10;
 
-    for (const user of users) {
-      try {
-        for (const platform of Object.keys(connectors)) {
-          await syncStudentPlatform(user.id, platform, false);
+    for (let i = 0; i < users.length; i += CONCURRENCY) {
+      const chunk = users.slice(i, i + CONCURRENCY);
+      await Promise.all(chunk.map(async (user) => {
+        try {
+          for (const platform of Object.keys(connectors)) {
+            const handle = user[`${platform}_username`];
+            if (handle && handle.trim()) {
+              await syncStudentPlatform(user.id, platform, false);
+            }
+          }
+          studentsProcessed++;
+        } catch (err) {
+          console.error(`[Sync] Failed to refresh platform profiles for user ${user.name}:`, err.message);
         }
-        studentsProcessed++;
-        await sleep(600); // Prevent rate limits
-      } catch (err) {
-        console.error(`[Sync] Failed to refresh platform profiles for user ${user.name}:`, err.message);
-      }
+      }));
+      await sleep(150); // Gentle throttle to respect platform rate limits
+    }
+
+    // Keep StudentPlatformSync synchronized with LeetCodeProfiles
+    try {
+      await db.query(`
+        INSERT INTO StudentPlatformSync (
+          user_id, platform, username, sync_status, 
+          last_successful_sync, last_attempt, retry_count, 
+          failure_reason, failure_category, data_completeness, next_retry
+        )
+        SELECT 
+          u.id, 
+          'leetcode', 
+          u.leetcode_username, 
+          'Healthy',
+          COALESCE(lp.last_synced, NOW()), 
+          COALESCE(lp.last_synced, NOW()), 
+          0,
+          NULL, 
+          NULL, 
+          100, 
+          NULL
+        FROM Users u
+        JOIN LeetCodeProfiles lp ON u.id = lp.user_id
+        WHERE u.status = 'active' 
+          AND u.leetcode_username IS NOT NULL 
+          AND u.leetcode_username != ''
+        ON DUPLICATE KEY UPDATE
+          username = VALUES(username),
+          sync_status = 'Healthy',
+          last_successful_sync = VALUES(last_successful_sync),
+          last_attempt = VALUES(last_attempt),
+          retry_count = 0,
+          failure_reason = NULL,
+          failure_category = NULL,
+          data_completeness = 100,
+          next_retry = NULL
+      `);
+    } catch (syncErr) {
+      console.warn('[Sync] Failed to bulk update StudentPlatformSync:', syncErr.message);
     }
 
     // 4. Finalize attendance for ended/ongoing contests based on ParticipationLogs & Leaderboards
