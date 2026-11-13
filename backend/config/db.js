@@ -142,6 +142,7 @@ async function initializeDatabase() {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD === 'your_mysql_password_here' ? '' : (process.env.DB_PASSWORD || ''),
     multipleStatements: true,
+    connectTimeout: 30000,
     ...(sslConfig ? { ssl: sslConfig } : {})
   };
 

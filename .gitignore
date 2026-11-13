@@ -29,6 +29,7 @@ npm-debug.log*
 .cache/
 backend/cache/
 frontend/node_modules/.vite/
+scratch/
 
 # OS files
 .DS_Store
