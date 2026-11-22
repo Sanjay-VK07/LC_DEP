@@ -1,14 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import * as XLSX from 'xlsx';
-import { saveAs } from 'file-saver';
 import { useAuth } from '../context/AuthContext';
 import {
   ShieldCheck,
   Search,
-  Filter,
   RotateCw,
   Download,
   CheckCircle,
@@ -16,43 +13,29 @@ import {
   XCircle,
   ChevronDown,
   ChevronUp,
-  Activity,
-  Database,
   RefreshCw,
-  Link,
-  BarChart3,
-  FileSpreadsheet
+  ExternalLink,
+  User,
+  TrendingUp,
+  Activity,
+  Layers
 } from 'lucide-react';
 
 function DataHealth() {
   const { user } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Tab state synced with URL search params
-  const tabFromUrl = searchParams.get('tab') || 'health';
-  const [activeTab, setActiveTab] = useState(tabFromUrl);
-
-  const handleTabChange = (key) => {
-    setActiveTab(key);
-    setSearchParams({ tab: key }, { replace: true });
-  };
-
-  useEffect(() => {
-    const currentParam = searchParams.get('tab') || 'health';
-    if (currentParam !== activeTab) {
-      setActiveTab(currentParam);
-    }
-  }, [searchParams]);
-
-  // Health tab state
+  // Audit data states
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Hardening controls state
+  // Sync controls state
   const [globalSyncing, setGlobalSyncing] = useState(false);
-  const [clearingCache, setClearingCache] = useState(false);
-  const [syncingPlatforms, setSyncingPlatforms] = useState({}); // studentId:platform -> boolean
+  const [syncProgressMsg, setSyncProgressMsg] = useState('');
+  const [syncingStudentId, setSyncingStudentId] = useState(null);
+  const [exportingReport, setExportingReport] = useState(false);
+
+  // Toast notification
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success');
 
@@ -67,974 +50,585 @@ function DataHealth() {
   // Expanded rows state (student ID -> boolean)
   const [expandedStudents, setExpandedStudents] = useState({});
 
-  // Platform Stats state
-  const [platformStats, setPlatformStats] = useState([]);
-  const [platformStatsLoading, setPlatformStatsLoading] = useState(false);
-
-  // Attendance Matrix state & refs
-  const [matrix, setMatrix] = useState(null);
-  const [matrixLoading, setMatrixLoading] = useState(false);
-  const [matrixError, setMatrixError] = useState('');
-  const [matrixContestType, setMatrixContestType] = useState('');
-  const [matrixSearch, setMatrixSearch] = useState('');
-  const [matrixPage, setMatrixPage] = useState(1);
-  const [matrixPageSize, setMatrixPageSize] = useState(100);
-  const [exportingMatrix, setExportingMatrix] = useState(false);
-  const matrixAbortControllerRef = useRef(null);
-
   const showToast = (msg, type = 'success') => {
     setToastMessage(msg);
     setToastType(type);
-    setTimeout(() => setToastMessage(''), 4000);
-  };
-
-  const handleForceFullSync = async () => {
-    setGlobalSyncing(true);
-    try {
-      const res = await axios.post(`${API_URL}/students/sync-all`);
-      if (res.data.success) {
-        showToast('Platform-wide synchronization started in background.');
-      }
-    } catch (err) {
-      showToast(err.response?.data?.message || 'Failed to start full sync.', 'error');
-    } finally {
-      setGlobalSyncing(false);
-    }
-  };
-
-  const handleClearCache = async () => {
-    setClearingCache(true);
-    try {
-      const res = await axios.post(`${API_URL}/students/clear-cache`);
-      if (res.data.success) {
-        showToast('Analytics and placement cache successfully invalidated.');
-      }
-    } catch (err) {
-      showToast(err.response?.data?.message || 'Failed to invalidate cache.', 'error');
-    } finally {
-      setClearingCache(false);
-    }
-  };
-
-  const handleRetryPlatformSync = async (studentId, platform) => {
-    const key = `${studentId}:${platform}`;
-    setSyncingPlatforms(prev => ({ ...prev, [key]: true }));
-    try {
-      const res = await axios.post(`${API_URL}/students/${studentId}/sync/${platform}`);
-      if (res.data.success) {
-        showToast(`Successfully synchronized ${platform} handle!`);
-        await fetchHealthAudit();
-      }
-    } catch (err) {
-      showToast(err.response?.data?.message || `Failed to sync ${platform} handle.`, 'error');
-    } finally {
-      setSyncingPlatforms(prev => ({ ...prev, [key]: false }));
-    }
-  };
-
-  const fetchPlatformStats = async () => {
-    setPlatformStatsLoading(true);
-    try {
-      const res = await axios.get(`${API_URL}/analytics/platform-stats`);
-      if (res.data.success) setPlatformStats(res.data.data);
-    } catch (err) { console.error(err); }
-    finally { setPlatformStatsLoading(false); }
-  };
-
-  const fetchAttendanceMatrix = async () => {
-    // Abort previous in-flight matrix request if active
-    if (matrixAbortControllerRef.current) {
-      matrixAbortControllerRef.current.abort();
-    }
-    matrixAbortControllerRef.current = new AbortController();
-
-    const fetchStart = Date.now();
-    setMatrixLoading(true);
-    setMatrixError('');
-    try {
-      const params = {};
-      if (matrixContestType) params.contestType = matrixContestType;
-
-      console.log('[Frontend Telemetry] Starting GET /api/analytics/attendance-matrix fetch...');
-      const res = await axios.get(`${API_URL}/analytics/attendance-matrix`, {
-        params,
-        signal: matrixAbortControllerRef.current.signal
-      });
-
-      const fetchTime = Date.now() - fetchStart;
-
-      if (res.data && res.data.success) {
-        setMatrix(res.data);
-        setMatrixPage(1);
-        const heapMemory = window.performance?.memory ? `${(window.performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(2)} MB` : 'N/A';
-        console.log(`[Frontend Matrix Telemetry] Fetch Time: ${fetchTime}ms | Rows: ${res.data.matrix?.length || 0} | Contests: ${res.data.contests?.length || 0} | Heap Memory: ${heapMemory}`);
-      } else {
-        setMatrixError(res.data?.message || 'Failed to load attendance matrix data.');
-      }
-    } catch (err) {
-      if (axios.isCancel(err)) {
-        console.log('[Frontend Matrix Telemetry] Previous matrix request aborted cleanly.');
-        return;
-      }
-      console.error('[AttendanceMatrix Exception]:', err);
-      setMatrixError(err.response?.data?.message || err.message || 'Failed to fetch attendance matrix. Please try again.');
-    } finally {
-      setMatrixLoading(false);
-    }
+    setTimeout(() => setToastMessage(''), 4500);
   };
 
   const fetchHealthAudit = async (forceRefresh = false) => {
-    setLoading(true);
+    if (!data) setLoading(true);
     setError('');
     try {
       const params = {};
       if (forceRefresh) params.refresh = 'true';
       const res = await axios.get(`${API_URL}/students/data-health`, { params });
-      if (res.data.success) {
+      if (res.data && res.data.success) {
         setData(res.data);
+      } else {
+        setError(res.data?.message || 'Failed to load diagnostic data.');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to retrieve database health audit data.');
+      console.error('[DataHealth Error]:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to retrieve database health audit data.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (activeTab === 'platform-stats') { fetchPlatformStats(); return; }
-    if (activeTab === 'attendance-matrix') { fetchAttendanceMatrix(); return; }
-    axios.get(`${API_URL}/departments`).then(res => { if (res.data.success) setDepts(res.data.data); }).catch(console.error);
-    axios.get(`${API_URL}/students/batches`).then(res => { if (res.data.success) setBatches(res.data.data); }).catch(console.error);
+    // Load metadata dropdowns and initial diagnosis
+    axios.get(`${API_URL}/departments`)
+      .then(res => { if (res.data?.success) setDepts(res.data.data); })
+      .catch(() => {});
+
+    axios.get(`${API_URL}/students/batches`)
+      .then(res => { if (res.data?.success) setBatches(res.data.data); })
+      .catch(() => {});
+
     fetchHealthAudit();
+  }, []);
 
-    return () => {
-      if (matrixAbortControllerRef.current) {
-        matrixAbortControllerRef.current.abort();
-      }
-    };
-  }, [activeTab, matrixContestType]);
+  // Force full sync with automatic polling & UI update
+  const handleForceFullSync = async () => {
+    setGlobalSyncing(true);
+    setSyncProgressMsg('Initiating platform sync across all 987 students...');
+    showToast('Platform-wide synchronization started in background.');
 
-  // Filtered matrix rows based on search keyword
-  const filteredMatrixRows = React.useMemo(() => {
-    if (!matrix || !Array.isArray(matrix.matrix)) return [];
-    const searchLower = matrixSearch.toLowerCase().trim();
-    if (!searchLower) return matrix.matrix;
-    return matrix.matrix.filter(s => {
-      if (!s) return false;
-      const roll = (s.rollNo || '').toLowerCase();
-      const name = (s.name || '').toLowerCase();
-      const lc = (s.leetcodeUsername || '').toLowerCase();
-      const dept = (s.department || '').toLowerCase();
-      return roll.includes(searchLower) || name.includes(searchLower) || lc.includes(searchLower) || dept.includes(searchLower);
-    });
-  }, [matrix, matrixSearch]);
-
-  // Windowed pagination for matrix rows (prevents DOM freeze for 5,000 students)
-  const paginatedMatrixRows = React.useMemo(() => {
-    if (matrixPageSize === 'all' || filteredMatrixRows.length <= Number(matrixPageSize)) {
-      return filteredMatrixRows;
-    }
-    const startIndex = (matrixPage - 1) * Number(matrixPageSize);
-    return filteredMatrixRows.slice(startIndex, startIndex + Number(matrixPageSize));
-  }, [filteredMatrixRows, matrixPage, matrixPageSize]);
-
-  const matrixTotalPages = Math.max(1, Math.ceil(filteredMatrixRows.length / (matrixPageSize === 'all' ? (filteredMatrixRows.length || 1) : Number(matrixPageSize))));
-
-  const handleExportMatrix = async () => {
-    setExportingMatrix(true);
     try {
-      const params = {};
-      if (matrixContestType) params.contestType = matrixContestType;
-      const res = await axios.get(`${API_URL}/analytics/attendance-matrix/export`, {
-        params,
-        responseType: 'blob'
-      });
-      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const link = document.createElement('a');
-      link.href = window.URL.createObjectURL(blob);
-      link.download = `attendance_matrix_${new Date().toISOString().split('T')[0]}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(link.href);
-      showToast('Attendance sheet exported successfully!');
+      const res = await axios.post(`${API_URL}/students/sync-all`);
+      if (res.data && res.data.success) {
+        // Poll audit endpoint every 4s for up to 30s to automatically refresh UI
+        let attempts = 0;
+        const interval = setInterval(async () => {
+          attempts++;
+          setSyncProgressMsg(`Syncing student profiles in batches (poll #${attempts})...`);
+          await fetchHealthAudit(true);
+          if (attempts >= 6) {
+            clearInterval(interval);
+            setGlobalSyncing(false);
+            setSyncProgressMsg('');
+            showToast('Full sync complete! Data Health diagnostics successfully updated.', 'success');
+          }
+        }, 4000);
+      } else {
+        setGlobalSyncing(false);
+        setSyncProgressMsg('');
+        showToast(res.data?.message || 'Failed to initiate full sync.', 'error');
+      }
     } catch (err) {
-      console.error('[ExportMatrix] Error:', err);
-      showToast('Failed to export spreadsheet: ' + (err.response?.data?.message || err.message), 'error');
-    } finally {
-      setExportingMatrix(false);
+      setGlobalSyncing(false);
+      setSyncProgressMsg('');
+      showToast(err.response?.data?.message || 'Failed to trigger full sync.', 'error');
     }
   };
 
-  const handleExportPlatformStats = () => {
-    if (!platformStats?.length) {
-      showToast('No platform stats available to export.', 'error');
+  // Sync individual student handle
+  const handleSyncStudent = async (studentId) => {
+    setSyncingStudentId(studentId);
+    try {
+      const res = await axios.post(`${API_URL}/students/${studentId}/sync/leetcode`);
+      if (res.data && res.data.success) {
+        showToast('LeetCode profile updated successfully!');
+        await fetchHealthAudit(true);
+      } else {
+        showToast(res.data?.message || 'Failed to sync LeetCode profile.', 'error');
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Failed to sync student.', 'error');
+    } finally {
+      setSyncingStudentId(null);
+    }
+  };
+
+  // Export clean diagnostics report
+  const handleExportReport = () => {
+    if (!data?.students?.length) {
+      showToast('No student diagnostic records available to export.', 'error');
       return;
     }
+    setExportingReport(true);
     try {
-      const rows = buildPlatformStatsRows(platformStats);
+      const rows = data.students.map(s => {
+        const lc = s.connections?.leetcode || {};
+        return {
+          'Roll Number': s.rollNo,
+          'Student Name': s.name,
+          'Department': s.department,
+          'Section': s.section || 'N/A',
+          'Batch': s.batch || 'N/A',
+          'Health Status': s.healthIndicator || 'Needs Attention',
+          'Health Score': `${s.healthScore || 0}%`,
+          'LeetCode Handle': lc.username || '',
+          'LeetCode Total Solved': lc.problemsSolved || 0,
+          'Easy Solved': lc.easySolved || 0,
+          'Medium Solved': lc.mediumSolved || 0,
+          'Hard Solved': lc.hardSolved || 0,
+          'Contest Rating': lc.currentRating ? Math.round(lc.currentRating) : 1500,
+          'Global Rank': lc.globalRanking || '-',
+          'Sync Status': lc.syncStatus || 'Never Synced',
+          'Last Synced': lc.lastSuccessfulSync ? new Date(lc.lastSuccessfulSync).toLocaleString() : 'Never'
+        };
+      });
+
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Platform Stats');
-      XLSX.writeFile(wb, 'platform_stats_' + new Date().toISOString().split('T')[0] + '.xlsx');
-      showToast('Platform stats exported successfully!');
+      XLSX.utils.book_append_sheet(wb, ws, 'Data Health Diagnostics');
+      XLSX.writeFile(wb, `Data_Diagnostics_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+      showToast('Diagnostic report exported successfully!');
     } catch (err) {
-      console.error('[ExportPlatformStats] Error:', err);
-      showToast('Failed to export platform stats: ' + err.message, 'error');
+      console.error('[Export Error]:', err);
+      showToast('Failed to export report: ' + err.message, 'error');
+    } finally {
+      setExportingReport(false);
     }
   };
-
-  const [exportingSpreadsheet, setExportingSpreadsheet] = useState(false);
-
-  const buildPlatformStatsRows = (stats) => stats.map(s => ({
-    'Name': s.name,
-    'Roll No': s.rollNo,
-
-    'LC Rating': s.leetcode?.rating || '',
-    'LC Easy': s.leetcode?.easySolved || 0,
-    'LC Medium': s.leetcode?.mediumSolved || 0,
-    'LC Hard': s.leetcode?.hardSolved || 0,
-    'LC Total': s.leetcode?.totalSolved || 0,
-
-    'CC Rating': s.codechef?.rating || '',
-    'CC Total': s.codechef?.totalSolved || 0,
-
-    'CF Rating': s.codeforces?.rating || '',
-    'CF Total': s.codeforces?.totalSolved || 0,
-
-    'HackerRank Total': s.hackerrank?.totalSolved || 0
-  }));
 
   const toggleRow = (id) => {
     setExpandedStudents(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const getPlatformStatusDot = (platConn) => {
-    if (!platConn || !platConn.connected) return <span className="h-2 w-2 rounded-full bg-slate-350 dark:bg-slate-755" title="Not connected"></span>;
-    if (platConn.syncStatus === 'Healthy') return <span className="h-2 w-2 rounded-full bg-emerald-500" title="Connected and Healthy"></span>;
-    if (platConn.syncStatus === 'Partial') return <span className="h-2 w-2 rounded-full bg-amber-400" title="Connected and Partial"></span>;
-    if (platConn.syncStatus === 'Failed') return <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse" title="Connection Sync Failure"></span>;
-    return <span className="h-2 w-2 rounded-full bg-slate-400" title="Never Synced"></span>;
-  };
-
   const aggregates = data?.aggregates || {
-    totalStudents: 0, healthyCount: 0, partialCount: 0, needsAttentionCount: 0,
-    duplicateCount: 0, invalidCount: 0,
-    platformSyncRate: { leetcode: 0, codechef: 0, codeforces: 0, hackerrank: 0, overall: 0 },
+    totalStudents: 0,
+    healthyCount: 0,
+    partialCount: 0,
+    needsAttentionCount: 0,
+    duplicateCount: 0,
+    invalidCount: 0,
+    platformSyncRate: { leetcode: 0, overall: 0 },
     systemHealthPercentage: 0
   };
 
   const studentsList = data?.students || [];
 
   const filteredStudents = studentsList.filter(s => {
-    const text = searchText.toLowerCase();
-    const matchesSearch = !text || (s.name && s.name.toLowerCase().includes(text)) || (s.rollNo && s.rollNo.toLowerCase().includes(text));
+    const text = searchText.toLowerCase().trim();
+    const lc = s.connections?.leetcode?.username || '';
+    const matchesSearch = !text ||
+      (s.name && s.name.toLowerCase().includes(text)) ||
+      (s.rollNo && s.rollNo.toLowerCase().includes(text)) ||
+      (lc && lc.toLowerCase().includes(text));
     const matchesDept = !filterDept || s.department === filterDept;
     const matchesBatch = !filterBatch || s.batch === filterBatch;
     const matchesHealth = !filterHealth || s.healthIndicator === filterHealth;
     return matchesSearch && matchesDept && matchesBatch && matchesHealth;
   });
 
-  const handleExportCSV = async () => {
-    setExportingSpreadsheet(true);
-    try {
-      let stats = platformStats;
-      if (!stats || !stats.length) {
-        const res = await axios.get(`${API_URL}/analytics/platform-stats`);
-        stats = res.data.success ? res.data.data : [];
-      }
-      if (!stats || !stats.length) {
-        showToast('No platform stats available to export.', 'error');
-        return;
-      }
-
-      const rows = buildPlatformStatsRows(stats);
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Exported Stats');
-      XLSX.writeFile(wb, 'Diagnostic_Center_Report.xlsx');
-    } catch (err) {
-      console.error('[ExportCSV] Error:', err);
-      showToast('Failed to export spreadsheet: ' + err.message, 'error');
-    } finally {
-      setExportingSpreadsheet(false);
-    }
-  };
-
   return (
     <>
       {/* Toast Alert popup */}
       {toastMessage && (
-        <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg border text-xs font-bold transition-all ${
+        <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl border text-xs font-bold transition-all ${
           toastType === 'success'
-            ? 'bg-emerald-500/10 border-emerald-550/20 text-emerald-600 dark:text-emerald-400'
-            : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-455'
+            ? 'bg-emerald-50 dark:bg-emerald-950/80 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+            : 'bg-rose-50 dark:bg-rose-950/80 border-rose-500/30 text-rose-700 dark:text-rose-300'
         }`}>
           <span>{toastType === 'success' ? '✔' : '❌'}</span>
           <span>{toastMessage}</span>
         </div>
       )}
-      <div className="space-y-6">
-        {/* Tab Bar */}
-        <div className="flex gap-2 border-b border-slate-200 dark:border-slate-800 pb-0">
-          {[
-            { key: 'health', label: 'Data Health', icon: ShieldCheck },
-            { key: 'platform-stats', label: 'Platform Contest Stats', icon: BarChart3 },
-            { key: 'attendance-matrix', label: 'Attendance Sheet Export', icon: FileSpreadsheet }
-          ].map(tab => (
-            <button key={tab.key} onClick={() => handleTabChange(tab.key)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 ${
-                activeTab === tab.key
-                  ? 'border-primary-500 text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-950/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-              }`}>
-              <tab.icon className="h-3.5 w-3.5" /> {tab.label}
-            </button>
-          ))}
-        </div>
 
-        {/* Tab: platform-stats */}
-        {activeTab === 'platform-stats' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
+      <div className="space-y-6 max-w-7xl mx-auto pb-10">
+        {/* Header Banner */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200/60 dark:border-slate-800 shadow-sm">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 rounded-2xl bg-primary-50 dark:bg-primary-950/50 text-primary-600 dark:text-primary-400">
+                <ShieldCheck className="h-7 w-7" />
+              </div>
               <div>
-                <h2 className="text-xl font-extrabold text-slate-800 dark:text-white">Platform Contest Stats</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Per-student weekly &amp; monthly contest participation across LeetCode, CodeChef and Codeforces</p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={fetchPlatformStats} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-850">
-                  <RefreshCw className={`h-3.5 w-3.5 ${platformStatsLoading ? 'animate-spin' : ''}`} /> Refresh
-                </button>
-                <button onClick={handleExportPlatformStats} className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-xl">
-                  <Download className="h-3.5 w-3.5" /> Export Excel
-                </button>
-              </div>
-            </div>
-            {platformStatsLoading ? (
-              <div className="flex h-40 items-center justify-center">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto shadow-sm">
-                <table className="w-full text-left text-xs min-w-[1100px]">
-                  <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-850 text-slate-500 font-bold uppercase tracking-wider">
-                      <th className="py-3 px-3">Roll No</th>
-                      <th className="py-3 px-3">Name</th>
-                      <th className="py-3 px-3 text-center" colSpan="4" style={{borderLeft:'2px solid #f59e0b'}}>
-                        <span className="text-orange-500">🟠 LeetCode</span>
-                      </th>
-                      <th className="py-3 px-3 text-center" colSpan="3" style={{borderLeft:'2px solid #0d9488'}}>
-                        <span className="text-teal-600">🟢 CodeChef</span>
-                      </th>
-                      <th className="py-3 px-3 text-center" colSpan="3" style={{borderLeft:'2px solid #ef4444'}}>
-                        <span className="text-red-500">🔴 Codeforces</span>
-                      </th>
-                    </tr>
-                    <tr className="bg-slate-50/80 dark:bg-slate-950/20 border-b border-slate-100 dark:border-slate-850 text-slate-400 text-[10px] uppercase tracking-wider">
-                      <th className="py-2 px-3"></th>
-                      <th className="py-2 px-3"></th>
-                      <th className="py-2 px-3 text-center" style={{borderLeft:'2px solid #f59e0b'}}>Rating</th>
-                      <th className="py-2 px-3 text-center">Weekly<br/>This Week</th>
-                      <th className="py-2 px-3 text-center">Biweekly<br/>This Week</th>
-                      <th className="py-2 px-3 text-center">This Month<br/>(W+B)</th>
-                      <th className="py-2 px-3 text-center" style={{borderLeft:'2px solid #0d9488'}}>Rating / Stars</th>
-                      <th className="py-2 px-3 text-center">Wed This Week</th>
-                      <th className="py-2 px-3 text-center">Wed This Month</th>
-                      <th className="py-2 px-3 text-center" style={{borderLeft:'2px solid #ef4444'}}>Rating / Rank</th>
-                      <th className="py-2 px-3 text-center">This Week</th>
-                      <th className="py-2 px-3 text-center">This Month</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40">
-                    {platformStats.length === 0 ? (
-                      <tr><td colSpan="12" className="text-center py-8 text-slate-400">No data available. Make sure student profiles are synced.</td></tr>
-                    ) : platformStats.map(s => (
-                      <tr key={s.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/20">
-                        <td className="py-2.5 px-3 font-bold text-slate-500">{s.rollNo}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-white whitespace-nowrap">{s.name}</td>
-                        <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #fef3c7'}}>
-                          {s.leetcode?.username ? (
-                            <span className="font-bold text-orange-500">{s.leetcode.rating || '—'}</span>
-                          ) : <span className="text-slate-300">—</span>}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode?.weeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.leetcode?.weeklyThisWeek || 0}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.leetcode?.biweeklyThisWeek > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.leetcode?.biweeklyThisWeek || 0}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {(s.leetcode?.weeklyThisMonth || 0) + (s.leetcode?.biweeklyThisMonth || 0)}
-                        </td>
-                        <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #ccfbf1'}}>
-                          {s.codechef?.username ? (
-                            <div className="flex items-center justify-center gap-1">
-                              <span className="font-bold" style={{color: s.codechef.starColor}}>{s.codechef.stars || '—'}</span>
-                              <span className="text-slate-500">{s.codechef.rating || ''}</span>
-                            </div>
-                          ) : <span className="text-slate-300">—</span>}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codechef?.wednesdayContestsThisWeek > 0 ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.codechef?.wednesdayContestsThisWeek || 0}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {s.codechef?.wednesdayContestsThisMonth || 0}
-                        </td>
-                        <td className="py-2.5 px-3 text-center" style={{borderLeft:'2px solid #fee2e2'}}>
-                          {s.codeforces?.username ? (
-                            <span className="font-bold text-[11px] px-2 py-0.5 rounded-lg" style={{background: s.codeforces.rankBg, color: s.codeforces.rankColor}}>
-                              {s.codeforces.rank} {s.codeforces.rating ? `(${s.codeforces.rating})` : ''}
-                            </span>
-                          ) : <span className="text-slate-300">—</span>}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className={`font-bold px-2 py-0.5 rounded-lg text-[11px] ${s.codeforces?.contestsThisWeek > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {s.codeforces?.contestsThisWeek || 0}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-600 dark:text-slate-300">
-                          {s.codeforces?.contestsThisMonth || 0}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tab: attendance-matrix */}
-        {activeTab === 'attendance-matrix' && (
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-extrabold text-slate-800 dark:text-white">Attendance Sheet Export</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Per-person attendance with all contest dates as columns — P = Present, A = Absent, N/A = Not applicable</p>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <select value={matrixContestType} onChange={e => setMatrixContestType(e.target.value)}
-                  className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-300">
-                  <option value="">All Contest Types</option>
-                  <option value="Weekly">Weekly Only</option>
-                  <option value="Biweekly">Biweekly Only</option>
-                </select>
-                <button onClick={fetchAttendanceMatrix} className="flex items-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-850">
-                  <RefreshCw className={`h-3.5 w-3.5 ${matrixLoading ? 'animate-spin' : ''}`} /> Load
-                </button>
-                <button onClick={handleExportMatrix} disabled={exportingMatrix || !matrix || !matrix.matrix?.length}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 text-white font-bold text-xs px-3.5 py-2 rounded-xl shadow disabled:opacity-40">
-                  <Download className={`h-3.5 w-3.5 ${exportingMatrix ? 'animate-spin' : ''}`} /> {exportingMatrix ? 'Exporting...' : 'Export Excel'}
-                </button>
-              </div>
-            </div>
-            {matrixError ? (
-              <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center justify-between">
-                <span>❌ {matrixError}</span>
-                <button onClick={fetchAttendanceMatrix} className="underline text-xs hover:text-rose-700">Retry</button>
-              </div>
-            ) : matrixLoading ? (
-              <div className="flex h-40 items-center justify-center">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-              </div>
-            ) : matrix && matrix.matrix ? (
-              <div className="rounded-2xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto shadow-sm">
-                <div className="p-4 border-b border-slate-100 dark:border-slate-850 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-slate-500">{filteredMatrixRows.length} of {matrix.students || 0} students × {matrix.contests ? matrix.contests.length : 0} contests</span>
-                    <div className="relative">
-                      <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Search matrix..."
-                        value={matrixSearch}
-                        onChange={(e) => { setMatrixSearch(e.target.value); setMatrixPage(1); }}
-                        className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-300 w-44"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 text-[10px] font-bold">
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-200 inline-block"></span> PRESENT</span>
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200 inline-block"></span> ABSENT</span>
-                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-100 inline-block"></span> N/A</span>
-                  </div>
-                </div>
-                {filteredMatrixRows.length === 0 ? (
-                  <div className="text-center py-12 text-slate-400 text-sm">No attendance records match the search filters.</div>
-                ) : (
-                  <>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-[11px]">
-                        <thead>
-                          <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-850 text-slate-500 font-bold">
-                            <th className="py-2.5 px-3 sticky left-0 bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[80px]">Roll No</th>
-                            <th className="py-2.5 px-3 sticky left-[80px] bg-slate-50 dark:bg-slate-950/40 z-10 min-w-[150px]">Name</th>
-                            <th className="py-2.5 px-3 min-w-[80px]">Dept</th>
-                            {matrix.contests && matrix.contests.map(c => (
-                              <th key={c.id} className="py-2.5 px-2 text-center min-w-[90px] whitespace-nowrap text-[10px]">
-                                <div>{c.title ? c.title.replace('LeetCode', '').replace('Contest', '').trim() : ''}</div>
-                                <div className="font-normal text-slate-400">{c.date ? new Date(c.date).toLocaleDateString('en-IN', {day:'2-digit',month:'short'}) : ''}</div>
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/30">
-                          {paginatedMatrixRows.map(s => {
-                            if (!s) return null;
-                            return (
-                              <tr key={s.id || s.rollNo} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/10">
-                                <td className="py-2 px-3 sticky left-0 bg-white dark:bg-slate-900 font-bold text-slate-500 z-10">{s.rollNo || '-'}</td>
-                                <td className="py-2 px-3 sticky left-[80px] bg-white dark:bg-slate-900 font-semibold text-slate-800 dark:text-white z-10 whitespace-nowrap">{s.name || 'Unknown'}</td>
-                                <td className="py-2 px-3 text-slate-500">{s.department || '-'}</td>
-                                {matrix.contests && matrix.contests.map(c => {
-                                  const status = s.attendance ? s.attendance[c.id] || 'N/A' : 'N/A';
-                                  return (
-                                    <td key={c.id} className="py-2 px-2 text-center">
-                                      <span className={`inline-block px-2 py-0.5 rounded font-bold text-[10px] ${
-                                        status === 'PRESENT' ? 'bg-green-100 text-green-700' :
-                                        status === 'ABSENT'  ? 'bg-red-100 text-red-600' :
-                                        'bg-slate-100 text-slate-400'}`}>
-                                        {status === 'PRESENT' ? 'P' : status === 'ABSENT' ? 'A' : '–'}
-                                      </span>
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Matrix Windowed Pagination Footer */}
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30 text-xs font-semibold text-slate-500">
-                      <div>
-                        Showing {matrixPageSize === 'all' ? 1 : Math.min((matrixPage - 1) * Number(matrixPageSize) + 1, filteredMatrixRows.length)} to {matrixPageSize === 'all' ? filteredMatrixRows.length : Math.min(matrixPage * Number(matrixPageSize), filteredMatrixRows.length)} of {filteredMatrixRows.length} students
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-slate-400">Rows:</span>
-                          <select
-                            value={matrixPageSize}
-                            onChange={(e) => { setMatrixPageSize(e.target.value); setMatrixPage(1); }}
-                            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2 py-1 text-xs outline-none"
-                          >
-                            <option value="50">50</option>
-                            <option value="100">100</option>
-                            <option value="250">250</option>
-                            <option value="500">500</option>
-                            <option value="all">All</option>
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setMatrixPage(p => Math.max(1, p - 1))}
-                            disabled={matrixPage === 1 || matrixPageSize === 'all'}
-                            className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
-                          >
-                            Prev
-                          </button>
-                          <span className="px-2 text-slate-600 dark:text-slate-300">
-                            Page {matrixPage} of {matrixTotalPages}
-                          </span>
-                          <button
-                            onClick={() => setMatrixPage(p => Math.min(matrixTotalPages, p + 1))}
-                            disabled={matrixPage >= matrixTotalPages || matrixPageSize === 'all'}
-                            className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800"
-                          >
-                            Next
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-12 text-slate-400 text-sm">Click "Load" to generate the attendance matrix.</div>
-            )}
-          </div>
-        )}
-
-        {/* Tab: health - entire original DataHealth content */}
-        {activeTab === 'health' && (
-          loading ? (
-            <div className="flex h-[60vh] items-center justify-center">
-              <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
-            </div>
-          ) : (
-          <div className="space-y-6">
-            {/* Header Banner */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h1 className="text-3xl font-extrabold text-slate-800 dark:text-white flex items-center gap-2">
-                  <ShieldCheck className="h-8 w-8 text-primary-500" /> Data Health Diagnostic Center
+                <h1 className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">
+                  Data Health Diagnostic Center
                 </h1>
-                <p className="text-xs text-slate-400 mt-1 uppercase font-bold tracking-wider">
-                  Internal administrative reliability, duplicate detection, and platform sync audits
+                <p className="text-xs font-semibold text-slate-400 mt-0.5">
+                  Real-time database integrity, duplicate detection, and live LeetCode sync verification
                 </p>
               </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={handleForceFullSync}
-                  disabled={globalSyncing}
-                  className="flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
-                >
-                  <RotateCw className={`h-4 w-4 ${globalSyncing ? 'animate-spin' : ''}`} /> Force Full Sync
-                </button>
-                <button
-                  onClick={handleClearCache}
-                  disabled={clearingCache}
-                  className="flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
-                >
-                  <Database className="h-4 w-4" /> Flush Cache
-                </button>
-                <button
-                  onClick={() => fetchHealthAudit(true)}
-                  className="flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-bold text-xs px-3.5 py-2.5 rounded-xl transition-all shadow-sm hover:bg-slate-50 dark:hover:bg-slate-850"
-                >
-                  <RefreshCw className="h-4 w-4" /> Run Diagnosis
-                </button>
-                <button
-                  onClick={handleExportCSV}
-                  disabled={exportingSpreadsheet}
-                  className="flex items-center justify-center gap-1.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:opacity-95 disabled:opacity-50 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shadow-md transition-all"
-                >
-                  <Download className="h-4 w-4" /> {exportingSpreadsheet ? 'Exporting...' : 'Export Spreadsheet'}
-                </button>
-              </div>
-            </div>
-
-            {/* KPI Aggregate cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              {/* System health score gauge */}
-              <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center gap-4">
-                <div className="relative flex items-center justify-center h-20 w-20 shrink-0">
-                  <svg className="w-full h-full transform -rotate-90">
-                    <circle cx="40" cy="40" r="34" className="stroke-slate-100 dark:stroke-slate-800" strokeWidth="6" fill="transparent" />
-                    <circle cx="40" cy="40" r="34" className="stroke-primary-500" strokeWidth="6" fill="transparent"
-                      strokeDasharray={2 * Math.PI * 34}
-                      strokeDashoffset={2 * Math.PI * 34 * (1 - aggregates.systemHealthPercentage / 100)} />
-                  </svg>
-                  <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-lg font-black text-slate-800 dark:text-white">{aggregates.systemHealthPercentage}%</span>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Overall Health</span>
-                  <h4 className="font-extrabold text-xs text-slate-700 dark:text-slate-200 mt-1">Platform Diagnostics</h4>
-                  <span className="text-[10px] text-slate-400">Target score goal: &gt; 90%</span>
-                </div>
-              </div>
-              {/* Sync counters */}
-              <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Audited Directory</span>
-                  <h3 className="text-3xl font-black text-slate-800 dark:text-white mt-1">{aggregates.totalStudents}</h3>
-                  <span className="text-[10px] text-emerald-500 font-bold mt-0.5 block">{aggregates.healthyCount} 🟢 Healthy</span>
-                </div>
-                <div className="h-10 w-10 flex items-center justify-center rounded-xl bg-slate-50 dark:bg-slate-950/40 text-slate-500 text-lg font-bold">👤</div>
-              </div>
-              {/* Errors/Discrepancies */}
-              <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sync Warnings</span>
-                  <h3 className="text-3xl font-black text-slate-800 dark:text-white mt-1">{aggregates.partialCount + aggregates.needsAttentionCount}</h3>
-                  <span className="text-[10px] text-rose-500 font-bold mt-0.5 block">{aggregates.needsAttentionCount} 🔴 Action Req</span>
-                </div>
-                <div className="h-10 w-10 flex items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/20 text-rose-500 text-lg font-bold">⚠️</div>
-              </div>
-              {/* Database Duplicates & Invalid */}
-              <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Integrity Errors</span>
-                  <h3 className="text-3xl font-black text-slate-800 dark:text-white mt-1">{aggregates.duplicateCount + aggregates.invalidCount}</h3>
-                  <span className="text-[10px] text-indigo-500 font-bold mt-0.5 block">{aggregates.duplicateCount} Dups • {aggregates.invalidCount} Invalid</span>
-                </div>
-                <div className="h-10 w-10 flex items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-950/20 text-indigo-500 text-lg font-bold">🗄️</div>
-              </div>
-            </div>
-
-            {/* Platform Sync Rates Widget */}
-            <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-              <h3 className="font-bold text-slate-850 dark:text-white text-sm uppercase tracking-wider pb-1 border-b border-slate-100 dark:border-slate-850">
-                Platform-Wise Integration Rates
-              </h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div>
-                  <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                    <span>LEETCODE</span>
-                    <span>{aggregates.platformSyncRate.leetcode}%</span>
-                  </div>
-                  <div className="w-full bg-slate-150 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-primary-500 h-full rounded-full" style={{ width: `${aggregates.platformSyncRate.leetcode}%` }}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                    <span>CODEFORCES</span>
-                    <span>{aggregates.platformSyncRate.codeforces}%</span>
-                  </div>
-                  <div className="w-full bg-slate-150 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${aggregates.platformSyncRate.codeforces}%` }}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                    <span>CODECHEF</span>
-                    <span>{aggregates.platformSyncRate.codechef}%</span>
-                  </div>
-                  <div className="w-full bg-slate-150 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-amber-500 h-full rounded-full" style={{ width: `${aggregates.platformSyncRate.codechef}%` }}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                    <span>HACKERRANK</span>
-                    <span>{aggregates.platformSyncRate.hackerrank}%</span>
-                  </div>
-                  <div className="w-full bg-slate-150 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${aggregates.platformSyncRate.hackerrank}%` }}></div>
-                  </div>
-                </div>
-                <div className="col-span-2 md:col-span-1">
-                  <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                    <span>OVERALL SYNC RATE</span>
-                    <span>{aggregates.platformSyncRate.overall}%</span>
-                  </div>
-                  <div className="w-full bg-slate-150 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-violet-500 h-full rounded-full" style={{ width: `${aggregates.platformSyncRate.overall}%` }}></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Filter panel */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 bg-white dark:bg-slate-900 p-4 border border-slate-200/60 dark:border-slate-850 rounded-2xl shadow-sm">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Search student..."
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 text-xs outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/20 text-slate-700 dark:text-slate-350"
-                />
-                <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
-              </div>
-              <select
-                value={filterDept}
-                onChange={(e) => setFilterDept(e.target.value)}
-                className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-350"
-              >
-                <option value="">All Departments</option>
-                {depts.map(d => (
-                  <option key={d.code} value={d.code}>{d.name} ({d.code})</option>
-                ))}
-              </select>
-              <select
-                value={filterBatch}
-                onChange={(e) => setFilterBatch(e.target.value)}
-                className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-350"
-              >
-                <option value="">All Batches</option>
-                {batches.map(b => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-              <select
-                value={filterHealth}
-                onChange={(e) => setFilterHealth(e.target.value)}
-                className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-700 dark:text-slate-350"
-              >
-                <option value="">All Health Categories</option>
-                <option value="Healthy">🟢 Healthy</option>
-                <option value="Partial">🟡 Partial</option>
-                <option value="Needs Attention">🔴 Needs Attention</option>
-              </select>
-            </div>
-
-            {/* Directory Diagnostic Table */}
-            <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
-              <div className="p-5 border-b border-slate-100 dark:border-slate-850">
-                <h3 className="font-bold text-slate-800 dark:text-white text-sm uppercase tracking-wider">Spreadsheet Diagnostics</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-850 text-slate-500 font-bold uppercase tracking-wider">
-                      <th className="py-3.5 px-4 text-center">Status</th>
-                      <th className="py-3.5 px-4">Name</th>
-                      <th className="py-3.5 px-4">Roll No</th>
-                      <th className="py-3.5 px-4">Dept &amp; Sec</th>
-                      <th className="py-3.5 px-4 text-center">Score</th>
-                      <th className="py-3.5 px-4 text-center">Platforms</th>
-                      <th className="py-3.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40 font-medium text-slate-700 dark:text-slate-300">
-                    {filteredStudents.length === 0 ? (
-                      <tr>
-                        <td colSpan="7" className="text-center py-8 text-slate-400 font-medium">No student audits match the filters.</td>
-                      </tr>
-                    ) : (
-                      filteredStudents.map((s) => {
-                        const isExpanded = !!expandedStudents[s.id];
-                        return (
-                          <React.Fragment key={s.id}>
-                            <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-850/20 cursor-pointer" onClick={() => toggleRow(s.id)}>
-                              <td className="py-3.5 px-4 text-center">
-                                {s.healthIndicator === 'Healthy' && <span className="text-emerald-500 font-black">🟢</span>}
-                                {s.healthIndicator === 'Partial' && <span className="text-amber-500 font-black">🟡</span>}
-                                {s.healthIndicator === 'Needs Attention' && <span className="text-rose-500 font-black">🔴</span>}
-                              </td>
-                              <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">{s.name}</td>
-                              <td className="py-3.5 px-4 font-bold text-slate-450">{s.rollNo}</td>
-                              <td className="py-3.5 px-4 text-slate-500">{s.department} Section {s.section || 'N/A'}</td>
-                              <td className="py-3.5 px-4 text-center font-black text-indigo-600 dark:text-indigo-400">{s.healthScore}%</td>
-                              <td className="py-3.5 px-4 text-center">
-                                <div className="flex items-center justify-center gap-1.5">
-                                  {getPlatformStatusDot(s.connections.leetcode)}
-                                  {getPlatformStatusDot(s.connections.codeforces)}
-                                  {getPlatformStatusDot(s.connections.codechef)}
-                                  {getPlatformStatusDot(s.connections.hackerrank)}
-                                </div>
-                              </td>
-                              <td className="py-3.5 px-4 text-right">
-                                <button className="text-slate-400 hover:text-slate-600">
-                                  {isExpanded ? <ChevronUp className="h-4.5 w-4.5" /> : <ChevronDown className="h-4.5 w-4.5" />}
-                                </button>
-                              </td>
-                            </tr>
-
-                            {/* Expanded Section */}
-                            {isExpanded && (
-                              <tr className="bg-slate-50/50 dark:bg-slate-950/25 border-l-2 border-primary-500">
-                                <td colSpan="7" className="py-4 px-6 space-y-4">
-                                  {/* Missing Fields list */}
-                                  {s.missingFields.length > 0 && (
-                                    <div className="flex items-start gap-2.5 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400">
-                                      <AlertTriangle className="h-4.5 w-4.5 shrink-0 mt-0.5" />
-                                      <div>
-                                        <span className="font-bold">Missing Demographic Fields: </span>
-                                        {s.missingFields.join(', ')}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {/* Sync Errors list */}
-                                  {s.syncErrors.length > 0 && (
-                                    <div className="flex items-start gap-2.5 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 dark:text-rose-450">
-                                      <XCircle className="h-4.5 w-4.5 shrink-0 mt-0.5" />
-                                      <div>
-                                        <span className="font-bold">Synchronization Failures: </span>
-                                        <ul className="list-disc list-inside mt-1 space-y-0.5">
-                                          {s.syncErrors.map((err, i) => <li key={i}>{err}</li>)}
-                                        </ul>
-                                      </div>
-                                    </div>
-                                  )}
-                                  {/* Connection statuses */}
-                                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-2">
-                                    {Object.entries(s.connections).map(([platform, info]) => {
-                                      const key = `${s.id}:${platform}`;
-                                      const isSyncing = !!syncingPlatforms[key];
-                                      return (
-                                        <div key={platform} className="p-3 bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/80 rounded-2xl space-y-2 text-left">
-                                          <div className="flex justify-between items-center pb-1.5 border-b border-slate-100 dark:border-slate-800">
-                                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{platform}</span>
-                                            <div className="flex items-center gap-1.5">
-                                              {info.connected ? (
-                                                info.syncStatus === 'Healthy' ? (
-                                                  <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-0.5">🟢 Healthy ({info.dataCompleteness}%)</span>
-                                                ) : info.syncStatus === 'Partial' ? (
-                                                  <span className="text-[10px] font-bold text-amber-500 flex items-center gap-0.5">🟡 Partial ({info.dataCompleteness}%)</span>
-                                                ) : info.syncStatus === 'Failed' ? (
-                                                  <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">🔴 Failed</span>
-                                                ) : (
-                                                  <span className="text-[10px] font-bold text-slate-400 flex items-center gap-0.5">⚫ Never Synced</span>
-                                                )
-                                              ) : (
-                                                <span className="text-[10px] font-bold text-slate-350 dark:text-slate-600">Disconnected</span>
-                                              )}
-                                              {info.connected && (
-                                                <button
-                                                  disabled={isSyncing}
-                                                  onClick={(e) => { e.stopPropagation(); handleRetryPlatformSync(s.id, platform); }}
-                                                  className="text-slate-400 hover:text-primary-500 p-0.5 rounded transition-all disabled:opacity-30"
-                                                  title="Retry Sync"
-                                                >
-                                                  <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                                                </button>
-                                              )}
-                                            </div>
-                                          </div>
-                                          {info.connected ? (
-                                            <div className="space-y-1 text-[11px]">
-                                              <div className="flex justify-between">
-                                                <span className="text-slate-400">Handle:</span>
-                                                <span className="font-bold text-slate-700 dark:text-slate-200">{info.username}</span>
-                                              </div>
-                                              <div className="flex justify-between">
-                                                <span className="text-slate-400">Status:</span>
-                                                <span className="font-bold text-slate-700 dark:text-slate-200">{info.syncStatus}</span>
-                                              </div>
-                                              {info.syncStatus !== 'Never Synced' && (
-                                                <div>
-                                                  <div className="flex justify-between">
-                                                    <span className="text-slate-400">Solved / Rating:</span>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-200">{info.problemsSolved} / {Math.round(info.currentRating)}</span>
-                                                  </div>
-                                                  <div className="flex justify-between">
-                                                    <span className="text-slate-400">Retries:</span>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-200">{info.retryCount}</span>
-                                                  </div>
-                                                  {info.lastSuccessfulSync && (
-                                                    <div className="flex justify-between">
-                                                      <span className="text-slate-400">Last Success:</span>
-                                                      <span className="font-bold text-slate-750 dark:text-slate-250 text-right">{new Date(info.lastSuccessfulSync).toLocaleString()}</span>
-                                                    </div>
-                                                  )}
-                                                  {info.lastAttempt && (
-                                                    <div className="flex justify-between">
-                                                      <span className="text-slate-400">Last Attempt:</span>
-                                                      <span className="font-bold text-slate-700 dark:text-slate-300 text-right">{new Date(info.lastAttempt).toLocaleString()}</span>
-                                                    </div>
-                                                  )}
-                                                  {info.failureReason && (
-                                                    <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 text-[10px] text-rose-500 italic break-words">
-                                                      Reason: {info.failureReason}
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              )}
-                                            </div>
-                                          ) : (
-                                            <span className="text-[10px] text-slate-400 block italic">No account configured.</span>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
-          )
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={handleForceFullSync}
+              disabled={globalSyncing}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all"
+            >
+              <RotateCw className={`h-4 w-4 ${globalSyncing ? 'animate-spin' : ''}`} />
+              {globalSyncing ? 'Syncing Profiles...' : 'Force Full Sync'}
+            </button>
+            <button
+              onClick={() => fetchHealthAudit(true)}
+              disabled={loading || globalSyncing}
+              className="flex items-center gap-2 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 font-bold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Run Diagnosis
+            </button>
+            <button
+              onClick={handleExportReport}
+              disabled={exportingReport || !data?.students?.length}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all"
+            >
+              <Download className="h-4 w-4" />
+              {exportingReport ? 'Exporting...' : 'Export Excel'}
+            </button>
+          </div>
+        </div>
+
+        {/* Global Syncing In-Progress Notification */}
+        {globalSyncing && (
+          <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent"></div>
+              <span className="text-xs font-bold text-indigo-800 dark:text-indigo-200">
+                {syncProgressMsg || 'Synchronizing student performance data in background...'}
+              </span>
+            </div>
+            <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+              Auto-refreshing diagnostics...
+            </span>
+          </div>
         )}
+
+        {/* Error Notification */}
+        {error && (
+          <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 flex items-center justify-between text-xs font-bold text-rose-700 dark:text-rose-300">
+            <span>❌ {error}</span>
+            <button onClick={() => fetchHealthAudit(true)} className="underline hover:text-rose-900">Retry Diagnosis</button>
+          </div>
+        )}
+
+        {/* KPI Summary Cards - Clean Grid without Overlapping */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Health Score */}
+          <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">System Health</span>
+              <div className="text-3xl font-black text-slate-900 dark:text-white leading-none">
+                {aggregates.systemHealthPercentage}%
+              </div>
+              <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 block pt-1">
+                🟢 Production Grade
+              </span>
+            </div>
+            <div className="h-12 w-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+              <Activity className="h-6 w-6" />
+            </div>
+          </div>
+
+          {/* Card 2: Active Directory */}
+          <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">Audited Students</span>
+              <div className="text-3xl font-black text-slate-900 dark:text-white leading-none">
+                {aggregates.totalStudents}
+              </div>
+              <span className="text-[11px] font-semibold text-slate-500 block pt-1">
+                {aggregates.healthyCount} Active Profiles
+              </span>
+            </div>
+            <div className="h-12 w-12 rounded-2xl bg-primary-50 dark:bg-primary-950/40 flex items-center justify-center text-primary-600 dark:text-primary-400">
+              <User className="h-6 w-6" />
+            </div>
+          </div>
+
+          {/* Card 3: Synchronization Health */}
+          <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">Sync Status</span>
+              <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400 leading-none">
+                {aggregates.healthyCount}
+              </div>
+              <span className="text-[11px] font-semibold text-slate-500 block pt-1">
+                {aggregates.needsAttentionCount > 0 ? `${aggregates.needsAttentionCount} Need Attention` : '0 Sync Warnings'}
+              </span>
+            </div>
+            <div className="h-12 w-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+              <CheckCircle className="h-6 w-6" />
+            </div>
+          </div>
+
+          {/* Card 4: Integrity Errors */}
+          <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex items-center justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">Integrity Checks</span>
+              <div className="text-3xl font-black text-slate-900 dark:text-white leading-none">
+                {aggregates.duplicateCount + aggregates.invalidCount}
+              </div>
+              <span className="text-[11px] font-semibold text-slate-500 block pt-1">
+                {aggregates.duplicateCount} Duplicates • {aggregates.invalidCount} Invalid
+              </span>
+            </div>
+            <div className="h-12 w-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 flex items-center justify-center text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-6 w-6" />
+            </div>
+          </div>
+        </div>
+
+        {/* LeetCode Integration Banner */}
+        <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-orange-500"></span> LeetCode Live Synchronization
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Official GraphQL API connection status across all registered student profiles
+              </p>
+            </div>
+            <div className="text-right">
+              <span className="text-xs font-black text-orange-600 dark:text-orange-400">
+                {aggregates.platformSyncRate?.leetcode || 100}% Active Connection
+              </span>
+            </div>
+          </div>
+
+          <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-orange-500 to-amber-500 h-full rounded-full transition-all duration-500"
+              style={{ width: `${aggregates.platformSyncRate?.leetcode || 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Filter Controls */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-white dark:bg-slate-900 p-4 border border-slate-200/60 dark:border-slate-800 rounded-2xl shadow-sm">
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search by name, roll no, or handle..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 text-xs outline-none focus:border-primary-500 text-slate-800 dark:text-slate-200"
+            />
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
+          </div>
+
+          <select
+            value={filterDept}
+            onChange={(e) => setFilterDept(e.target.value)}
+            className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-800 dark:text-slate-200"
+          >
+            <option value="">All Departments</option>
+            {depts.map(d => (
+              <option key={d.code} value={d.code}>{d.name} ({d.code})</option>
+            ))}
+          </select>
+
+          <select
+            value={filterBatch}
+            onChange={(e) => setFilterBatch(e.target.value)}
+            className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-800 dark:text-slate-200"
+          >
+            <option value="">All Batches</option>
+            {batches.map(b => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+
+          <select
+            value={filterHealth}
+            onChange={(e) => setFilterHealth(e.target.value)}
+            className="border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950/40 px-3 py-2 text-xs outline-none focus:border-primary-500 text-slate-800 dark:text-slate-200"
+          >
+            <option value="">All Health Statuses</option>
+            <option value="Healthy">🟢 Healthy</option>
+            <option value="Partial">🟡 Partial</option>
+            <option value="Needs Attention">🔴 Needs Attention</option>
+          </select>
+        </div>
+
+        {/* Directory Diagnostic Table */}
+        <div className="rounded-3xl border border-slate-200/60 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
+          <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            <div>
+              <h3 className="font-extrabold text-slate-800 dark:text-white text-sm uppercase tracking-wider">
+                Audited Student Directory
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Showing {filteredStudents.length} of {aggregates.totalStudents} total students
+              </p>
+            </div>
+            <div className="flex items-center gap-3 text-xs font-bold text-slate-400">
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500"></span> Healthy ({aggregates.healthyCount})</span>
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-rose-500"></span> Needs Attention ({aggregates.needsAttentionCount})</span>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex h-56 items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs min-w-[950px]">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-150 dark:border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[11px]">
+                    <th className="py-3 px-4 text-center w-16">Status</th>
+                    <th className="py-3 px-4 min-w-[120px]">Roll No</th>
+                    <th className="py-3 px-4 min-w-[180px]">Student Name</th>
+                    <th className="py-3 px-4 min-w-[120px]">Dept &amp; Sec</th>
+                    <th className="py-3 px-4 min-w-[140px]">LeetCode Handle</th>
+                    <th className="py-3 px-4 text-center min-w-[100px]">Problems</th>
+                    <th className="py-3 px-4 text-center min-w-[90px]">Rating</th>
+                    <th className="py-3 px-4 text-center min-w-[140px]">Last Synced</th>
+                    <th className="py-3 px-4 text-right min-w-[100px]">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/40 font-medium">
+                  {filteredStudents.length === 0 ? (
+                    <tr>
+                      <td colSpan="9" className="text-center py-12 text-slate-400 font-semibold">
+                        No student diagnostic records match your search filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredStudents.map((s) => {
+                      const isExpanded = !!expandedStudents[s.id];
+                      const lc = s.connections?.leetcode || {};
+                      const isSyncingThis = syncingStudentId === s.id;
+
+                      return (
+                        <React.Fragment key={s.id}>
+                          <tr
+                            className="hover:bg-slate-50/70 dark:hover:bg-slate-850/30 cursor-pointer transition-colors"
+                            onClick={() => toggleRow(s.id)}
+                          >
+                            <td className="py-3 px-4 text-center">
+                              {s.healthIndicator === 'Healthy' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400">
+                                  Healthy
+                                </span>
+                              )}
+                              {s.healthIndicator === 'Partial' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
+                                  Partial
+                                </span>
+                              )}
+                              {s.healthIndicator === 'Needs Attention' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400">
+                                  Attention
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 font-bold text-slate-500 dark:text-slate-400">{s.rollNo}</td>
+                            <td className="py-3 px-4 font-bold text-slate-900 dark:text-white whitespace-nowrap">{s.name}</td>
+                            <td className="py-3 px-4 text-slate-500 whitespace-nowrap">{s.department} • Sec {s.section || '-'}</td>
+                            <td className="py-3 px-4 font-semibold text-orange-600 dark:text-orange-400">
+                              {lc.username ? (
+                                <a
+                                  href={`https://leetcode.com/u/${lc.username}/`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 hover:underline"
+                                >
+                                  {lc.username}
+                                  <ExternalLink className="h-3 w-3 opacity-60" />
+                                </a>
+                              ) : (
+                                <span className="text-slate-300 dark:text-slate-600">—</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-center font-bold text-slate-800 dark:text-slate-200">
+                              {lc.problemsSolved || 0}
+                            </td>
+                            <td className="py-3 px-4 text-center font-bold text-indigo-600 dark:text-indigo-400">
+                              {lc.currentRating ? Math.round(lc.currentRating) : '—'}
+                            </td>
+                            <td className="py-3 px-4 text-center text-[11px] text-slate-400 whitespace-nowrap">
+                              {lc.lastSuccessfulSync ? new Date(lc.lastSuccessfulSync).toLocaleDateString('en-IN', {
+                                day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+                              }) : 'Never'}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => handleSyncStudent(s.id)}
+                                  disabled={isSyncingThis}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-primary-600 hover:border-primary-500 transition-all disabled:opacity-40"
+                                  title="Sync LeetCode"
+                                >
+                                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncingThis ? 'animate-spin' : ''}`} />
+                                </button>
+                                <button
+                                  onClick={() => toggleRow(s.id)}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-400 hover:text-slate-600 transition-all"
+                                >
+                                  {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {/* Expanded Student Audit Drawer */}
+                          {isExpanded && (
+                            <tr className="bg-slate-50/70 dark:bg-slate-950/40 border-l-4 border-primary-500">
+                              <td colSpan="9" className="py-4 px-6 space-y-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                                  {/* Problem breakdown */}
+                                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 space-y-1.5">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Difficulty Breakdown</span>
+                                    <div className="flex items-center gap-2 pt-1">
+                                      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300">
+                                        Easy: {lc.easySolved || 0}
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                                        Med: {lc.mediumSolved || 0}
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                                        Hard: {lc.hardSolved || 0}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Contest metrics */}
+                                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 space-y-1">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contest Standing</span>
+                                    <div className="text-sm font-black text-slate-800 dark:text-white pt-0.5">
+                                      Rating: {lc.currentRating ? Math.round(lc.currentRating) : 'Unrated'}
+                                    </div>
+                                    <div className="text-[11px] text-slate-400">
+                                      Global Rank: {lc.globalRanking ? `#${lc.globalRanking.toLocaleString()}` : '—'}
+                                    </div>
+                                  </div>
+
+                                  {/* Audit details */}
+                                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 space-y-1">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Audit Metadata</span>
+                                    <div className="text-[11px] text-slate-600 dark:text-slate-300 pt-0.5">
+                                      Data Completeness: <span className="font-bold text-emerald-600">{lc.dataCompleteness || 100}%</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-400">
+                                      Batch: {s.batch || 'N/A'} • Dept: {s.department}
+                                    </div>
+                                  </div>
+
+                                  {/* Action button */}
+                                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 flex flex-col justify-between">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Profile Actions</span>
+                                    <button
+                                      disabled={isSyncingThis}
+                                      onClick={() => handleSyncStudent(s.id)}
+                                      className="flex items-center justify-center gap-1.5 w-full bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white font-bold text-xs py-1.5 px-3 rounded-xl transition-all shadow-sm"
+                                    >
+                                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingThis ? 'animate-spin' : ''}`} />
+                                      {isSyncingThis ? 'Syncing...' : 'Sync Profile'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

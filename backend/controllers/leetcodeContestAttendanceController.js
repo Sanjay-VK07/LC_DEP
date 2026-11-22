@@ -22,7 +22,17 @@ const LeetCodeContestAttendanceController = {
       return res.status(400).json({ success: false, message: 'LeetCode contest slug is required.' });
     }
 
-    const slug = contestSlug.trim().toLowerCase();
+    let slug = contestSlug.trim().toLowerCase();
+    // Auto-normalize numeric inputs like "529" or "w529" or "b144"
+    if (/^\d+$/.test(slug)) {
+      slug = `weekly-contest-${slug}`;
+    } else if (/^w(?:eekly)?[- ]*(\d+)$/i.test(slug)) {
+      const match = slug.match(/\d+/);
+      if (match) slug = `weekly-contest-${match[0]}`;
+    } else if (/^b(?:iweekly)?[- ]*(\d+)$/i.test(slug)) {
+      const match = slug.match(/\d+/);
+      if (match) slug = `biweekly-contest-${match[0]}`;
+    }
 
     try {
       const jobQueue = require('../services/jobQueueService');
@@ -118,7 +128,17 @@ const LeetCodeContestAttendanceController = {
       return res.status(400).json({ success: false, message: 'contestSlug parameter is required.' });
     }
 
-    const slug = contestSlug.trim().toLowerCase();
+    let slug = contestSlug.trim().toLowerCase();
+    // Auto-normalize numeric inputs like "529" or "w529" or "b144"
+    if (/^\d+$/.test(slug)) {
+      slug = `weekly-contest-${slug}`;
+    } else if (/^w(?:eekly)?[- ]*(\d+)$/i.test(slug)) {
+      const match = slug.match(/\d+/);
+      if (match) slug = `weekly-contest-${match[0]}`;
+    } else if (/^b(?:iweekly)?[- ]*(\d+)$/i.test(slug)) {
+      const match = slug.match(/\d+/);
+      if (match) slug = `biweekly-contest-${match[0]}`;
+    }
 
     try {
       // 1. Get LiveContests info

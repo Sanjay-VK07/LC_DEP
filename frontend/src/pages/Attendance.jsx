@@ -511,14 +511,26 @@ function Attendance() {
 
   const handleSyncLcContest = async () => {
     if (!lcContestSlug.trim()) return;
+    let targetSlug = lcContestSlug.trim().toLowerCase();
+    // Auto-normalize numeric inputs like "529" -> "weekly-contest-529"
+    if (/^\d+$/.test(targetSlug)) {
+      targetSlug = `weekly-contest-${targetSlug}`;
+    } else if (/^w(?:eekly)?[- ]*(\d+)$/i.test(targetSlug)) {
+      const match = targetSlug.match(/\d+/);
+      if (match) targetSlug = `weekly-contest-${match[0]}`;
+    } else if (/^b(?:iweekly)?[- ]*(\d+)$/i.test(targetSlug)) {
+      const match = targetSlug.match(/\d+/);
+      if (match) targetSlug = `biweekly-contest-${match[0]}`;
+    }
+
     setSyncingLcContest(true);
     setLcSyncProgress(5);
-    setLcSyncMessage('Enqueuing sync job...');
+    setLcSyncMessage(`Enqueuing sync job for ${targetSlug}...`);
     setError('');
     setSuccess('');
     try {
       const res = await axios.post(`${API_URL}/attendance/leetcode-sync`, {
-        contestSlug: lcContestSlug
+        contestSlug: targetSlug
       });
       if (res.data.success) {
         const jobId = res.data.jobId;
