@@ -1323,57 +1323,94 @@ async function backfillAttendance(userId = null, updateProgress = () => {}) {
 
   if (users.length === 0) return { processed: 0, matched: 0 };
 
-  // 2. Fetch master contests
-  const masterContests = await db.query("SELECT contest_id, title, slug, start_time, contest_number, contest_type FROM Contests");
+  // 2. Fetch master contests and all platform profiles in bulk (4 queries total instead of N+1)
+  updateProgress(10, `Loading ${users.length} users, master contests, and platform histories...`);
+  const whereClause = userId ? "WHERE user_id = ?" : "";
+  const queryParams = userId ? [userId] : [];
 
-  updateProgress(10, `Loaded ${users.length} users and ${masterContests.length} master contests...`);
+  const [masterContests, lcRows, ccRows, cfRows] = await Promise.all([
+    db.query("SELECT contest_id, title, slug, start_time, contest_number, contest_type FROM Contests"),
+    db.query(`SELECT user_id, contest_history FROM LeetCodeProfiles ${whereClause}`, queryParams),
+    db.query(`SELECT user_id, contest_history FROM CodeChefProfiles ${whereClause}`, queryParams),
+    db.query(`SELECT user_id, contest_history FROM CodeforcesProfiles ${whereClause}`, queryParams)
+  ]);
 
-  let matchedCount = 0;
+  const toHistoryMap = (rows) => {
+    const map = new Map();
+    for (const r of rows) {
+      if (r.contest_history) map.set(r.user_id, r.contest_history);
+    }
+    return map;
+  };
+
+  const profileMaps = [
+    ['leetcode', toHistoryMap(lcRows)],
+    ['codechef', toHistoryMap(ccRows)],
+    ['codeforces', toHistoryMap(cfRows)]
+  ];
+
+  updateProgress(25, `Matching contest histories for ${users.length} students...`);
+
+  // 3. Match in memory and collect unique (user_id, contest_id) pairs
+  const uniquePairs = new Map();
   for (let i = 0; i < users.length; i++) {
     const user = users[i];
-    updateProgress(10 + Math.round((i / users.length) * 80), `Processing student ${user.name} (${i + 1}/${users.length})...`);
+    if (i % 100 === 0 || i === users.length - 1) {
+      updateProgress(25 + Math.round((i / users.length) * 40), `Matching student ${user.name} (${i + 1}/${users.length})...`);
+    }
 
-    // Fetch saved profiles for user to get contest history
-    const profiles = [
-      ['leetcode', await db.query("SELECT contest_history FROM LeetCodeProfiles WHERE user_id = ?", [user.id])],
-      ['codechef', await db.query("SELECT contest_history FROM CodeChefProfiles WHERE user_id = ?", [user.id])],
-      ['codeforces', await db.query("SELECT contest_history FROM CodeforcesProfiles WHERE user_id = ?", [user.id])]
-    ];
-
-    for (const [platform, rows] of profiles) {
-      if (rows.length === 0) continue;
+    for (const [platform, map] of profileMaps) {
+      const raw = map.get(user.id);
+      if (!raw) continue;
       let history = [];
       try {
-        history = JSON.parse(rows[0].contest_history || '[]');
+        history = typeof raw === 'string' ? JSON.parse(raw) : raw;
       } catch (e) {
         continue;
       }
-
       if (!Array.isArray(history)) continue;
 
       for (const entry of history) {
         const matchRes = await matchingSvc.matchContest(user.id, platform, entry, masterContests);
-        if (matchRes && !matchRes.ambiguous) {
-          // Ensure registered
-          await db.query(
-            "INSERT IGNORE INTO Registrations (user_id, contest_id) VALUES (?, ?)",
-            [user.id, matchRes.match.contest_id]
-          );
-          // Insert participation log
-          await db.query(
-            `INSERT INTO ParticipationLogs (user_id, contest_id, join_time, participation_status)
-             VALUES (?, ?, CURRENT_TIMESTAMP, 'JOINED')
-             ON DUPLICATE KEY UPDATE join_time = CURRENT_TIMESTAMP`,
-            [user.id, matchRes.match.contest_id]
-          );
-          matchedCount++;
+        if (matchRes && !matchRes.ambiguous && matchRes.match?.contest_id) {
+          const cid = matchRes.match.contest_id;
+          uniquePairs.set(`${user.id}:${cid}`, [user.id, cid]);
         }
       }
     }
   }
 
-  // 3. Clear cache
-  updateProgress(95, 'Refreshing analytics cache...');
+  // 4. Bulk-insert Registrations and ParticipationLogs in batches of 500
+  const pairs = Array.from(uniquePairs.values());
+  const BATCH_SIZE = 500;
+  let matchedCount = pairs.length;
+
+  updateProgress(70, `Writing ${pairs.length} matched attendance records in batches...`);
+
+  for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+    const batch = pairs.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(() => '(?, ?)').join(', ');
+    const flatValues = batch.flat();
+
+    await db.query(
+      `INSERT IGNORE INTO Registrations (user_id, contest_id) VALUES ${placeholders}`,
+      flatValues
+    );
+
+    const logPlaceholders = batch.map(() => "(?, ?, CURRENT_TIMESTAMP, 'JOINED')").join(', ');
+    await db.query(
+      `INSERT INTO ParticipationLogs (user_id, contest_id, join_time, participation_status)
+       VALUES ${logPlaceholders}
+       ON DUPLICATE KEY UPDATE join_time = VALUES(join_time)`,
+      flatValues
+    );
+
+    const pct = 70 + Math.round(((i + batch.length) / Math.max(pairs.length, 1)) * 25);
+    updateProgress(pct, `Saved ${Math.min(i + batch.length, pairs.length)}/${pairs.length} attendance records...`);
+  }
+
+  // 5. Clear cache
+  updateProgress(96, 'Refreshing analytics cache...');
   cache.invalidateAll();
 
   updateProgress(100, `Completed! Processed ${users.length} students. Generated ${matchedCount} attendance records.`);
