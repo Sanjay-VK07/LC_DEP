@@ -33,6 +33,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://college-teal-ten.vercel.app",
+  "https://college-portal-sage-seven.vercel.app",
   "https://college-portal-5a03ctlp8-vkgen.vercel.app",
   "https://college-portal.vercel.app",
   process.env.FRONTEND_URL
@@ -50,8 +51,10 @@ const corsOptions = {
     const cleanOrigin = origin.trim().replace(/\/+$/, '');
     const cleanFrontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.trim().replace(/\/+$/, '') : '';
 
-    // 2. Exact match check against allowed origins list or process.env.FRONTEND_URL
+    // 2. Exact match check against allowed origins list, Vercel preview URLs, or process.env.FRONTEND_URL
+    const isVercelPortal = /^https:\/\/college-portal[a-z0-9-]*\.vercel\.app$/i.test(cleanOrigin);
     const isAllowed = allowedOrigins.includes(cleanOrigin) ||
+                      isVercelPortal ||
                       (cleanFrontendUrl && cleanOrigin === cleanFrontendUrl) ||
                       process.env.NODE_ENV !== 'production';
 
