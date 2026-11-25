@@ -10,9 +10,6 @@ function getNormalizedApiUrl() {
   const envUrl = import.meta.env.VITE_API_URL;
   
   if (!envUrl) {
-    if (import.meta.env.PROD) {
-      return 'https://college-slov.onrender.com/api';
-    }
     return '/api';
   }
 
