@@ -3,63 +3,26 @@ const db = require('../config/db');
 async function run() {
   try {
     await db.initializeDatabase();
-    console.log('[Constraints] Adding database constraints for LeetCode contest slugs...');
+    console.log('[Constraints] Safely removing restrictive contest slug constraints...');
 
-    // Drop old constraint if exists (safe retry)
     try {
       await db.query('ALTER TABLE Contests DROP CONSTRAINT chk_leetcode_slug_format');
-      console.log('[Constraints] Dropped existing chk_leetcode_slug_format constraint.');
-    } catch (e) {}
+      console.log('[Constraints] Dropped chk_leetcode_slug_format constraint from Contests.');
+    } catch (e) {
+      console.log('[Constraints] No chk_leetcode_slug_format constraint on Contests or already dropped.');
+    }
 
     try {
       await db.query('ALTER TABLE LiveContests DROP CONSTRAINT chk_leetcode_live_slug_format');
-      console.log('[Constraints] Dropped existing chk_leetcode_live_slug_format constraint.');
-    } catch (e) {}
-
-    // 1. Alter Contests table
-    try {
-      await db.query(`
-        ALTER TABLE Contests 
-        ADD CONSTRAINT chk_leetcode_slug_format 
-        CHECK (
-          platform != 'LeetCode' 
-          OR slug REGEXP '^weekly-contest-[0-9]+$' 
-          OR slug REGEXP '^biweekly-contest-[0-9]+$'
-          OR slug REGEXP '^leetcode-weekly-contest-[0-9]+$'
-          OR slug REGEXP '^leetcode-weekly-contest-[0-9]+[a-b]$'
-          OR slug = 'weekly-contest-by-app-academy'
-          OR slug REGEXP '^(test|mock|dummy|upcoming-live)-'
-        )
-      `);
-      console.log('[Constraints] Added chk_leetcode_slug_format check constraint to Contests table.');
-    } catch (err) {
-      console.warn('[Constraints] Failed to add constraint to Contests table:', err.message);
+      console.log('[Constraints] Dropped chk_leetcode_live_slug_format constraint from LiveContests.');
+    } catch (e) {
+      console.log('[Constraints] No chk_leetcode_live_slug_format constraint on LiveContests or already dropped.');
     }
 
-    // 2. Alter LiveContests table
-    try {
-      await db.query(`
-        ALTER TABLE LiveContests 
-        ADD CONSTRAINT chk_leetcode_live_slug_format 
-        CHECK (
-          platform != 'LeetCode' 
-          OR contestSlug REGEXP '^weekly-contest-[0-9]+$' 
-          OR contestSlug REGEXP '^biweekly-contest-[0-9]+$'
-          OR contestSlug REGEXP '^leetcode-weekly-contest-[0-9]+$'
-          OR contestSlug REGEXP '^leetcode-weekly-contest-[0-9]+[a-b]$'
-          OR contestSlug = 'weekly-contest-by-app-academy'
-          OR contestSlug REGEXP '^(test|mock|dummy|upcoming-live)-'
-        )
-      `);
-      console.log('[Constraints] Added chk_leetcode_live_slug_format check constraint to LiveContests table.');
-    } catch (err) {
-      console.warn('[Constraints] Failed to add constraint to LiveContests table:', err.message);
-    }
-
-    console.log('[Constraints] Constraint addition completed.');
+    console.log('[Constraints] Contest tables are now open to any valid contest slugs (including numeric IDs and custom contest names).');
     process.exit(0);
   } catch (error) {
-    console.error('[Constraints] Failed to add constraints:', error);
+    console.error('[Constraints] Failed to update constraints:', error);
     process.exit(1);
   }
 }
