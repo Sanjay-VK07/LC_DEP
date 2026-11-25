@@ -33,6 +33,8 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://college-teal-ten.vercel.app",
+  "https://college-portal-5a03ctlp8-vkgen.vercel.app",
+  "https://college-portal.vercel.app",
   process.env.FRONTEND_URL
 ].filter(Boolean).map(url => url.trim().replace(/\/+$/, ''));
 
