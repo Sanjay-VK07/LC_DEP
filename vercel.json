@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://college-slov.onrender.com/api/:path*"
+      "destination": "https://lc-dep.onrender.com/api/:path*"
     },
     {
       "source": "/((?!api/).*)",
